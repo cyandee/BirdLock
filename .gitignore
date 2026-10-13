@@ -8,3 +8,6 @@ Models/*.mlpackage
 dist/
 *.xcodeproj/xcuserdata
 .swiftpm/
+.DS_Store
+testdata/
+飞鸟连拍合成/
