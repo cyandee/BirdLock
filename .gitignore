@@ -1,0 +1,10 @@
+.build/
+.devloop/
+tools/train/.venv/
+tools/train/data/
+tools/train/weights/
+tools/train/runs/
+Models/*.mlpackage
+dist/
+*.xcodeproj/xcuserdata
+.swiftpm/
