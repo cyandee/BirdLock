@@ -5,6 +5,18 @@ import BirdLockCore
 struct ContentView: View {
     @Environment(AppState.self) private var state
     @State private var dropTargeted = false
+    @AppStorage("agreement.accepted") private var acceptedAgreement = ""
+    @State private var pendingOpen: [URL] = []
+
+    private var agreed: Bool { acceptedAgreement == AppDocs.agreementVersion }
+
+    /// Imports (or queues until the agreement is accepted) photos / music opened from the command line or Finder.
+    private func open(_ urls: [URL]) {
+        guard agreed else { pendingOpen += urls; return }
+        let audio = urls.filter { isAudioFile($0) }
+        if audio.count == urls.count, state.analysis != nil, let u = audio.first { state.setAudio(u) }
+        else if state.frames.isEmpty || !urls.isEmpty { state.importURLs(urls.filter { !isAudioFile($0) }) }
+    }
 
     var body: some View {
         @Bindable var state = state
@@ -63,11 +75,15 @@ struct ContentView: View {
             // `open BirdLock.app --args <folder>` imports a folder directly (handy for testing)
             let args = ProcessInfo.processInfo.arguments.dropFirst().filter { !$0.hasPrefix("-") }
             let urls = args.map { URL(fileURLWithPath: $0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
-            if state.frames.isEmpty, !urls.isEmpty { state.importURLs(urls) }
-            AppDelegate.setOpenHandler { urls in
-                let audio = urls.filter { isAudioFile($0) }
-                if audio.count == urls.count, state.analysis != nil, let u = audio.first { state.setAudio(u) }
-                else { state.importURLs(urls.filter { !isAudioFile($0) }) }
+            if state.frames.isEmpty, !urls.isEmpty { open(urls) }
+            AppDelegate.setOpenHandler { urls in open(urls) }
+        }
+        .sheet(isPresented: Binding(get: { !agreed }, set: { _ in })) {
+            AgreementSheet {
+                acceptedAgreement = AppDocs.agreementVersion
+                let queued = pendingOpen
+                pendingOpen = []
+                if !queued.isEmpty { open(queued) }
             }
         }
     }

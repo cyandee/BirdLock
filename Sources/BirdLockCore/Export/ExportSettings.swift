@@ -84,6 +84,50 @@ public struct OverlaySettings: Codable, Hashable, Sendable {
     }
 }
 
+public enum FocusMarkStyle: String, Codable, CaseIterable, Sendable, Identifiable {
+    case box, brackets
+    public var id: String { rawValue }
+    public var title: String { self == .box ? "方框（索尼鸟眼对焦）" : "四角框（追踪框）" }
+}
+
+public enum FocusMarkColor: String, Codable, CaseIterable, Sendable, Identifiable {
+    case green, white, orange
+    public var id: String { rawValue }
+    public var title: String { ["green": "绿色", "white": "白色", "orange": "橙色"][rawValue]! }
+    public var rgb: (Double, Double, Double) {
+        switch self {
+        case .green: return (0.30, 0.92, 0.36)
+        case .white: return (1, 1, 1)
+        case .orange: return (1.0, 0.62, 0.12)
+        }
+    }
+}
+
+/// Focus point drawn on the output like a camera's eye-AF frame: a small frame on the eye,
+/// or a larger one around the head while the eye is hidden.
+public struct FocusMarkSettings: Codable, Hashable, Sendable {
+    public var enabled = false
+    public var style: FocusMarkStyle = .box
+    public var color: FocusMarkColor = .green
+    /// 1 = default size (eye frame ≈ 0.4 head lengths)
+    public var size = 1.0
+    public var lineWidth = 1.0
+    /// While the eye is hidden (predicted), frame the whole head instead
+    public var headWhenHidden = true
+    public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = FocusMarkSettings()
+        enabled = c.value(.enabled, d.enabled)
+        style = c.value(.style, d.style)
+        color = c.value(.color, d.color)
+        size = c.value(.size, d.size)
+        lineWidth = c.value(.lineWidth, d.lineWidth)
+        headWhenHidden = c.value(.headWhenHidden, d.headWhenHidden)
+    }
+}
+
 /// Picture watermark (e.g. a signature PNG with transparency) placed freely on the output.
 public struct WatermarkSettings: Codable, Hashable, Sendable {
     public var enabled = false
@@ -160,6 +204,7 @@ public struct ExportSettings: Codable, Hashable, Sendable {
     public var fadeInSeconds: Double = 0
     public var fadeOutSeconds: Double = 0
     public var overlay = OverlaySettings()
+    public var focusMark = FocusMarkSettings()
     public var useFullResolution = true
     public init() {}
 
@@ -178,6 +223,7 @@ public struct ExportSettings: Codable, Hashable, Sendable {
         fadeInSeconds = c.value(.fadeInSeconds, d.fadeInSeconds)
         fadeOutSeconds = c.value(.fadeOutSeconds, d.fadeOutSeconds)
         overlay = c.value(.overlay, d.overlay)
+        focusMark = c.value(.focusMark, d.focusMark)
         useFullResolution = c.value(.useFullResolution, d.useFullResolution)
     }
 

@@ -19,7 +19,7 @@ func positional(_ k: Int) -> String? {
     var skip = false
     for (i, s) in CommandLine.arguments.enumerated() where i > 0 {
         if skip { skip = false; continue }
-        if s.hasPrefix("--") { skip = !["--proxy", "--noreg", "--fresh", "--exif", "--nodeflicker", "--dump-plan"].contains(s); continue }
+        if s.hasPrefix("--") { skip = !["--proxy", "--noreg", "--fresh", "--exif", "--nodeflicker", "--dump-plan", "--focus"].contains(s); continue }
         out.append(s)
     }
     return k < out.count ? out[k] : nil
@@ -278,6 +278,8 @@ func runExport(_ a: SequenceAnalysis) {
     if let m = arg("interp"), let v = FrameInterpolation(rawValue: m) { ex.interpolation = v }
     if let c = arg("codec"), let v = VideoCodec(rawValue: c) { ex.codec = v }
     if flag("exif") { ex.overlay.showExif = true }
+    if flag("focus") { ex.focusMark.enabled = true }
+    if let st = arg("focus-style"), let v = FocusMarkStyle(rawValue: st) { ex.focusMark.enabled = true; ex.focusMark.style = v }
     ex.useFullResolution = !flag("proxy")
     var look = LookSettings()
     if flag("nodeflicker") { look.deflicker = false }

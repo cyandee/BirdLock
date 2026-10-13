@@ -172,7 +172,7 @@ public final class YOLOModel: @unchecked Sendable {
             read = { c, n in Double(p[c * strides[1] + n * strides[2]]) }
         case .float16:
             let p = a.dataPointer.assumingMemoryBound(to: UInt16.self)
-            read = { c, n in Double(Float(Float16(bitPattern: p[c * strides[1] + n * strides[2]]))) }
+            read = { c, n in Double(halfToFloat(p[c * strides[1] + n * strides[2]])) }
         case .double:
             let p = a.dataPointer.assumingMemoryBound(to: Double.self)
             read = { c, n in p[c * strides[1] + n * strides[2]] }
@@ -206,4 +206,17 @@ public final class YOLOModel: @unchecked Sendable {
         }
         return keep
     }
+}
+
+/// IEEE 754 half -> float (Float16 is not available on Intel Macs).
+@inline(__always) func halfToFloat(_ h: UInt16) -> Float {
+    let sign = UInt32(h & 0x8000) << 16
+    let exp = UInt32(h >> 10) & 0x1F
+    let mant = UInt32(h & 0x03FF)
+    if exp == 0 {   // zero / subnormal: mant × 2^-24
+        let v = Float(mant) * 0x1p-24
+        return sign != 0 ? -v : v
+    }
+    if exp == 0x1F { return Float(bitPattern: sign | 0x7F80_0000 | (mant << 13)) }   // inf / NaN
+    return Float(bitPattern: sign | ((exp + 112) << 23) | (mant << 13))
 }

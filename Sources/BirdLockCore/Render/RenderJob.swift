@@ -155,6 +155,42 @@ public final class RenderJob: @unchecked Sendable {
     }
 
     /// Render a single output frame (handles blending and fades). `fetch` supplies decoded sources.
+    /// Where the camera would show its AF frame in output frame `i`: the eye, or the head while the eye is hidden.
+    /// Returns centre (output px at `scale`) and frame side.
+    public func focusTarget(_ i: Int, scale: Double) -> (center: V2, side: Double)? {
+        guard contains(i), track.frames.indices.contains(i) else { return nil }
+        let tf = track.frames[i]
+        guard tf.hasData else { return nil }
+        let fm = export.focusMark
+        let xf = plan.xforms[i].scaled(scale)
+        let eyeSeen = tf.eyeVisible || analysis.manualEye[i] != nil
+        let onHead = !eyeSeen && fm.headWhenHidden
+        let side = tf.headLength * xf.z * (onHead ? 1.3 : 0.42) * fm.size
+        return (xf.map(onHead ? tf.headCenter : tf.eye), max(10 * scale, side))
+    }
+
+    private func focusMark(_ of: OutputFrame, scale: Double, outH: Int) -> CIImage? {
+        guard let ta = focusTarget(of.a, scale: scale) else { return nil }
+        var c = ta.center, side = ta.side
+        if of.t > 0.001, of.b != of.a, let tb = focusTarget(of.b, scale: scale) {
+            c = ta.center + (tb.center - ta.center) * of.t
+            side = ta.side + (tb.side - ta.side) * of.t
+        }
+        let fm = export.focusMark
+        let outShort = Double(min(outputSize.w, outputSize.h)) * scale
+        let line = max(1, (outShort * 0.0024 * fm.lineWidth).rounded())
+        let s = max(8, Int(side.rounded()))
+        let key = "focus|\(s)|\(line)|\(fm.style.rawValue)|\(fm.color.rawValue)"
+        lock.lock(); var cg = overlayCache[key]; lock.unlock()
+        if cg == nil {
+            cg = FocusMark.image(side: s, line: line, style: fm.style, color: fm.color)
+            lock.lock(); overlayCache[key] = cg; lock.unlock()
+        }
+        guard let cg else { return nil }
+        let half = Double(cg.width) / 2
+        return CIImage(cgImage: cg).transformed(by: CGAffineTransform(translationX: c.x - half, y: Double(outH) - c.y - half))
+    }
+
     /// - Parameter includeWatermark: false for the interactive preview (the app draws the watermark itself so it can be dragged)
     public func renderOutput(_ of: OutputFrame, scale: Double = 1, includeWatermark: Bool = true, fetch: (Int) -> (CIImage, Double)?,
                              interpolate: ((CIImage, CIImage, Double) -> CIImage?)? = nil) -> CIImage? {
@@ -175,6 +211,9 @@ public final class RenderJob: @unchecked Sendable {
                 placed = placed.applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: o.opacity)])
             }
             img = placed.composited(over: img)
+        }
+        if export.focusMark.enabled, let mark = focusMark(of, scale: Double(w) / Double(sz.w), outH: h) {
+            img = mark.composited(over: img)
         }
         if includeWatermark, let wm = watermarkCIImage() {
             let r = watermark.rect(imageSize: wm.extent.size, outW: Double(w), outH: Double(h))

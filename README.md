@@ -7,6 +7,7 @@
 ```zsh
 cd ~/Claude/bird
 zsh scripts/build_app.sh        # 生成 dist/BirdLock.app
+VERSION=1.1 zsh scripts/make_dmg.sh   # 生成可分发的 dist/BirdLock-1.1.dmg（Apple 芯片 + Intel 通用版）
 open dist/BirdLock.app
 ```
 
@@ -42,6 +43,7 @@ open dist/BirdLock.app
 | 帧率与速度 | 24 到 120 fps；0.1× 到 2×；补帧方式：重复帧、帧混合、**AI 光流补帧**（VideoToolbox，macOS 15.4 以上） |
 | 顺序 | 正放、倒放、往返；重复次数；淡入淡出 |
 | 水印 | 图片水印（PNG 签名 / Logo，在成片预览里拖动位置、拖右下角调大小，或九宫格快速定位）；拍摄参数（机身、镜头、快门、光圈、ISO）、自定义文字 |
+| 对焦框 | 模仿索尼鸟眼对焦显示：鸟眼上画对焦框（方框 / 四角框，绿 / 白 / 橙），鸟眼被遮挡时框住鸟头 |
 | 音乐 | 导入背景音乐（MP3 / M4A / WAV / AIFF），在「音乐」轨道上拖动选择片段；音量、淡入淡出、循环；预览时同步播放，导出视频时合成 AAC 音轨 |
 | 修正 | 鸟头推算帧会标出「修正」按钮：切换到原图并放大跟随鸟头，点击或拖动鸟眼到准确位置，前后帧自动重算；上一个 / 下一个推算帧快速跳转；也能给未识别的帧手动标记；选择要跟踪的鸟；排除单帧；设置起点和终点 |
 
@@ -59,7 +61,8 @@ Sources/BirdLockApp    SwiftUI 界面
 Sources/BirdLockCLI    命令行工具（批量测试、调试）
 Models/                Core ML 模型（BirdDetector / BirdPose）
 tools/train/           模型导出与训练脚本（CUB-200 鸟类关键点）
-scripts/               打包脚本、开发辅助脚本
+scripts/               打包脚本（build_app / make_dmg）、开发辅助脚本
+docs/                  使用说明、用户协议草稿
 ```
 
 ## 命令行
@@ -70,7 +73,7 @@ B=.build/release/birdlock-cli
 $B analyze <文件夹> --debug dbg/       # 分析并输出识别结果的可视化图片
 $B export <文件夹> --preset lead --aspect 9:16 --short 2160 --speed 0.5 --interp ai --out out.mp4
 #   其他选项：--framing 40  --edge shift|zoom|blur|black  --margin 0.12  --follow 0.5
-#            --audio 音乐.m4a --audio-offset 12.5  --watermark 签名.png --wm-x 0.85 --wm-y 0.9 --wm-size 0.25  --dump-plan
+#            --audio 音乐.m4a --audio-offset 12.5  --watermark 签名.png --wm-x 0.85 --wm-y 0.9 --wm-size 0.25  --focus  --dump-plan
 ```
 
 ## 模型

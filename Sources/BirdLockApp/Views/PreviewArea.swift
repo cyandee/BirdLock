@@ -67,7 +67,7 @@ struct OutputPreview: View {
                     .position(x: r.midX, y: r.midY)
             }
             // anchor crosshair
-            if !state.isPlaying, let job = state.job, job.contains(state.currentFrame) {
+            if !state.isPlaying, !state.exportSettings.focusMark.enabled, let job = state.job, job.contains(state.currentFrame) {
                 let p = job.plan.xforms[state.currentFrame].p
                 let x = r.minX + p.x / Double(W) * r.width, y = r.minY + p.y / Double(H) * r.height
                 Crosshair().stroke(Theme.eye.opacity(0.55), lineWidth: 1).frame(width: 26, height: 26).position(x: x, y: y)

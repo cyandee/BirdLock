@@ -16,6 +16,18 @@ struct BirdLockApp: App {
         }
         .windowToolbarStyle(.unified(showsTitle: true))
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("关于 BirdLock 鸟眼锁定") { AppDocs.showAbout() }
+                Divider()
+                Button("用户协议…") { LegalWindow.show(.agreement) }
+                Button("许可与第三方组件…") { LegalWindow.show(.notices) }
+            }
+            CommandGroup(replacing: .help) {
+                Button("BirdLock 使用说明") { AppDocs.openManual() }
+                Button("反馈意见（发邮件）") {
+                    if let u = URL(string: "mailto:cyanodee@foxmail.com?subject=BirdLock%20%E6%84%8F%E8%A7%81%E5%8F%8D%E9%A6%88") { NSWorkspace.shared.open(u) }
+                }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("导入连拍…") { openImportPanel(state) }.keyboardShortcut("o")
             }

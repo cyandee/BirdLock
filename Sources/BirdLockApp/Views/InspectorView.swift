@@ -465,6 +465,7 @@ struct OutputSection: View {
             }
         }
 
+        FocusMarkCard()
         MusicCard()
         WatermarkCard()
 
@@ -492,6 +493,37 @@ struct OutputSection: View {
         let s = state.exportSettings.speed
         let eff = fps * s
         return String(format: "成片每秒展示 %.1f 张连拍", eff)
+    }
+}
+
+/// Camera-style focus frame on the eye (or the head while the eye is hidden), baked into the output.
+struct FocusMarkCard: View {
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        @Bindable var state = state
+        InspectorCard(title: "对焦框", icon: "viewfinder.rectangular") {
+            Toggle("在成片里显示对焦点", isOn: $state.exportSettings.focusMark.enabled)
+                .help("像索尼相机的鸟眼对焦一样，在鸟眼上画一个对焦框，让观众始终看到焦点在哪里")
+            if state.exportSettings.focusMark.enabled {
+                FormRow(label: "样式") {
+                    Picker("", selection: $state.exportSettings.focusMark.style) {
+                        ForEach(FocusMarkStyle.allCases) { Text($0.title).tag($0) }
+                    }.labelsHidden()
+                }
+                FormRow(label: "颜色") {
+                    Picker("", selection: $state.exportSettings.focusMark.color) {
+                        ForEach(FocusMarkColor.allCases) { Text($0.title).tag($0) }
+                    }.pickerStyle(.segmented).labelsHidden()
+                }
+                LabeledSlider(title: "大小", value: $state.exportSettings.focusMark.size, range: 0.5...2.5,
+                              format: { String(format: "%.1f×", $0) })
+                LabeledSlider(title: "线宽", value: $state.exportSettings.focusMark.lineWidth, range: 0.5...3,
+                              format: { String(format: "%.1f×", $0) })
+                Toggle("鸟眼被遮挡时框住鸟头", isOn: $state.exportSettings.focusMark.headWhenHidden)
+                    .help("关闭时，遮挡帧仍在推算的鸟眼位置显示小框")
+            }
+        }
     }
 }
 

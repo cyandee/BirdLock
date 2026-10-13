@@ -6,8 +6,11 @@ ROOT="${0:A:h:h}"
 cd "$ROOT"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 
-swift build -c release --product BirdLock
-BIN="$(swift build -c release --show-bin-path)/BirdLock"
+# UNIVERSAL=1 builds for Apple silicon and Intel (needed when distributing to other Macs)
+ARCH_ARGS=()
+[ "${UNIVERSAL:-0}" = "1" ] && ARCH_ARGS=(--arch arm64 --arch x86_64)
+swift build -c release --product BirdLock "${ARCH_ARGS[@]}"
+BIN="$(swift build -c release "${ARCH_ARGS[@]}" --show-bin-path)/BirdLock"
 
 APP="$ROOT/dist/BirdLock.app"
 rm -rf "$APP"
@@ -16,6 +19,15 @@ cp "$BIN" "$APP/Contents/MacOS/BirdLock"
 cp -R Models/*.mlmodelc "$APP/Contents/Resources/Models/"
 cp Models/*.json "$APP/Contents/Resources/Models/" 2>/dev/null || true
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
+
+# Bundled documents: agreement, licenses, manual (HTML + PDF)
+DOCS="$APP/Contents/Resources/Docs"
+mkdir -p "$DOCS"
+cp docs/用户协议.md docs/第三方许可.md docs/使用说明.md LICENSE "$DOCS/"
+python3 -I scripts/md2html.py docs/使用说明.md "$DOCS/使用说明.html"
+HTML2PDF="$ROOT/.build/html2pdf"
+[ "$HTML2PDF" -nt scripts/html2pdf.swift ] || swiftc -O scripts/html2pdf.swift -o "$HTML2PDF"
+"$HTML2PDF" "$DOCS/使用说明.html" "$DOCS/使用说明.pdf" >/dev/null
 
 VERSION="${VERSION:-1.0}"
 BUILD="$(date +%Y%m%d%H%M)"
