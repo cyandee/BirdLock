@@ -27,11 +27,12 @@ public enum RotationMode: String, Codable, CaseIterable, Sendable, Identifiable 
 }
 
 public enum EdgeFill: String, Codable, CaseIterable, Sendable, Identifiable {
-    case autoZoom, blurExtend, black
+    case shift, autoZoom, blurExtend, black
     public var id: String { rawValue }
     public var title: String {
         switch self {
-        case .autoZoom: return "自动放大避免越界"
+        case .shift: return "平移取景，用满原图（推荐）"
+        case .autoZoom: return "放大避免越界（鸟始终锁定）"
         case .blurExtend: return "模糊延展填充"
         case .black: return "黑边"
         }
@@ -54,9 +55,41 @@ public struct Composition: Codable, Hashable, Sendable {
     public var rotationOffsetDeg: Double = 0
     /// 0 = hard lock; 1 = very soft camera follow
     public var followSoftness: Double = 0
-    public var edgeFill: EdgeFill = .autoZoom
+    public var edgeFill: EdgeFill = .shift
+    /// `.shift`: the anchor keeps at least this distance (fraction of the output size) from the output edge
+    public var edgeMargin: Double = 0.12
+    /// `.shift`: largest extra zoom used to keep the bird away from the edge
+    public var maxEdgeZoom: Double = 1.6
+
+    public static let framingRange: ClosedRange<Double> = 2...300
 
     public init() {}
+
+    // Tolerant decoding: settings saved by older versions (missing keys, unknown values) keep their defaults.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Composition()
+        lockPoint = c.value(.lockPoint, d.lockPoint)
+        anchorX = c.value(.anchorX, d.anchorX)
+        anchorY = c.value(.anchorY, d.anchorY)
+        autoLeadRoom = c.value(.autoLeadRoom, d.autoLeadRoom)
+        framing = c.value(.framing, d.framing)
+        sizeMode = c.value(.sizeMode, d.sizeMode)
+        sizeSmoothing = c.value(.sizeSmoothing, d.sizeSmoothing)
+        rotationMode = c.value(.rotationMode, d.rotationMode)
+        rotationOffsetDeg = c.value(.rotationOffsetDeg, d.rotationOffsetDeg)
+        followSoftness = c.value(.followSoftness, d.followSoftness)
+        edgeFill = c.value(.edgeFill, d.edgeFill)
+        edgeMargin = c.value(.edgeMargin, d.edgeMargin)
+        maxEdgeZoom = c.value(.maxEdgeZoom, d.maxEdgeZoom)
+    }
+}
+
+public extension KeyedDecodingContainer {
+    /// Decodes `key`, falling back to `fallback` when it is missing or cannot be decoded.
+    func value<T: Decodable>(_ key: Key, _ fallback: T) -> T {
+        ((try? decodeIfPresent(T.self, forKey: key)) ?? nil) ?? fallback
+    }
 }
 
 public struct CompositionPreset: Identifiable, Hashable, Sendable {

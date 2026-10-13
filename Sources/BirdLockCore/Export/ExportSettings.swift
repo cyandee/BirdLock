@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import CoreGraphics
 
 public enum VideoCodec: String, Codable, CaseIterable, Sendable, Identifiable {
     case h264, hevc, proRes422HQ, proRes4444
@@ -70,6 +71,78 @@ public struct OverlaySettings: Codable, Hashable, Sendable {
     public var textScale: Double = 1.0
     public var opacity: Double = 0.85
     public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = OverlaySettings()
+        showExif = c.value(.showExif, d.showExif)
+        exifPerFrame = c.value(.exifPerFrame, d.exifPerFrame)
+        customText = c.value(.customText, d.customText)
+        corner = c.value(.corner, d.corner)
+        textScale = c.value(.textScale, d.textScale)
+        opacity = c.value(.opacity, d.opacity)
+    }
+}
+
+/// Picture watermark (e.g. a signature PNG with transparency) placed freely on the output.
+public struct WatermarkSettings: Codable, Hashable, Sendable {
+    public var enabled = false
+    /// PNG copied into the app's support folder
+    public var imagePath: String? = nil
+    /// Centre of the watermark, normalised to the output frame (0…1, top-left origin)
+    public var centerX = 0.84
+    public var centerY = 0.88
+    /// Watermark width as a fraction of the output's short side
+    public var size = 0.28
+    public var opacity = 0.9
+    public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = WatermarkSettings()
+        enabled = c.value(.enabled, d.enabled)
+        imagePath = c.value(.imagePath, d.imagePath)
+        centerX = c.value(.centerX, d.centerX)
+        centerY = c.value(.centerY, d.centerY)
+        size = c.value(.size, d.size)
+        opacity = c.value(.opacity, d.opacity)
+    }
+
+    public var isActive: Bool { enabled && imagePath != nil }
+
+    /// Watermark rectangle in output pixels (top-left origin) for an image of `imageSize`.
+    public func rect(imageSize: CGSize, outW: Double, outH: Double) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0 else { return .zero }
+        let w = size * min(outW, outH)
+        let h = w * Double(imageSize.height) / Double(imageSize.width)
+        return CGRect(x: centerX * outW - w / 2, y: centerY * outH - h / 2, width: w, height: h)
+    }
+}
+
+/// Background music muxed into exported videos.
+public struct AudioSettings: Codable, Hashable, Sendable {
+    public var url: URL? = nil
+    /// Position in the music file (seconds) that lines up with the start of the video
+    public var startOffset: Double = 0
+    public var volume: Double = 1
+    public var fadeIn: Double = 0.3
+    public var fadeOut: Double = 1.0
+    /// Repeat the music when it is shorter than the video
+    public var loop = true
+    public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = AudioSettings()
+        url = c.value(.url, d.url)
+        startOffset = c.value(.startOffset, d.startOffset)
+        volume = c.value(.volume, d.volume)
+        fadeIn = c.value(.fadeIn, d.fadeIn)
+        fadeOut = c.value(.fadeOut, d.fadeOut)
+        loop = c.value(.loop, d.loop)
+    }
+
+    public var isActive: Bool { url != nil && volume > 0.001 }
 }
 
 public struct ExportSettings: Codable, Hashable, Sendable {
@@ -89,6 +162,24 @@ public struct ExportSettings: Codable, Hashable, Sendable {
     public var overlay = OverlaySettings()
     public var useFullResolution = true
     public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = ExportSettings()
+        aspect = c.value(.aspect, d.aspect)
+        shortSide = c.value(.shortSide, d.shortSide)
+        outputFPS = c.value(.outputFPS, d.outputFPS)
+        speed = c.value(.speed, d.speed)
+        interpolation = c.value(.interpolation, d.interpolation)
+        loop = c.value(.loop, d.loop)
+        repeatCount = c.value(.repeatCount, d.repeatCount)
+        codec = c.value(.codec, d.codec)
+        quality = c.value(.quality, d.quality)
+        fadeInSeconds = c.value(.fadeInSeconds, d.fadeInSeconds)
+        fadeOutSeconds = c.value(.fadeOutSeconds, d.fadeOutSeconds)
+        overlay = c.value(.overlay, d.overlay)
+        useFullResolution = c.value(.useFullResolution, d.useFullResolution)
+    }
 
     public var outputSize: (w: Int, h: Int) {
         let r = aspect.value

@@ -9,6 +9,15 @@ public struct LookSettings: Codable, Hashable, Sendable {
     public var deflickerWindow: Double = 8     // frames (gaussian sigma)
     public var exposureEV: Double = 0
     public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = LookSettings()
+        deflicker = c.value(.deflicker, d.deflicker)
+        deflickerStrength = c.value(.deflickerStrength, d.deflickerStrength)
+        deflickerWindow = c.value(.deflickerWindow, d.deflickerWindow)
+        exposureEV = c.value(.exposureEV, d.exposureEV)
+    }
 }
 
 /// Per-frame RGB gains that remove exposure/white-balance flicker.
@@ -114,7 +123,7 @@ public final class FrameRenderer: @unchecked Sendable {
         let outRect = CGRect(x: 0, y: 0, width: outW, height: outH)
         var result: CIImage
         switch edgeFill {
-        case .black, .autoZoom:
+        case .black, .autoZoom, .shift:
             let base = CIImage(color: .black).cropped(to: outRect)
             result = work.transformed(by: T, highQualityDownsample: false).composited(over: base)
         case .blurExtend:

@@ -8,7 +8,8 @@ struct BirdLockApp: App {
     @State private var state = AppState()
 
     var body: some Scene {
-        WindowGroup("BirdLock 鸟眼锁定") {
+        // A single window: opening folders from Finder imports into it instead of spawning windows that share state
+        Window("BirdLock 鸟眼锁定", id: "main") {
             ContentView()
                 .environment(state)
                 .frame(minWidth: 1100, minHeight: 720)
@@ -27,8 +28,26 @@ struct BirdLockApp: App {
                     .keyboardShortcut("t")
                 Button("排除/恢复当前帧") { state.toggleExcluded() }.keyboardShortcut("x", modifiers: [])
             }
+            CommandMenu("修正") {
+                Button("修正鸟眼") {
+                    if state.viewMode == .source && state.sourceTool == .fixEye { state.sourceTool = .none } else { state.startFixingEye() }
+                }
+                .keyboardShortcut("e", modifiers: [])
+                Button("上一个推算帧") { state.jumpToPredicted(-1) }.keyboardShortcut("[", modifiers: [])
+                Button("下一个推算帧") { state.jumpToPredicted(1) }.keyboardShortcut("]", modifiers: [])
+                Button("撤销本帧修正") { state.clearManualEye() }
+                Divider()
+                Button("原图放大 / 全图") {
+                    if state.viewMode != .source { state.viewMode = .source; state.refreshPreview() }
+                    state.sourceZoom = state.sourceZoom > 1.01 ? 1 : 4
+                }
+                .keyboardShortcut("z", modifiers: [])
+            }
             CommandGroup(after: .saveItem) {
                 Button("导出…") { state.showExportSheet = true }.keyboardShortcut("e").disabled(state.job == nil)
+                Divider()
+                Button("添加背景音乐…") { state.chooseAudio() }.disabled(state.analysis == nil)
+                Button("导入图片水印…") { state.chooseWatermark() }
             }
         }
     }
@@ -46,7 +65,32 @@ func openImportPanel(_ state: AppState) {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Set by the UI: imports folders / photos opened from Finder ("Open With", Dock icon drop, `open -a`).
+    @MainActor static var openHandler: (([URL]) -> Void)?
+    @MainActor private static var pendingOpen: [URL] = []
+
+    @MainActor static func setOpenHandler(_ h: @escaping ([URL]) -> Void) {
+        openHandler = h
+        if !pendingOpen.isEmpty { h(pendingOpen); pendingOpen = [] }
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        MainActor.assumeIsolated {
+            if let h = Self.openHandler { h(urls) } else { Self.pendingOpen += urls }
+        }
+    }
+
+    private var keyMonitor: Any?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Single-key shortcuts (space, E, X, Z, [ ]) must not steal keystrokes while typing in a text field:
+        // hand plain key presses straight to the field being edited.
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let mods = event.modifierFlags.intersection([.command, .control])
+            guard mods.isEmpty, let tv = NSApp.keyWindow?.firstResponder as? NSTextView, tv.isEditable else { return event }
+            tv.keyDown(with: event)
+            return nil
+        }
         // Running as a bare executable (swift run): make it a regular foreground app
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)

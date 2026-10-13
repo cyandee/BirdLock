@@ -9,6 +9,24 @@ public struct FrameSelection: Codable, Hashable, Sendable {
     public var blurThreshold = 0.55     // relative to the sequence median sharpness
     public var dropUntracked = true
     public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = FrameSelection()
+        trimStart = c.value(.trimStart, d.trimStart)
+        trimEnd = c.value(.trimEnd, d.trimEnd)
+        dropBlurry = c.value(.dropBlurry, d.dropBlurry)
+        blurThreshold = c.value(.blurThreshold, d.blurThreshold)
+        dropUntracked = c.value(.dropUntracked, d.dropUntracked)
+    }
+}
+
+/// Largest power-of-two reduction (1, 1/2, 1/4, 1/8) that still gives at least `needed` source pixels
+/// per original pixel. JPEG decodes at these scales directly in the DCT domain, which is much faster.
+public func decodeScale(needed: Double) -> Double {
+    var s = 1.0
+    while s > 0.125 + 1e-9 && s / 2 >= needed { s /= 2 }
+    return s
 }
 
 public extension FrameXform {
@@ -36,12 +54,16 @@ public final class RenderJob: @unchecked Sendable {
     public let outputFrames: [OutputFrame]
     public let renderer: FrameRenderer
     public let cache: ProxyCache
+    public let watermark: WatermarkSettings
     private var overlayCache: [String: CGImage] = [:]
+    private var watermarkImage: CIImage??
     private let lock = NSLock()
 
     public init(analysis: SequenceAnalysis, composition: Composition, look: LookSettings, export: ExportSettings,
-                selection: FrameSelection, renderer: FrameRenderer = .shared, cache: ProxyCache = .shared) {
+                selection: FrameSelection, watermark: WatermarkSettings = WatermarkSettings(),
+                renderer: FrameRenderer = .shared, cache: ProxyCache = .shared) {
         self.analysis = analysis
+        self.watermark = watermark
         self.track = analysis.track ?? TrackBuilder.build(analysis)
         self.composition = composition
         self.look = look
@@ -71,15 +93,34 @@ public final class RenderJob: @unchecked Sendable {
 
     public var outputSize: (w: Int, h: Int) { export.outputSize }
     public var duration: Double { Double(outputFrames.count) / export.outputFPS }
+    public func contains(_ i: Int) -> Bool { i >= 0 && i < analysis.count && i < plan.xforms.count }
+
+    /// Decode scale for exporting at full quality: enough pixels for the largest zoom of any used frame
+    /// (plus headroom for the Lanczos downsample), but no more.
+    public var exportDecodeScale: Double { decodeScale(needed: min(1, plan.maxUpscale * 1.2)) }
 
     /// Decoded source as CIImage plus its scale relative to the original pixel grid.
-    public func source(_ i: Int, proxy: Bool) -> (CIImage, Double)? {
+    /// - Parameter scale: decode the original at this fraction of its size (1 = full resolution)
+    public func source(_ i: Int, proxy: Bool, scale: Double = 1) -> (CIImage, Double)? {
+        guard i >= 0, i < analysis.count else { return nil }
         let f = analysis.frames[i]
         if proxy, let p = cache.loadProxy(fingerprint: analysis.fingerprint, index: i) {
             return (CIImage(cgImage: p), Double(p.width) / Double(f.pixelWidth))
         }
-        guard let cg = ImageLoader.load(f.url) else { return nil }
+        let longSide = max(f.pixelWidth, f.pixelHeight)
+        let maxPixel: Int? = scale < 0.999 ? Int((Double(longSide) * scale).rounded(.up)) : nil
+        guard let cg = ImageLoader.load(f.url, maxPixel: maxPixel) else { return nil }
         return (CIImage(cgImage: cg), Double(cg.width) / Double(f.pixelWidth))
+    }
+
+    /// The watermark picture (loaded once), or nil when disabled / missing.
+    public func watermarkCIImage() -> CIImage? {
+        guard watermark.isActive, let path = watermark.imagePath else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        if let cached = watermarkImage { return cached }
+        let img = ImageLoader.load(URL(fileURLWithPath: path)).map { CIImage(cgImage: $0) }
+        watermarkImage = .some(img)
+        return img
     }
 
     func overlays(for i: Int, outW: Int, outH: Int) -> [OverlayItem] {
@@ -102,6 +143,9 @@ public final class RenderJob: @unchecked Sendable {
     /// Compose one source frame into the output. `scale` < 1 renders a smaller preview.
     public func compose(frame i: Int, source: CIImage, sourceScale: Double, scale: Double = 1, withOverlays: Bool = true) -> CIImage {
         let sz = outputSize
+        guard contains(i) else {
+            return CIImage(color: .black).cropped(to: CGRect(x: 0, y: 0, width: max(2, Double(sz.w) * scale), height: max(2, Double(sz.h) * scale)))
+        }
         let w = max(2, Int((Double(sz.w) * scale).rounded())), h = max(2, Int((Double(sz.h) * scale).rounded()))
         let xf = plan.xforms[i].scaled(Double(w) / Double(sz.w))
         let fill = composition.edgeFill
@@ -111,8 +155,10 @@ public final class RenderJob: @unchecked Sendable {
     }
 
     /// Render a single output frame (handles blending and fades). `fetch` supplies decoded sources.
-    public func renderOutput(_ of: OutputFrame, scale: Double = 1, fetch: (Int) -> (CIImage, Double)?,
+    /// - Parameter includeWatermark: false for the interactive preview (the app draws the watermark itself so it can be dragged)
+    public func renderOutput(_ of: OutputFrame, scale: Double = 1, includeWatermark: Bool = true, fetch: (Int) -> (CIImage, Double)?,
                              interpolate: ((CIImage, CIImage, Double) -> CIImage?)? = nil) -> CIImage? {
+        guard contains(of.a), contains(of.b) else { return nil }
         guard let (sa, ka) = fetch(of.a) else { return nil }
         var img = compose(frame: of.a, source: sa, sourceScale: ka, scale: scale, withOverlays: false)
         if of.t > 0.001, of.b != of.a, let (sb, kb) = fetch(of.b) {
@@ -129,6 +175,21 @@ public final class RenderJob: @unchecked Sendable {
                 placed = placed.applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: o.opacity)])
             }
             img = placed.composited(over: img)
+        }
+        if includeWatermark, let wm = watermarkCIImage() {
+            let r = watermark.rect(imageSize: wm.extent.size, outW: Double(w), outH: Double(h))
+            if r.width >= 1 {
+                let k = r.width / wm.extent.width
+                var placed = k < 1
+                    ? wm.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: k, kCIInputAspectRatioKey: 1.0])
+                    : wm.transformed(by: CGAffineTransform(scaleX: k, y: k))
+                placed = placed.transformed(by: CGAffineTransform(translationX: r.minX - placed.extent.minX,
+                                                                  y: Double(h) - r.maxY - placed.extent.minY))
+                if watermark.opacity < 0.999 {
+                    placed = placed.applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: watermark.opacity)])
+                }
+                img = placed.composited(over: img)
+            }
         }
         if of.fade < 0.999 {
             let black = CIImage(color: .black).cropped(to: img.extent)

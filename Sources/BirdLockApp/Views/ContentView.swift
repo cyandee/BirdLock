@@ -14,22 +14,28 @@ struct ContentView: View {
                     Theme.canvas
                     if state.frames.isEmpty && state.phase != .importing {
                         DropZoneView(targeted: dropTargeted)
-                    } else {
+                    } else if state.analysis != nil {
                         PreviewArea()
                     }
                     if case .analyzing(let stage, let p) = state.phase {
                         AnalyzingOverlay(stage: stage, progress: p)
                     }
                     if state.phase == .importing {
-                        ProgressView("正在读取照片…").padding(24).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        StatusCard {
+                            HStack(spacing: 14) {
+                                ProgressView().controlSize(.small)
+                                Text("正在读取照片…").font(.headline)
+                            }
+                        }
                     }
                     if case .failed(let msg) = state.phase {
-                        VStack(spacing: 10) {
-                            Image(systemName: "exclamationmark.triangle.fill").font(.largeTitle).foregroundStyle(.orange)
-                            Text(msg).multilineTextAlignment(.center)
-                            Button("重新导入…") { openImportPanel(state) }
+                        StatusCard {
+                            VStack(spacing: 12) {
+                                Image(systemName: "exclamationmark.triangle.fill").font(.largeTitle).foregroundStyle(Theme.warn)
+                                Text(msg).multilineTextAlignment(.center)
+                                Button("重新导入…") { openImportPanel(state) }
+                            }
                         }
-                        .padding(28).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
                     }
                 }
                 .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
@@ -37,15 +43,16 @@ struct ContentView: View {
                     return true
                 }
                 if state.analysis != nil {
+                    Divider()
                     TransportBar()
-                    TimelineView()
-                        .frame(height: 118)
+                    Divider()
+                    TimelinePanel()
                 }
             }
             if state.analysis != nil {
                 Divider()
                 InspectorView()
-                    .frame(width: 340)
+                    .frame(width: 330)
             }
         }
         .background(Theme.canvas)
@@ -57,6 +64,11 @@ struct ContentView: View {
             let args = ProcessInfo.processInfo.arguments.dropFirst().filter { !$0.hasPrefix("-") }
             let urls = args.map { URL(fileURLWithPath: $0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
             if state.frames.isEmpty, !urls.isEmpty { state.importURLs(urls) }
+            AppDelegate.setOpenHandler { urls in
+                let audio = urls.filter { isAudioFile($0) }
+                if audio.count == urls.count, state.analysis != nil, let u = audio.first { state.setAudio(u) }
+                else { state.importURLs(urls.filter { !isAudioFile($0) }) }
+            }
         }
     }
 
@@ -71,19 +83,36 @@ struct ContentView: View {
                 group.leave()
             }
         }
-        group.notify(queue: .main) { if !urls.isEmpty { state.importURLs(urls) } }
+        group.notify(queue: .main) {
+            guard !urls.isEmpty else { return }
+            // a dropped audio file (with a burst already loaded) becomes the background music
+            let audio = urls.filter { isAudioFile($0) }
+            if audio.count == urls.count, state.analysis != nil, let u = audio.first {
+                state.setAudio(u)
+            } else {
+                state.importURLs(urls.filter { !isAudioFile($0) })
+            }
+        }
     }
+}
+
+func isAudioFile(_ u: URL) -> Bool {
+    let ext = u.pathExtension.lowercased()
+    return AudioMixer.fileExtensions.contains(ext) && !FrameImporter.supportedExtensions.contains(ext)
 }
 
 enum Theme {
     static let canvas = Color(red: 0.075, green: 0.078, blue: 0.086)
     static let panel = Color(red: 0.11, green: 0.115, blue: 0.125)
+    static let card = Color.white.opacity(0.045)
+    static let cardStroke = Color.white.opacity(0.07)
     static let accent = Color(red: 0.98, green: 0.72, blue: 0.24)     // warm amber, like a bird's eye ring
     static let eye = Color(red: 0.25, green: 0.85, blue: 1.0)
     static let ok = Color(red: 0.36, green: 0.78, blue: 0.47)
     static let warn = Color(red: 0.95, green: 0.68, blue: 0.25)
     static let bad = Color(red: 0.92, green: 0.36, blue: 0.33)
     static let manual = Color(red: 0.72, green: 0.52, blue: 1.0)
+    static let music = Color(red: 0.45, green: 0.62, blue: 1.0)
 }
 
 struct MainToolbar: ToolbarContent {
@@ -95,9 +124,11 @@ struct MainToolbar: ToolbarContent {
             Button { openImportPanel(state) } label: { Label("导入", systemImage: "photo.stack") }
                 .help("导入连拍照片（文件夹或多张 JPG / HEIF）")
             if state.segments.count > 1 {
+                // Iterate over values (not indices): the list can shrink when another folder is loaded.
+                let items = state.segments.enumerated().map { (index: $0.offset, count: $0.element.range.count) }
                 Picker("连拍组", selection: Binding(get: { state.segmentIndex }, set: { state.selectSegment($0) })) {
-                    ForEach(state.segments.indices, id: \.self) { i in
-                        Text("第 \(i + 1) 组 · \(state.segments[i].range.count) 张").tag(i)
+                    ForEach(items, id: \.index) { item in
+                        Text("第 \(item.index + 1) 组 · \(item.count) 张").tag(item.index)
                     }
                 }
                 .frame(width: 160)
@@ -111,13 +142,12 @@ struct MainToolbar: ToolbarContent {
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 200)
+                .help("⌘T 切换")
             }
         }
         ToolbarItemGroup(placement: .primaryAction) {
             if state.analysis != nil {
                 Button { state.showExportSheet = true } label: { Label("导出", systemImage: "square.and.arrow.up") }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.accent)
                     .help("导出视频 / 图片序列 / GIF（⌘E）")
             }
         }
@@ -150,25 +180,105 @@ struct DropZoneView: View {
     }
 }
 
+/// Compact floating card used for import / analysis / error states.
+struct StatusCard<Content: View>: View {
+    @ViewBuilder var content: Content
+    var body: some View {
+        content
+            .padding(24)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Theme.panel))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white.opacity(0.08)))
+            .shadow(color: .black.opacity(0.45), radius: 30, y: 12)
+            .fixedSize()
+    }
+}
+
 struct AnalyzingOverlay: View {
     @Environment(AppState.self) private var state
     var stage: String
     var progress: Double
 
+    private static let stages: [(stage: AnalysisStage, weight: Double, icon: String)] = [
+        (.detecting, 0.35, "viewfinder"),
+        (.keypoints, 0.30, "eye"),
+        (.registering, 0.30, "scope"),
+        (.solving, 0.05, "point.topleft.down.to.point.bottomright.curvepath"),
+    ]
+
+    private var stageIndex: Int { Self.stages.firstIndex { $0.stage.rawValue == stage } ?? -1 }
+
+    private var overall: Double {
+        let k = stageIndex
+        guard k >= 0 else { return 0 }
+        let done = Self.stages[..<k].reduce(0) { $0 + $1.weight }
+        return min(1, done + Self.stages[k].weight * progress)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "scope").foregroundStyle(Theme.accent)
-                Text("正在分析 \(state.currentFrames.count) 张照片").font(.headline)
-            }
-            Text(stage).font(.callout).foregroundStyle(.secondary)
-            ProgressView(value: progress).progressViewStyle(.linear).tint(Theme.accent).frame(width: 320)
-            HStack {
-                Spacer()
-                Button("取消") { state.cancelAnalysis() }
+        let frames = state.currentFrames
+        ZStack {
+            Color.black.opacity(state.analysis == nil ? 0 : 0.45).ignoresSafeArea()
+            StatusCard {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(spacing: 14) {
+                        ZStack {
+                            Circle().fill(Theme.accent.opacity(0.14)).frame(width: 46, height: 46)
+                            Image(systemName: "bird.fill").font(.system(size: 20)).foregroundStyle(Theme.accent)
+                        }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("正在分析 \(frames.count) 张照片").font(.headline)
+                            if let a = frames.first, let b = frames.last {
+                                Text("\(a.url.deletingPathExtension().lastPathComponent) – \(b.url.deletingPathExtension().lastPathComponent)")
+                                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(Self.stages.enumerated()), id: \.offset) { k, s in
+                            stageRow(k, s.stage.rawValue, s.icon)
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        ProgressView(value: overall).progressViewStyle(.linear).tint(Theme.accent)
+                        HStack {
+                            Text(statusLine).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            Spacer()
+                            Button("取消") { state.cancelAnalysis() }.controlSize(.small)
+                        }
+                    }
+                }
+                .frame(width: 330)
             }
         }
-        .padding(22)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var statusLine: String {
+        let pct = String(format: "%.0f%%", overall * 100)
+        guard stageIndex >= 0 else { return stage == "加载识别模型" ? "加载识别模型…" : "准备中…" }
+        let elapsed = Date().timeIntervalSince(state.analysisStarted)
+        guard overall > 0.04, elapsed > 2 else { return pct }
+        let remain = elapsed * (1 - overall) / overall
+        return remain < 60 ? String(format: "%@ · 约剩 %.0f 秒", pct, max(1, remain)) : String(format: "%@ · 约剩 %.0f 分钟", pct, remain / 60)
+    }
+
+    @ViewBuilder private func stageRow(_ k: Int, _ title: String, _ icon: String) -> some View {
+        let cur = stageIndex
+        HStack(spacing: 10) {
+            ZStack {
+                if k < cur {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.ok)
+                } else if k == cur {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "circle").foregroundStyle(.tertiary)
+                }
+            }
+            .frame(width: 16)
+            Text(title).font(.callout).foregroundStyle(k <= cur ? .primary : .tertiary)
+            Spacer()
+            if k == cur {
+                Text(String(format: "%.0f%%", progress * 100)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+        }
     }
 }

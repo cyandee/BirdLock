@@ -20,13 +20,17 @@ public enum ExportError: Error, LocalizedError {
 final class SourcePrefetcher: @unchecked Sendable {
     private let job: RenderJob
     private let proxy: Bool
+    private let scale: Double
     private var cache: [Int: (CIImage, Double)] = [:]
     private var inflight: [Int: DispatchGroup] = [:]
     private let lock = NSLock()
     private let queue = DispatchQueue(label: "birdlock.prefetch", attributes: .concurrent)
     private let limit: Int
 
-    init(job: RenderJob, proxy: Bool, limit: Int = 12) { self.job = job; self.proxy = proxy; self.limit = limit }
+    /// - Parameter scale: decode originals at this fraction of full size (ignored for proxies)
+    init(job: RenderJob, proxy: Bool, scale: Double = 1, limit: Int = 12) {
+        self.job = job; self.proxy = proxy; self.scale = scale; self.limit = limit
+    }
 
     func prefetch(_ idx: [Int]) {
         for i in idx { start(i) }
@@ -39,7 +43,7 @@ final class SourcePrefetcher: @unchecked Sendable {
         lock.unlock()
         queue.async { [self] in
             // Force decode now (CGImage from ImageIO with ShouldCacheImmediately)
-            let s = job.source(i, proxy: proxy)
+            let s = job.source(i, proxy: proxy, scale: scale)
             lock.lock()
             if let s { cache[i] = s }
             inflight[i] = nil
@@ -66,8 +70,24 @@ final class SourcePrefetcher: @unchecked Sendable {
 public final class VideoExporter {
     public init() {}
 
-    public func export(job: RenderJob, to url: URL, progress: @escaping (Double) -> Void,
+    /// Encodes the video; with `audio` the music is muxed in afterwards (the video stream is copied, not re-encoded).
+    public func export(job: RenderJob, to url: URL, audio: AudioSettings? = nil, progress: @escaping (Double) -> Void,
                        isCancelled: @escaping () -> Bool) throws {
+        guard let audio, audio.isActive else {
+            try exportVideo(job: job, to: url, progress: progress, isCancelled: isCancelled)
+            return
+        }
+        let tmp = url.deletingLastPathComponent()
+            .appendingPathComponent(".birdlock-\(UUID().uuidString.prefix(8)).\(job.export.codec.fileExtension)")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try exportVideo(job: job, to: tmp, progress: { progress($0 * 0.96) }, isCancelled: isCancelled)
+        try AudioMixer.mux(videoURL: tmp, audio: audio, duration: job.duration, to: url, fileType: job.export.codec.fileType,
+                           progress: { progress(0.96 + 0.04 * $0) }, isCancelled: isCancelled)
+        progress(1)
+    }
+
+    func exportVideo(job: RenderJob, to url: URL, progress: @escaping (Double) -> Void,
+                     isCancelled: @escaping () -> Bool) throws {
         let frames = job.outputFrames
         guard !frames.isEmpty else { throw ExportError.noFrames }
         let (W, H) = job.outputSize
@@ -110,7 +130,7 @@ public final class VideoExporter {
         guard writer.startWriting() else { throw ExportError.writer(writer.error?.localizedDescription ?? "start") }
         writer.startSession(atSourceTime: .zero)
 
-        let pre = SourcePrefetcher(job: job, proxy: !s.useFullResolution)
+        let pre = SourcePrefetcher(job: job, proxy: !s.useFullResolution, scale: job.exportDecodeScale)
         let lookahead = 8
         let timescale: CMTimeScale = 60000
         let frameDur = CMTime(value: CMTimeValue((Double(timescale) / s.outputFPS).rounded()), timescale: timescale)
@@ -172,7 +192,7 @@ public final class VideoExporter {
     public func exportImages(job: RenderJob, to dir: URL, type: UTType, progress: @escaping (Double) -> Void,
                              isCancelled: @escaping () -> Bool) throws {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let pre = SourcePrefetcher(job: job, proxy: !job.export.useFullResolution)
+        let pre = SourcePrefetcher(job: job, proxy: !job.export.useFullResolution, scale: job.exportDecodeScale)
         let used = job.used
         guard !used.isEmpty else { throw ExportError.noFrames }
         let ext = type == .png ? "png" : (type == .heic ? "heic" : "jpg")

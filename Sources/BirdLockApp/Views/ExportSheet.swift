@@ -32,6 +32,20 @@ struct ExportSheet: View {
                         GridRow { Text("GIF").foregroundStyle(.secondary); Text(String(format: "%d 帧，最长边 720 px", job.outputFrames.count)) }
                     }
                     GridRow { Text("来源").foregroundStyle(.secondary); Text("使用 \(job.used.count) / \(job.analysis.count) 张原图") }
+                    if kind == .video {
+                        GridRow {
+                            Text("音乐").foregroundStyle(.secondary)
+                            if let u = state.audio.url, state.audio.isActive {
+                                Text("\(u.deletingPathExtension().lastPathComponent)（从 \(formatTime(state.audio.startOffset)) 开始）").lineLimit(1)
+                            } else {
+                                Text("无").foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                    GridRow {
+                        Text("水印").foregroundStyle(.secondary)
+                        Text(state.watermark.isActive ? "图片水印" : "无").foregroundStyle(state.watermark.isActive ? .primary : .tertiary)
+                    }
                 }
                 .font(.callout)
                 Toggle("使用原图全分辨率渲染（推荐，较慢）", isOn: $state.exportSettings.useFullResolution)
@@ -65,7 +79,7 @@ struct ExportSheet: View {
             }
         }
         .padding(22)
-        .frame(width: 460)
+        .frame(width: 480)
     }
 
     private func defaultName() -> String {

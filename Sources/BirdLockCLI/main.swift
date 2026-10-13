@@ -19,7 +19,7 @@ func positional(_ k: Int) -> String? {
     var skip = false
     for (i, s) in CommandLine.arguments.enumerated() where i > 0 {
         if skip { skip = false; continue }
-        if s.hasPrefix("--") { skip = !["--proxy", "--noreg", "--fresh", "--exif", "--nodeflicker"].contains(s); continue }
+        if s.hasPrefix("--") { skip = !["--proxy", "--noreg", "--fresh", "--exif", "--nodeflicker", "--dump-plan"].contains(s); continue }
         out.append(s)
     }
     return k < out.count ? out[k] : nil
@@ -264,6 +264,9 @@ func runExport(_ a: SequenceAnalysis) {
     if let pid = arg("preset"), let p = CompositionPreset.all.first(where: { $0.id == pid }) { comp = p.composition }
     if let f = arg("framing"), let v = Double(f) { comp.framing = v }
     if let l = arg("lock") { comp.lockPoint = l == "head" ? .headCenter : .eye }
+    if let e = arg("edge") { comp.edgeFill = ["shift": .shift, "zoom": .autoZoom, "blur": .blurExtend, "black": .black][e] ?? comp.edgeFill }
+    if let m = arg("margin"), let v = Double(m) { comp.edgeMargin = v }
+    if let f = arg("follow"), let v = Double(f) { comp.followSoftness = v }
     var ex = ExportSettings()
     if let r = arg("aspect") {
         let parts = r.split(separator: ":").compactMap { Double($0) }
@@ -279,12 +282,33 @@ func runExport(_ a: SequenceAnalysis) {
     var look = LookSettings()
     if flag("nodeflicker") { look.deflicker = false }
     let sel = FrameSelection()
-    let job = RenderJob(analysis: a, composition: comp, look: look, export: ex, selection: sel)
+    var wm = WatermarkSettings()
+    if let w = arg("watermark") {
+        wm.enabled = true; wm.imagePath = w
+        if let v = arg("wm-x").flatMap(Double.init) { wm.centerX = v }
+        if let v = arg("wm-y").flatMap(Double.init) { wm.centerY = v }
+        if let v = arg("wm-size").flatMap(Double.init) { wm.size = v }
+    }
+    var audio: AudioSettings? = nil
+    if let m = arg("audio") {
+        var au = AudioSettings(); au.url = URL(fileURLWithPath: m)
+        if let v = arg("audio-offset").flatMap(Double.init) { au.startOffset = v }
+        audio = au
+    }
+    let job = RenderJob(analysis: a, composition: comp, look: look, export: ex, selection: sel, watermark: wm)
     let out = URL(fileURLWithPath: arg("out", "out.\(ex.codec.fileExtension)")!)
-    print("export \(job.outputSize.w)x\(job.outputSize.h) \(job.outputFrames.count) frames, used \(job.used.count)/\(a.count), max upscale \(String(format: "%.2f", job.plan.maxUpscale)), oob \(job.plan.outOfBoundsFrames)")
+    print("export \(job.outputSize.w)x\(job.outputSize.h) \(job.outputFrames.count) frames, used \(job.used.count)/\(a.count), max upscale \(String(format: "%.2f", job.plan.maxUpscale)), decode scale \(job.exportDecodeScale), oob \(job.plan.outOfBoundsFrames) shifted \(job.plan.shiftedFrames) zoomed \(job.plan.zoomedFrames) image-limited \(job.plan.imageLimitedFrames)")
+    if flag("dump-plan") {
+        for i in job.used {
+            let x = job.plan.xforms[i]
+            let q = x.sourceQuad(outW: Double(job.outputSize.w), outH: Double(job.outputSize.h))
+            print(String(format: "  %3d  p %7.1f %7.1f  z %.4f  quad x %.0f…%.0f y %.0f…%.0f", i, x.p.x, x.p.y, x.z,
+                         q.map { $0.x }.min()!, q.map { $0.x }.max()!, q.map { $0.y }.min()!, q.map { $0.y }.max()!))
+        }
+    }
     let t0 = Date()
     do {
-        try VideoExporter().export(job: job, to: out, progress: { p in
+        try VideoExporter().export(job: job, to: out, audio: audio, progress: { p in
             if Int(p * 100) % 20 == 0 { print(String(format: "  %.0f%%", p * 100)) }
         }, isCancelled: { false })
     } catch { fail("export failed: \(error.localizedDescription)") }
@@ -296,8 +320,7 @@ func runExport(_ a: SequenceAnalysis) {
         let pre = job.used
         for k in stride(from: 0, to: pre.count, by: max(1, pre.count / 6)) {
             let i = pre[k]
-            guard let (src, sc) = job.source(i, proxy: true) else { continue }
-            let img = job.compose(frame: i, source: src, sourceScale: sc, scale: 0.5)
+            guard let img = job.renderOutput(OutputFrame(a: i, b: i, t: 0, fade: 1), scale: 0.5, fetch: { job.source($0, proxy: true) }) else { continue }
             if let cg = job.renderer.renderCGImage(img) { _ = ImageLoader.writeJPEG(cg, to: d.appendingPathComponent(String(format: "still_%05d.jpg", i))) }
         }
     }
