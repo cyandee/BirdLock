@@ -20,3 +20,6 @@ windows/dist/
 windows/data/
 __pycache__/
 *.pyc
+windows/ffmpeg/
+windows/version_info.txt
+docs/windows/使用说明.html

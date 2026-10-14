@@ -1,0 +1,70 @@
+name: Windows build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version number (e.g. 1.0)"
+        default: "1.0"
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r windows/requirements.txt pyinstaller
+
+      - name: Version
+        id: ver
+        run: |
+          $v = "${{ inputs.version }}"
+          if (-not $v) { $v = "${{ github.ref_name }}".TrimStart("v") }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build portable package
+        run: python windows/build_windows.py --version ${{ steps.ver.outputs.version }}
+
+      - name: Self-test from source (CPU / DirectML, FFmpeg)
+        working-directory: windows
+        run: |
+          python -m birdlock.cli devices
+          python -m birdlock.cli selftest
+
+      - name: Self-test of the packaged exe
+        run: |
+          $exe = "windows/dist/BirdLock/BirdLock.exe"
+          $p = Start-Process $exe -ArgumentList "--selftest" -Wait -PassThru
+          Get-Content windows/dist/BirdLock/data/selftest.log
+          if ($p.ExitCode -ne 0) { throw "selftest failed ($($p.ExitCode))" }
+          $p = Start-Process $exe -ArgumentList "--smoketest" -Wait -PassThru
+          Get-Content windows/dist/BirdLock/data/smoketest.log
+          if (-not (Test-Path windows/dist/BirdLock/data/smoketest.png)) { throw "smoketest produced no screenshot" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BirdLock-${{ steps.ver.outputs.version }}-Windows-x64
+          path: windows/dist/BirdLock-*-Windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smoketest-screenshot
+          path: windows/dist/BirdLock/data/smoketest.png
+
+      - name: Attach to the GitHub release (tag builds)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" (Get-ChildItem windows/dist/BirdLock-*-Windows-x64.zip).FullName --clobber

@@ -11,6 +11,10 @@
 
 > 群二维码每 7 天更新一次。如果已过期，请发邮件到 cyanodee@gmail.com 或在 [Issues](https://github.com/cyandee/BirdLock/issues) 留言，我会拉你进群。
 
+## Windows 版
+
+`windows/` 目录是 Windows 版（Python + Qt，绿色免安装，支持 NVIDIA / AMD / Intel 显卡加速），功能与 macOS 版一致。下载见 [Releases](https://github.com/cyandee/BirdLock/releases)，开发和打包说明见 [windows/README.md](windows/README.md)。
+
 ## 快速开始
 
 ```zsh

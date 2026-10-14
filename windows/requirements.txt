@@ -1,0 +1,8 @@
+# Runtime dependencies of the Windows build (Python 3.12, 64-bit)
+PySide6-Essentials>=6.7
+numpy>=1.26
+opencv-python-headless>=4.9
+onnxruntime-directml>=1.18 ; sys_platform == "win32"
+onnxruntime>=1.18 ; sys_platform != "win32"
+pillow>=10
+pillow-heif>=0.16
