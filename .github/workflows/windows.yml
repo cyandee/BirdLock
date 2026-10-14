@@ -35,10 +35,15 @@ jobs:
           "version=$v" >> $env:GITHUB_OUTPUT
 
       - name: Build portable package
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONIOENCODING: utf-8
         run: python windows/build_windows.py --version ${{ steps.ver.outputs.version }}
 
       - name: Self-test from source (CPU / DirectML, FFmpeg)
         working-directory: windows
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           python -m birdlock.cli devices
           python -m birdlock.cli selftest

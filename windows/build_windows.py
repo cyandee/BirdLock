@@ -15,15 +15,36 @@ import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-FFMPEG_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-win64-gpl-7.1.zip"
+FFMPEG_RELEASES = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest"
+FFMPEG_FALLBACK = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+
+
+def ffmpeg_url() -> str:
+    """Newest stable-branch static GPL build (asset names change with each FFmpeg release)."""
+    import json
+    import re
+    try:
+        req = urllib.request.Request(FFMPEG_RELEASES, headers={"Accept": "application/vnd.github+json"})
+        tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        if tok:
+            req.add_header("Authorization", f"Bearer {tok}")
+        assets = json.load(urllib.request.urlopen(req, timeout=60))["assets"]
+        stable = [a for a in assets if re.fullmatch(r"ffmpeg-n(\d+)\.(\d+)-latest-win64-gpl-\d+\.\d+\.zip", a["name"])]
+        if stable:
+            best = max(stable, key=lambda a: tuple(int(x) for x in re.findall(r"n(\d+)\.(\d+)", a["name"])[0]))
+            return best["browser_download_url"]
+    except Exception as e:
+        print("could not list FFmpeg releases:", e)
+    return FFMPEG_FALLBACK
 
 
 def fetch_ffmpeg():
     dst = os.path.join(HERE, "ffmpeg", "ffmpeg.exe")
     if os.path.exists(dst):
         return
-    print("downloading FFmpeg …", FFMPEG_URL)
-    data = urllib.request.urlopen(FFMPEG_URL, timeout=300).read()
+    url = ffmpeg_url()
+    print("downloading FFmpeg:", url)
+    data = urllib.request.urlopen(url, timeout=600).read()
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         exe = next(n for n in z.namelist() if n.endswith("bin/ffmpeg.exe"))
         os.makedirs(os.path.dirname(dst), exist_ok=True)
