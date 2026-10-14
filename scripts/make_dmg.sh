@@ -17,7 +17,8 @@ fi
 STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/应用程序"
-[ -f docs/使用说明.pdf ] && cp docs/使用说明.pdf "$STAGE/"
+cp "$APP/Contents/Resources/Docs/使用说明.pdf" "$STAGE/"
+cp "$APP/Contents/Resources/Docs/LICENSE" "$STAGE/LICENSE.txt"
 
 DMG="$ROOT/dist/BirdLock-$VERSION.dmg"
 rm -f "$DMG"
