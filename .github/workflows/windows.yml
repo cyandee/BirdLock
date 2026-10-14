@@ -6,8 +6,14 @@ on:
       version:
         description: "Version number (e.g. 1.0)"
         default: "1.0"
+      release:
+        description: "Attach the zip to this existing release tag (e.g. v1.0.1); empty = artifact only"
+        default: ""
   push:
     tags: ["v*"]
+
+permissions:
+  contents: write     # upload the zip to the release
 
 jobs:
   build:
@@ -68,8 +74,11 @@ jobs:
           name: smoketest-screenshot
           path: windows/dist/BirdLock/data/smoketest.png
 
-      - name: Attach to the GitHub release (tag builds)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Attach to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" (Get-ChildItem windows/dist/BirdLock-*-Windows-x64.zip).FullName --clobber
+        run: |
+          $tag = "${{ inputs.release }}"
+          if (-not $tag) { $tag = "${{ github.ref_name }}" }
+          gh release upload $tag (Get-ChildItem windows/dist/BirdLock-*-Windows-x64.zip).FullName --clobber --repo ${{ github.repository }}
