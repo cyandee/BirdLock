@@ -1,0 +1,11 @@
+{
+  "keypoints": [
+    "beak",
+    "left_eye",
+    "right_eye",
+    "head_top",
+    "left_shoulder",
+    "right_shoulder"
+  ],
+  "inputCropExpand": 1.25
+}

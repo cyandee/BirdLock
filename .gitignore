@@ -12,3 +12,11 @@ dist/
 testdata/
 飞鸟连拍合成/
 tools/train/*.log
+
+# Windows version (Python)
+windows/.venv/
+windows/build/
+windows/dist/
+windows/data/
+__pycache__/
+*.pyc
