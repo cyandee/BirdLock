@@ -2,6 +2,15 @@
 
 把飞鸟连拍（JPG / HEIF）自动对齐鸟眼，生成"鸟头不动、翅膀在动"的连拍视频。原生 macOS 应用，针对 Apple 芯片优化（Core ML 神经网络引擎 + Metal + 硬件编码）。
 
+## 下载与交流
+
+- **下载安装包**：[Releases 页面](https://github.com/cyandee/BirdLock/releases)（macOS 14+，Apple 芯片和 Intel 都可以）
+- **用户交流群**：反馈软件问题和建议，也是鸟友分享作品、交流拍鸟心得的地方。微信扫码加入：
+
+<img src="docs/images/wechat-group.png" width="240" alt="BirdLock 交流群二维码">
+
+> 群二维码每 7 天更新一次。如果已过期，请发邮件到 cyanodee@gmail.com 或在 [Issues](https://github.com/cyandee/BirdLock/issues) 留言，我会拉你进群。
+
 ## 快速开始
 
 ```zsh
