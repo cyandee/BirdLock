@@ -1,0 +1,38 @@
+"""Diagnostic log: data/birdlock.log (errors, native crashes, key events). Attach it when reporting a problem."""
+from __future__ import annotations
+
+import faulthandler
+import logging
+import logging.handlers
+import platform
+import sys
+import threading
+
+log = logging.getLogger("birdlock")
+_fault_file = None
+
+
+def setup():
+    from .paths import data_dir
+    from .. import __version__
+    global _fault_file
+    path = data_dir() / "birdlock.log"
+    h = logging.handlers.RotatingFileHandler(path, maxBytes=2 << 20, backupCount=2, encoding="utf-8")
+    h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(threadName)s] %(message)s"))
+    log.addHandler(h)
+    log.setLevel(logging.INFO)
+    # native crashes (access violations in GPU drivers etc.) dump all thread stacks here
+    _fault_file = open(data_dir() / "crash.log", "a", encoding="utf-8")
+    faulthandler.enable(_fault_file, all_threads=True)
+
+    def excepthook(t, v, tb):
+        log.critical("unhandled exception", exc_info=(t, v, tb))
+        sys.__excepthook__(t, v, tb)
+
+    def thread_hook(args):
+        log.error("exception in thread %s", args.thread.name if args.thread else "?",
+                  exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+    sys.excepthook = excepthook
+    threading.excepthook = thread_hook
+    log.info("BirdLock %s on %s %s, Python %s", __version__, platform.system(), platform.version(), platform.python_version())

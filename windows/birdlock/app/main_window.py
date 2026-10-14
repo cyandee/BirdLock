@@ -373,13 +373,14 @@ class MainWindow(QMainWindow):
             return a
 
         m = mb.addMenu("文件")
-        act(m, "导入连拍…", self.choose_photos, "Ctrl+O")
+        act(m, "导入连拍文件夹…", self.choose_photos, "Ctrl+O")
+        act(m, "导入照片文件…", self.choose_photo_files, "Ctrl+Shift+O")
         self.a_export = act(m, "导出…", self.show_export, "Ctrl+E")
         m.addSeparator()
         act(m, "添加背景音乐…", self.choose_audio)
         act(m, "导入图片水印…", self.choose_watermark)
         m.addSeparator()
-        act(m, "打开数据文件夹（设置与缓存）", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_dir()))))
+        act(m, "打开数据文件夹（设置、缓存、日志）", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_dir()))))
         act(m, "清空缓存…", self.clear_cache)
         m.addSeparator()
         act(m, "退出", self.close, "Ctrl+Q")
@@ -453,6 +454,11 @@ class MainWindow(QMainWindow):
         d = QFileDialog.getExistingDirectory(self, "选择连拍照片所在的文件夹")
         if d:
             self.state.import_paths([d])
+
+    def choose_photo_files(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "选择连拍照片（可多选）", "", PHOTO_FILTER)
+        if files:
+            self.state.import_paths(files)
 
     def choose_audio(self):
         p, _ = QFileDialog.getOpenFileName(self, "选择背景音乐", "", AUDIO_FILTER)

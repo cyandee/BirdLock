@@ -120,7 +120,9 @@ class YOLOModel:
         """Detections in `img` pixel coordinates (top-left origin)."""
         region = crop or (0.0, 0.0, float(img.shape[1]), float(img.shape[0]))
         blob, (x0, y0, px, py, rx, ry) = self._letterbox(img, region)
-        out = self.session.run([self.output_name], {self.input_name: blob})[0]
+        # DirectML does not support concurrent Run() calls on one session (crashes): serialize inference.
+        with self._lock:
+            out = self.session.run([self.output_name], {self.input_name: blob})[0]
         a = out[0].astype(np.float32)          # [C, N]
         C = a.shape[0]
         nc = C - 4 - self.num_keypoints * 3

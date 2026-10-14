@@ -21,6 +21,8 @@ def main():
     if "--smoketest" in sys.argv:
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
         _redirect_output("smoketest.log")
+    from ..core import log as _log
+    _log.setup()
     # quieter ONNX Runtime logs, crisp rendering on high-DPI screens
     os.environ.setdefault("ORT_LOG_SEVERITY_LEVEL", "3")
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
@@ -48,6 +50,19 @@ def main():
     if icon.exists():
         app.setWindowIcon(QIcon(str(icon)))
     theme.apply(app)
+    if "--smoketest" in sys.argv and os.name == "nt":
+        # the offscreen platform has no font database: load Microsoft YaHei for the screenshot
+        from PySide6.QtGui import QFont, QFontDatabase
+        fid = QFontDatabase.addApplicationFont(os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "msyh.ttc"))
+        fams = QFontDatabase.applicationFontFamilies(fid)
+        if fams:
+            app.setFont(QFont(fams[0], 9))
+
+    def qt_messages(mode, ctx, msg):
+        if "propagateSizeHints" not in msg and "font family" not in msg:
+            _log.log.warning("Qt: %s", msg)
+    from PySide6.QtCore import qInstallMessageHandler
+    qInstallMessageHandler(qt_messages)
     state = AppState()
     win = MainWindow(state)
     win.show()

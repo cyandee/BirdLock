@@ -24,6 +24,7 @@ from PySide6.QtGui import QImage
 
 from ..core import frames as F
 from ..core import gpu, render
+from ..core.log import log
 from ..core.analysis import Analyzer, Cancelled, ProxyCache, SequenceAnalysis, build_track, fingerprint
 from ..core.exporter import ExportCancelled, VideoExporter, audio_overview, render_audio_preview
 from ..core.models import BirdModels
@@ -235,8 +236,14 @@ class AppState(QObject):
         self.changed.emit("phase")
 
         def work():
-            fr = F.import_frames(paths)
-            segs = F.segments(fr)
+            log.info("import %s", paths)
+            try:
+                fr = F.import_frames(paths)
+                segs = F.segments(fr)
+            except Exception:
+                log.exception("import failed")
+                fr, segs = [], []
+            log.info("import found %d photos in %d bursts", len(fr), len(segs))
 
             def done():
                 if gen != self._import_gen:
@@ -246,7 +253,7 @@ class AppState(QObject):
                 self.current_frame = 0
                 if not fr:
                     self.phase = "failed"
-                    self.message = "没有找到 JPG / HEIF 图片"
+                    self.message = "没有找到 JPG / HEIF 图片（也查找了子文件夹）"
                     self.changed.emit("phase")
                     return
                 self.segment_index = max(range(len(segs)), key=lambda k: segs[k].count)
@@ -313,7 +320,10 @@ class AppState(QObject):
                 self.stage = "加载识别模型"
                 self.on_main(lambda: self.changed.emit("progress"))
                 models = self._get_models()
+                log.info("analysis of %d frames on %s (providers %s)", len(fr), models.device_description, models.detector.providers)
+                t0 = time.time()
                 a = Analyzer(models).analyze(fr, fps, hint, progress, lambda: flag.cancelled)
+                log.info("analysis done in %.1fs: %d/%d birds", time.time() - t0, sum(p.target is not None for p in a.perFrame), a.count)
                 if keep:
                     a.manualEye, a.excluded = keep
                     if a.manualEye:
@@ -323,6 +333,7 @@ class AppState(QObject):
             except Cancelled:
                 pass
             except Exception as e:
+                log.exception("analysis failed")
                 msg = f"分析失败：{e}"
 
                 def fail():
@@ -888,9 +899,11 @@ class AppState(QObject):
                     ex.export_gif(job, path, progress=progress, cancelled=lambda: flag.cancelled)
                 enc = f"，编码器 {ex.encoder_used}" if kind == "video" and ex.encoder_used else ""
                 msg, prog = f"导出完成（{time.time() - t0:.0f} 秒{enc}）", 1.0
+                log.info("export %s done: %s", kind, msg)
             except ExportCancelled:
                 msg, prog = "已取消", 0.0
             except Exception as e:
+                log.exception("export %s failed", kind)
                 msg, prog = str(e), 0.0
 
             def done():

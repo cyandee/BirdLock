@@ -265,16 +265,42 @@ def read_frame(path: str, id: int) -> SourceFrame | None:
                        captureTime=t, fileSize=st.st_size, modified=st.st_mtime, exif=info)
 
 
-def collect_image_paths(paths: list[str]) -> list[str]:
+def _images_in(folder: str) -> list[str]:
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    return [os.path.join(folder, n) for n in names if not n.startswith(".") and Path(n).suffix.lower() in SUPPORTED_EXT
+            and os.path.isfile(os.path.join(folder, n))]
+
+
+def collect_image_paths(paths: list[str], max_depth: int = 2, limit: int = 3000) -> list[str]:
+    """Image files of the given files / folders. A folder without photos of its own is searched one or two
+    levels deep (e.g. a parent folder holding one sub-folder per burst); bursts are split by time later."""
     out = []
     for p in paths:
+        p = os.path.normpath(p)
         if os.path.isdir(p):
-            for name in os.listdir(p):
-                if not name.startswith(".") and Path(name).suffix.lower() in SUPPORTED_EXT:
-                    out.append(os.path.join(p, name))
+            found = _images_in(p)
+            level = [p]
+            depth = 0
+            while not found and depth < max_depth:
+                nxt = []
+                for d in level:
+                    try:
+                        nxt += [os.path.join(d, n) for n in sorted(os.listdir(d))
+                                if not n.startswith(".") and os.path.isdir(os.path.join(d, n))]
+                    except OSError:
+                        pass
+                for d in nxt:
+                    found += _images_in(d)
+                level, depth = nxt, depth + 1
+            out += found
         elif os.path.isfile(p) and Path(p).suffix.lower() in SUPPORTED_EXT:
             out.append(p)
-    return out
+        if len(out) >= limit:
+            break
+    return out[:limit]
 
 
 def _natural_key(s: str):

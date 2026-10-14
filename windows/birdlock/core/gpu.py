@@ -94,7 +94,8 @@ def _dxgi_adapters():
 
 
 def best_adapter() -> Adapter | None:
-    hw = [a for a in list_adapters() if not a.software]
+    # vendor 0x1414 = Microsoft (Basic Render Driver / WARP): not a real GPU
+    hw = [a for a in list_adapters() if not a.software and a.vendor_id != 0x1414]
     return max(hw, key=lambda a: a.dedicated_mb) if hw else None
 
 
@@ -112,6 +113,8 @@ def onnx_providers(device: str = "auto"):
             idx = int(device.split(":")[1])
         else:
             a = best_adapter()
+            if a is None and list_adapters():      # only a software adapter: use the CPU directly
+                return ["CPUExecutionProvider"]
             idx = a.index if a else 0
         return [("DmlExecutionProvider", {"device_id": idx}), "CPUExecutionProvider"]
     if "CUDAExecutionProvider" in avail:
