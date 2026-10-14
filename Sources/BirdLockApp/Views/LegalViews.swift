@@ -36,7 +36,7 @@ enum AppDocs {
     }
 
     @MainActor static func showAbout() {
-        let credits = NSMutableAttributedString(string: "飞鸟连拍对齐鸟眼，一键生成连拍视频。\n\nCopyright © 2026 cyanol\n依据 GNU AGPL-3.0 开源\n联系：cyanodee@foxmail.com",
+        let credits = NSMutableAttributedString(string: "飞鸟连拍对齐鸟眼，一键生成连拍视频。\n\nCopyright © 2026 cyanol\n依据 GNU AGPL-3.0 开源\n联系：cyanodee@gmail.com",
                                                 attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
         let style = NSMutableParagraphStyle(); style.alignment = .center
         credits.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: credits.length))

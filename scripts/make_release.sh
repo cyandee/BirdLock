@@ -36,7 +36,7 @@ BirdLock 鸟眼锁定 ${VERSION} ${LABEL}
 
 系统要求：macOS 14 或更高版本（Apple 芯片或 Intel）。
 本软件依据 GNU AGPL-3.0 开源，完整源代码见「源代码」文件夹。
-意见反馈：cyanodee@foxmail.com
+意见反馈：cyanodee@gmail.com
 TXT
 
 # Corresponding source: every tracked + new (not ignored) file of the repo

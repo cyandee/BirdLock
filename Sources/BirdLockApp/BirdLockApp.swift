@@ -25,7 +25,7 @@ struct BirdLockApp: App {
             CommandGroup(replacing: .help) {
                 Button("BirdLock 使用说明") { AppDocs.openManual() }
                 Button("反馈意见（发邮件）") {
-                    if let u = URL(string: "mailto:cyanodee@foxmail.com?subject=BirdLock%20%E6%84%8F%E8%A7%81%E5%8F%8D%E9%A6%88") { NSWorkspace.shared.open(u) }
+                    if let u = URL(string: "mailto:cyanodee@gmail.com?subject=BirdLock%20%E6%84%8F%E8%A7%81%E5%8F%8D%E9%A6%88") { NSWorkspace.shared.open(u) }
                 }
             }
             CommandGroup(replacing: .newItem) {
