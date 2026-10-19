@@ -1,14 +1,10 @@
 # BirdLock Windows 版
 
-
-
 Windows 版使用 Python 3.12 x64、Qt/PySide6 和 ONNX Runtime。日常使用请看[使用说明](../docs/windows/使用说明.md)，这里放开发和打包的方法。
 
 [下载 1.4.0 测试版](https://github.com/cyandee/BirdLock/releases/tag/v1.4.0-beta.1) · 联系我：cyanodee@gmail.com
 
 ## 从源码运行
-
-
 
 在项目根目录打开 PowerShell：
 
@@ -27,8 +23,6 @@ windows/.venv/Scripts/python windows/build_windows.py
 
 ## 显卡加速
 
-
-
 - 鸟类识别使用 ONNX Runtime DirectML，支持 DirectX 12 的 NVIDIA / AMD / Intel 设备，不可用时回退 CPU。
 - 图像重采样可以使用 OpenCL；视频编码优先 NVENC / AMF / Quick Sync，失败时回退 x264 / x265。
 - 飞机机头使用独立 CPU 模型。鸟类姿态模型保持不变，复杂角度的机头仍需要检查和手动修正。
@@ -36,8 +30,6 @@ windows/.venv/Scripts/python windows/build_windows.py
 目标环境是 Windows 10 / 11 x64。测试中也用过 Parallels Windows ARM 的 x64 模拟，但不同实体显卡还需要继续测试。
 
 ## 开发测试
-
-
 
 先把 `BIRDLOCK_DATA` 指向临时目录，避免改到平时的设置和缓存。项目与主体回归没有设置这个目录时会拒绝运行。
 
@@ -54,8 +46,6 @@ windows/.venv/Scripts/python windows/build_windows.py
 1.4 本地 Windows 62 项测试和成品回归已通过，详细结果见[测试记录](../docs/整批功能验收清单.md)。Qt 源码也可以在 Mac 上用于开发，发布的 Mac 版则使用 SwiftUI / Core ML。
 
 ## 自动构建
-
-
 
 [统一 workflow](../.github/workflows/release.yml)复用 [Windows workflow](../.github/workflows/windows.yml)，配置为双平台、源码和校验值汇总到一个 Release 草稿。单独运行 Windows workflow 只产生 Windows 产物。
 
