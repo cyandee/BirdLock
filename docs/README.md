@@ -1,6 +1,6 @@
 # BirdLock 文档导航
 
-适用于当前1.4.0源码，更新日期2026-10-19。安装包以GitHub Releases实际版本和随包说明为准；源码同步不会自动生成新版下载。
+适用于1.4.0，更新日期2026-10-19。[1.4.0测试版（v1.4.0-beta.1）](https://github.com/cyandee/BirdLock/releases/tag/v1.4.0-beta.1)同一Release提供macOS、Windows、公开源码及SHA256；应用内数字版本为1.4.0。
 
 | 文档 | 内容 |
 |---|---|

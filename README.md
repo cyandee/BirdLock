@@ -4,7 +4,7 @@
 
 ## 版本、下载与反馈
 
-当前源码版本为 **1.4.0**，由根目录 [VERSION](VERSION) 统一管理。**源码同步与安装包发布分开进行：本次更新源码和文档，尚未创建1.4.0标签或Release；下载安装包请核对Releases中的实际版本。**
+当前版本为 **1.4.0 测试版**（标签 `v1.4.0-beta.1`），由根目录 [VERSION](VERSION) 统一管理。[同一Release下载macOS通用DMG、Windows x64便携ZIP、对应源码及SHA256校验值](https://github.com/cyandee/BirdLock/releases/tag/v1.4.0-beta.1)。应用内数字版本为1.4.0；历史版本继续保留。
 
 - [下载安装包 / 查看历史测试版](https://github.com/cyandee/BirdLock/releases)
 - [报告问题](https://github.com/cyandee/BirdLock/issues) · [反馈邮箱](mailto:cyanodee@gmail.com)：`cyanodee@gmail.com`

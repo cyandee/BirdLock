@@ -135,6 +135,12 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
+          # A maintainer may already have published locally verified packages.
+          # Leave that release and its assets intact; never overwrite it from CI.
+          if gh release view "$RELEASE_TAG" --json databaseId >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; keeping its assets unchanged."
+            exit 0
+          fi
           flags=(--verify-tag --draft --generate-notes)
           if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease); fi
           gh release create "$RELEASE_TAG" release-assets/* "${flags[@]}" --title "BirdLock $RELEASE_TAG"
