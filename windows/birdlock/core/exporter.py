@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import collections
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -20,7 +21,7 @@ import numpy as np
 
 from . import frames as F
 from . import gpu
-from .paths import ffmpeg_path
+from .paths import ffmpeg_path, IS_WINDOWS
 from .render import FlowInterpolator, OutputFrame, RenderJob
 from .settings import AudioSettings, FrameInterpolation, VideoCodec
 
@@ -73,7 +74,7 @@ class SourceCache:
         return src
 
 
-def _ordered_render(job: RenderJob, frames: list[OutputFrame], render: Callable[[OutputFrame], np.ndarray | None],
+def _ordered_render(frames: list[OutputFrame], render: Callable[[OutputFrame], np.ndarray | None],
                     cancelled: Callable[[], bool], workers: int):
     """Yield (index, image) in order, rendering a few frames ahead in parallel.
     Consecutive identical output frames (slow-motion holds) are rendered once."""
@@ -116,7 +117,7 @@ def _encoder_args(codec: VideoCodec, quality, W: int, H: int, fps: float, prefer
         pix = "yuv422p10le" if codec == VideoCodec.PRORES_422HQ else "yuv444p10le"
         return ["-c:v", "prores_ks", "-profile:v", prof, "-pix_fmt", pix, "-vendor", "apl0"], "prores_ks"
     fam = "h264" if codec == VideoCodec.H264 else "hevc"
-    enc = gpu.pick_encoder(fam, preference)
+    enc = gpu.pick_encoder(fam, preference, W, H)
     bpp = quality.bpp * (0.6 if fam == "hevc" else 1.0)
     br = int(W * H * fps * bpp)
     rate = ["-b:v", str(br), "-maxrate", str(int(br * 1.5)), "-bufsize", str(int(br * 2))]
@@ -153,42 +154,114 @@ def _audio_filter(s: AudioSettings, duration: float) -> str:
 
 
 def _audio_input(s: AudioSettings) -> list[str]:
-    args = []
-    if s.loop:
-        args += ["-stream_loop", "-1"]
-    args += ["-ss", f"{max(0.0, s.startOffset):.3f}", "-i", s.path]
+    # On Windows, avoid the observed delayed-track collapse when short demuxers reach EOF.
+    # _audio_plan limits non-looping tracks to their remaining source duration before padding;
+    # keeping the decoder alive does not repeat their audible content.
+    args = ["-stream_loop", "-1"] if s.loop or IS_WINDOWS else []
+    args += ["-ss", f"{max(0.0, s.startOffset):.3f}", "-i", s.source_path]
     return args
+
+
+_audio_lengths = {}
+
+def _source_duration(path):
+    stat = os.stat(path)
+    key = (path, stat.st_mtime_ns, stat.st_size)
+    if key not in _audio_lengths:
+        r = _run_quiet([_ffmpeg(), "-hide_banner", "-i", path], timeout=20)
+        match = re.search(rb"Duration: (\d+):(\d+):([\d.]+)", r.stderr)
+        if not match:
+            raise ExportError("无法读取音频时长：" + os.path.basename(path))
+        h, m, sec = map(float, match.groups())
+        _audio_lengths[key] = h * 3600 + m * 60 + sec
+    return _audio_lengths[key]
+
+
+def _audio_plan(settings, duration, first_input=0):
+    layers = [t for t in settings.arranged_tracks if t.timelineStart < duration]
+    from .closeup_audio import gain as mix_gain
+    gain = mix_gain(layers,duration)
+    inputs, filters, labels = [], [], []
+    for i, layer in enumerate(layers):
+        path = layer.source_path
+        if not path or not os.path.isfile(path):
+            raise ExportError("找不到音频：" + (layer.assetID or os.path.basename(layer.path)))
+        music_duration = _source_duration(path)
+        if not np.isfinite(music_duration) or music_duration <= 0.001:
+            raise ExportError("音频没有可用的时长：" + os.path.basename(path))
+        start = max(0, layer.timelineStart)
+        span = min(duration - start, layer.duration) if layer.duration > 0 else duration - start
+        track = layer.copy()
+        track.startOffset = min(max(0, track.startOffset), max(0, music_duration - 0.001))
+        if not track.loop:
+            span = min(span, music_duration - track.startOffset)
+        track.volume = max(0, min(2, track.volume)) * gain
+        inputs += _audio_input(track)
+        label = f"layer{i}"
+        filters.append(f"[{first_input + i}:a]" + _audio_filter(track, span) +
+                       f",adelay={start * 1000:.3f}:all=1,apad,atrim=0:{duration:.6f}[{label}]")
+        labels.append(f"[{label}]")
+    if not labels:
+        return [], "", None
+    filters.append("".join(labels) + f"amix=inputs={len(labels)}:normalize=0:duration=longest,atrim=0:{duration:.6f}[a]")
+    return inputs, ";".join(filters), "[a]"
 
 
 def _run_quiet(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, **gpu._hidden_startupinfo(), **kw)
 
 
+def _stream_frames(cmd: list[str], frames: list[OutputFrame], render, progress, cancelled, W: int, H: int):
+    """Render all frames and pipe them into an ffmpeg process. Raises ExportError on failure."""
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                            **gpu._hidden_startupinfo())
+    err_tail = []
+    t = threading.Thread(target=lambda: err_tail.extend(proc.stderr.read().decode("utf-8", "replace").splitlines()[-12:]),
+                         daemon=True)
+    t.start()
+    try:
+        black = np.zeros((H, W, 3), np.uint8)
+        for k, img in _ordered_render(frames, render, cancelled, VideoExporter.workers_default()):
+            if img is None or img.shape[:2] != (H, W):
+                img = black
+            try:
+                proc.stdin.write(np.ascontiguousarray(img).tobytes())
+            except (BrokenPipeError, OSError):
+                break
+            progress((k + 1) / len(frames))
+        proc.stdin.close()
+        proc.wait()
+        t.join(timeout=5)
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        try:
+            os.remove(cmd[-1])
+        except OSError:
+            pass
+        raise
+    if proc.returncode != 0:
+        raise ExportError("视频编码失败：" + (" ".join(err_tail[-3:]) or f"ffmpeg 退出码 {proc.returncode}"))
+
+
 class VideoExporter:
     def __init__(self, workers: int | None = None):
         self.workers = workers or max(2, min(8, (os.cpu_count() or 4) - 1))
         self.encoder_used = ""
+        VideoExporter._default_workers = self.workers
+
+    @staticmethod
+    def workers_default() -> int:
+        return getattr(VideoExporter, "_default_workers", None) or max(2, min(8, (os.cpu_count() or 4) - 1))
 
     def export_video(self, job: RenderJob, out: str, audio: AudioSettings | None = None,
                      progress: Callable[[float], None] = lambda p: None, cancelled: Callable[[], bool] = lambda: False):
+        audio = job.mixed_audio(audio)
         frames = job.output_frames
         if not frames:
             raise ExportError("没有可导出的帧")
         W, H = job.output_size
         s = job.export
-        args, self.encoder_used = _encoder_args(s.codec, s.quality, W, H, s.outputFPS, s.encoder)
-        cmd = [_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
-               "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}", "-r", f"{s.outputFPS:g}", "-i", "-"]
-        use_audio = audio is not None and audio.active and os.path.exists(audio.path)
-        if use_audio:
-            cmd += _audio_input(audio)
-        # RGB -> YUV with the BT.709 matrix, tagged as BT.709
-        cmd += ["-vf", "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd",
-                "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709"] + args
-        if use_audio:
-            cmd += ["-filter_complex", f"[1:a]{_audio_filter(audio, job.duration)}[a]", "-map", "0:v", "-map", "[a]",
-                    "-c:a", "aac", "-b:a", "256k"]
-        cmd += ["-movflags", "+faststart", out]
 
         cache = SourceCache(job, proxy=not s.useFullResolution, scale=job.export_decode_scale)
         interp = FlowInterpolator() if s.interpolation == FrameInterpolation.AI else None
@@ -196,35 +269,37 @@ class VideoExporter:
         def render(of):
             return job.render_output(of, fetch=cache.get, interpolate=interp)
 
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                                **gpu._hidden_startupinfo())
-        err_tail = []
-        t = threading.Thread(target=lambda: err_tail.extend(proc.stderr.read().decode("utf-8", "replace").splitlines()[-12:]),
-                             daemon=True)
-        t.start()
-        try:
-            black = np.zeros((H, W, 3), np.uint8)
-            for k, img in _ordered_render(job, frames, render, cancelled, self.workers):
-                if img is None or img.shape[:2] != (H, W):
-                    img = black
-                try:
-                    proc.stdin.write(np.ascontiguousarray(img).tobytes())
-                except (BrokenPipeError, OSError):
-                    break
-                progress((k + 1) / len(frames))
-            proc.stdin.close()
-            proc.wait()
-            t.join(timeout=5)
-        except BaseException:
-            proc.kill()
-            proc.wait()
+        def build_cmd(preference: str) -> tuple[list[str], list[str]]:
+            args, self.encoder_used = _encoder_args(s.codec, s.quality, W, H, s.outputFPS, preference)
+            cmd = [_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
+                   "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}", "-r", f"{s.outputFPS:g}", "-i", "-"]
+            audio_inputs, audio_graph, audio_label = _audio_plan(audio, job.duration, 1) if audio and audio.active else ([], "", None)
+            use_audio = audio_label is not None
+            cmd += audio_inputs
+            # RGB -> YUV with the BT.709 matrix, tagged as BT.709
+            cmd += ["-vf", "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd",
+                    "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709"] + args
+            if use_audio:
+                cmd += ["-filter_complex", audio_graph, "-map", "0:v", "-map", "[a]",
+                        "-c:a", "aac", "-b:a", "256k"]
+            cmd += ["-movflags", "+faststart", out]
+            return cmd, args
+
+        # hardware encoders can fail at runtime even after passing the small probe (driver limits,
+        # portrait sizes, ...): automatically fall back to software encoding so the export always succeeds
+        preference = s.encoder
+        while True:
+            cmd, args = build_cmd(preference)
             try:
-                os.remove(out)
-            except OSError:
-                pass
-            raise
-        if proc.returncode != 0:
-            raise ExportError("视频编码失败：" + (" ".join(err_tail[-3:]) or f"ffmpeg 退出码 {proc.returncode}"))
+                _stream_frames(cmd, frames, render, progress, cancelled, W, H)
+                return
+            except ExportError as e:
+                hardware = not self.encoder_used.startswith("lib")
+                if hardware and preference != "software" and not cancelled():
+                    log.warning("hardware encoder %s failed (%s); retrying with software encoder", self.encoder_used, e)
+                    preference = "software"
+                    continue
+                raise
 
     def export_images(self, job: RenderJob, out_dir: str, progress=lambda p: None, cancelled=lambda: False):
         os.makedirs(out_dir, exist_ok=True)
@@ -233,7 +308,7 @@ class VideoExporter:
             raise ExportError("没有可导出的帧")
         cache = SourceCache(job, proxy=not job.export.useFullResolution, scale=job.export_decode_scale)
         frames = [OutputFrame(i, i, 0.0, 1.0) for i in used]
-        for k, img in _ordered_render(job, frames, lambda of: job.render_output(of, fetch=cache.get), cancelled, self.workers):
+        for k, img in _ordered_render(frames, lambda of: job.render_output(of, fetch=cache.get), cancelled, self.workers):
             if img is not None:
                 name = f"{k:05d}_{Path(job.analysis.frames[frames[k].a].path).stem}.jpg"
                 F.write_jpeg(img, os.path.join(out_dir, name), 92)
@@ -254,7 +329,7 @@ class VideoExporter:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                                 **gpu._hidden_startupinfo())
         try:
-            for k, img in _ordered_render(job, frames, lambda of: job.render_output(of, scale=scale), cancelled, self.workers):
+            for k, img in _ordered_render(frames, lambda of: job.render_output(of, scale=scale), cancelled, self.workers):
                 proc.stdin.write(np.ascontiguousarray(img if img is not None else np.zeros((h, w, 3), np.uint8)).tobytes())
                 progress((k + 1) / len(frames))
             proc.stdin.close()
@@ -286,12 +361,23 @@ def audio_overview(path: str, bins_per_second: float = 40.0) -> tuple[float, np.
 
 def render_audio_preview(s: AudioSettings, duration: float, start: float = 0.0) -> str | None:
     """WAV of the music exactly as it will be in the video, starting at `start` seconds (for preview playback)."""
-    if not s.active or duration <= 0 or not os.path.exists(s.path):
+    if not s.active or duration <= 0 or start >= duration:
+        return None
+    inputs, graph, label = _audio_plan(s, duration)
+    if label is None:
         return None
     fd, out = tempfile.mkstemp(prefix="birdlock-preview-", suffix=".wav")
     os.close(fd)
-    filt = _audio_filter(s, duration) + (f",atrim=start={start:.3f},asetpts=PTS-STARTPTS" if start > 0 else "")
-    cmd = [_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error"] + _audio_input(s) + \
-          ["-filter_complex", f"[0:a]{filt}[a]", "-map", "[a]", "-ac", "2", "-ar", "44100", out]
-    r = _run_quiet(cmd, timeout=120)
-    return out if r.returncode == 0 else None
+    if start > 0:
+        graph += f";[a]atrim=start={start:.6f},asetpts=PTS-STARTPTS[preview]"
+        label = "[preview]"
+    cmd = [_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error"] + inputs + [
+        "-filter_complex", graph, "-map", label, "-ac", "2", "-ar", "48000", out]
+    try:
+        r = _run_quiet(cmd, timeout=120)
+        if r.returncode != 0:
+            raise ExportError("混音失败：" + r.stderr.decode("utf-8", "replace")[-500:])
+        return out
+    except Exception:
+        os.unlink(out)
+        raise

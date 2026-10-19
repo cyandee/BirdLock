@@ -7,6 +7,10 @@ here = os.path.abspath(SPECPATH)
 repo = os.path.dirname(here)
 
 datas = [
+    (os.path.join(repo, "VERSION"), "."),
+    (os.path.join(repo, "SharedResources", "Audio"), "audio"),
+    (os.path.join(repo, "SharedResources", "Support"), "support"),
+    (os.path.join(repo, "SharedResources", "AircraftModels"), "aircraft"),
     (os.path.join(here, "models"), "models"),
     (os.path.join(here, "assets"), "assets"),
     (os.path.join(here, "ffmpeg"), "ffmpeg"),

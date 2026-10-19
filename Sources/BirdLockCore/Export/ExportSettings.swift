@@ -91,14 +91,15 @@ public enum FocusMarkStyle: String, Codable, CaseIterable, Sendable, Identifiabl
 }
 
 public enum FocusMarkColor: String, Codable, CaseIterable, Sendable, Identifiable {
-    case green, white, orange
+    case green, white, orange, black
     public var id: String { rawValue }
-    public var title: String { ["green": "绿色", "white": "白色", "orange": "橙色"][rawValue]! }
+    public var title: String { ["green": "绿色", "white": "白色", "orange": "橙色", "black": "黑色"][rawValue]! }
     public var rgb: (Double, Double, Double) {
         switch self {
         case .green: return (0.30, 0.92, 0.36)
         case .white: return (1, 1, 1)
         case .orange: return (1.0, 0.62, 0.12)
+        case .black: return (0, 0, 0)
         }
     }
 }
@@ -107,8 +108,20 @@ public enum FocusMarkColor: String, Codable, CaseIterable, Sendable, Identifiabl
 /// or a larger one around the head while the eye is hidden.
 public struct FocusMarkSettings: Codable, Hashable, Sendable {
     public var enabled = false
+    public var showEye = true
+    public var showHead = false
+    public var showBody = false
+    public var blinkBody = false
+    public var captureFlash = false
+    public var flashRate = 6.0
     public var style: FocusMarkStyle = .box
     public var color: FocusMarkColor = .green
+    public var eyeColor: FocusMarkColor = .green
+    public var headColor: FocusMarkColor = .green
+    public var bodyColor: FocusMarkColor = .green
+    public var bodySize = 1.0
+    public var captureColor: FocusMarkColor = .black
+    public var captureSize = 0.88
     /// 1 = default size (eye frame ≈ 0.4 head lengths)
     public var size = 1.0
     public var lineWidth = 1.0
@@ -120,11 +133,31 @@ public struct FocusMarkSettings: Codable, Hashable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = FocusMarkSettings()
         enabled = c.value(.enabled, d.enabled)
+        showEye = c.value(.showEye, d.showEye)
+        showHead = c.value(.showHead, d.showHead)
+        showBody = c.value(.showBody, d.showBody)
+        blinkBody = c.value(.blinkBody, d.blinkBody)
+        captureFlash = c.value(.captureFlash, d.captureFlash)
+        flashRate = c.value(.flashRate, d.flashRate)
         style = c.value(.style, d.style)
         color = c.value(.color, d.color)
+        eyeColor = c.value(.eyeColor, color)
+        headColor = c.value(.headColor, color)
+        bodyColor = c.value(.bodyColor, color)
+        bodySize = c.value(.bodySize, max(1, c.value(.size, d.size)))
+        captureColor = c.value(.captureColor, d.captureColor)
+        captureSize = c.value(.captureSize, d.captureSize)
         size = c.value(.size, d.size)
         lineWidth = c.value(.lineWidth, d.lineWidth)
         headWhenHidden = c.value(.headWhenHidden, d.headWhenHidden)
+    }
+
+    public func color(for target: String) -> FocusMarkColor {
+        target == "body" ? bodyColor : target == "head" ? headColor : eyeColor
+    }
+
+    public func flashOn(at time: Double) -> Bool {
+        (time * clamp(flashRate, 1, 120)).truncatingRemainder(dividingBy: 1) < 0.35
     }
 }
 
@@ -165,6 +198,7 @@ public struct WatermarkSettings: Codable, Hashable, Sendable {
 
 /// Background music muxed into exported videos.
 public struct AudioSettings: Codable, Hashable, Sendable {
+    public var tracks: [AudioTrack] = []
     public var url: URL? = nil
     /// Position in the music file (seconds) that lines up with the start of the video
     public var startOffset: Double = 0
@@ -184,9 +218,20 @@ public struct AudioSettings: Codable, Hashable, Sendable {
         fadeIn = c.value(.fadeIn, d.fadeIn)
         fadeOut = c.value(.fadeOut, d.fadeOut)
         loop = c.value(.loop, d.loop)
+        tracks = c.value(.tracks, d.tracks)
     }
 
-    public var isActive: Bool { url != nil && volume > 0.001 }
+    public var arrangedTracks: [AudioTrack] {
+        var result = tracks
+        if let url {
+            var primary = AudioTrack()
+            primary.url = url; primary.volume = volume; primary.startOffset = startOffset
+            primary.fadeIn = fadeIn; primary.fadeOut = fadeOut; primary.loop = loop
+            result.insert(primary, at: 0)
+        }
+        return result.filter(\.isActive)
+    }
+    public var isActive: Bool { (url != nil && volume > 0.001) || tracks.contains(where: \.isActive) }
 }
 
 public struct ExportSettings: Codable, Hashable, Sendable {
@@ -246,7 +291,22 @@ public struct OutputFrame: Sendable, Hashable {
     public var b: Int
     public var t: Double
     public var fade: Double   // 0...1 multiplier (fade in/out)
-    public init(a: Int, b: Int, t: Double, fade: Double) { self.a = a; self.b = b; self.t = t; self.fade = fade }
+    public var time: Double
+    public var closeup = -1
+    public var shotTime = 0.0
+    public var audioCycle = 0
+    public init(a: Int, b: Int, t: Double, fade: Double, time: Double = 0) {
+        self.a = a; self.b = b; self.t = t; self.fade = fade; self.time = time
+    }
+
+    /// Keep slow-motion buffer reuse when the rendered frame does not depend on the effect clock.
+    func renderKey(focus: FocusMarkSettings, closeups: [Closeup] = []) -> OutputFrame {
+        var key = self
+        key.audioCycle = 0
+        let animated = closeup >= 0 && (!closeups.indices.contains(closeup) || closeups[closeup].animatedFrame)
+        if !animated && !focus.captureFlash && !(focus.enabled && focus.showBody && focus.blinkBody) { key.time = 0; key.shotTime = 0 }
+        return key
+    }
 }
 
 public enum TimeMapper {
@@ -286,9 +346,9 @@ public enum TimeMapper {
             switch s.interpolation {
             case .nearest:
                 let idx = fr < 0.5 ? i0 : i1
-                out.append(OutputFrame(a: order[idx], b: order[idx], t: 0, fade: fade))
+                out.append(OutputFrame(a: order[idx], b: order[idx], t: 0, fade: fade, time: time))
             case .blend, .ai:
-                out.append(OutputFrame(a: order[i0], b: order[i1], t: fr < 1e-6 ? 0 : fr, fade: fade))
+                out.append(OutputFrame(a: order[i0], b: order[i1], t: fr < 1e-6 ? 0 : fr, fade: fade, time: time))
             }
         }
         return out

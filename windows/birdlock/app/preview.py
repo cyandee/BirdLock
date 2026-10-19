@@ -68,6 +68,8 @@ class PreviewCanvas(QWidget):
         self._wm_hover = False
         self._detail_timer = QTimer(self, singleShot=True, interval=140, timeout=self._request_detail)
         self._detail_key = None
+        self.setAttribute(Qt.WA_OpaquePaintEvent)     # we fill the whole rect: skip the erase step (less flicker)
+        self.setAttribute(Qt.WA_NoSystemBackground)
         state.changed.connect(self._on_changed)
 
     def _on_changed(self, topic):
@@ -480,7 +482,8 @@ class SourceToolBar(QFrame):
         self.undo = QPushButton("↶ 撤销本帧修正")
         self.undo.clicked.connect(lambda: state.clear_manual_eye())
         lay.addWidget(self.undo)
-        state.changed.connect(lambda _t: self.refresh())
+        self._size = QSize()
+        state.changed.connect(lambda t: self.refresh() if t in ("view", "tool", "zoom", "analysis", "job", "phase", "frame") else None)
         self.refresh()
 
     def _tool(self, t):
@@ -497,6 +500,10 @@ class SourceToolBar(QFrame):
         self.setVisible(vis)
         if not vis:
             return
+        self.fix.setText("◎ 修正机头" if st.is_aircraft else "◎ 修正鸟眼")
+        self.fix.setToolTip("点击当前帧机头的准确位置（E）" if st.is_aircraft else "点击鸟眼的准确位置（E）")
+        self.pick.setText("☝ 选择飞机" if st.is_aircraft else "☝ 选择目标鸟")
+        self.pick.setToolTip("点击要跟踪的主体（会重新识别）")
         self.fix.setChecked(st.source_tool == "fixEye")
         self.pick.setChecked(st.source_tool == "pickBird")
         near = min((z for _, z in self.zoom_btns), key=lambda z: abs(z - st.source_zoom))
@@ -507,7 +514,10 @@ class SourceToolBar(QFrame):
             w.setVisible(bool(p))
         self.pred.setText(f"推算 {len(p)} 帧")
         self.undo.setVisible(st.current_frame in st.analysis.manualEye)
-        self.adjustSize()
+        s = self.sizeHint()
+        if s != self._size:            # avoid adjustSize churn while playing
+            self._size = s
+            self.adjustSize()
 
 
 class FrameBadges(QWidget):
@@ -517,7 +527,9 @@ class FrameBadges(QWidget):
         self.lay = QHBoxLayout(self)
         self.lay.setContentsMargins(0, 0, 0, 0)
         self.lay.setSpacing(6)
-        state.changed.connect(lambda _t: self.refresh())
+        # only refresh on topics that can change the badges; per-frame "preview"/"source" updates would
+        # rebuild the pills dozens of times a second while playing (flicker)
+        state.changed.connect(lambda t: self.refresh() if t in ("job", "frame", "analysis", "phase", "view") else None)
         self.refresh()
 
     def _add(self, w):
@@ -528,7 +540,9 @@ class FrameBadges(QWidget):
         while self.lay.count():
             w = self.lay.takeAt(0).widget()
             if w:
-                w.setParent(None)
+                # hide only: setParent(None) would make the widget a brief top-level window
+                # flashing at the top-left corner of the screen
+                w.hide()
                 w.deleteLater()
         st = self.state
         job, a = st.job, st.analysis
@@ -544,6 +558,10 @@ class FrameBadges(QWidget):
         t = a.track
         if i in a.manualEye:
             self._add(Pill("手动修正", theme.MANUAL))
+        elif st.is_aircraft:
+            source = a.perFrame[i].aircraft
+            self._add(Pill(("机头跟踪" if source is not None and source.source == "tracked" else "机头识别") if t.has_data[i] else "未定位机头",theme.OK if t.has_data[i] else theme.WARN))
+            button = QPushButton("修正机头");button.clicked.connect(st.start_fixing_eye);self._add(button)
         elif t.eye_visible[i]:
             self._add(Pill("鸟眼", theme.OK))
         elif t.has_data[i]:
@@ -573,7 +591,9 @@ class HintLabel(QLabel):
         self.setStyleSheet("QLabel { background: rgba(30,31,34,0.85); color: #aaa; border-radius: 11px; padding: 4px 12px;"
                            " font-size: 12px; }")
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        state.changed.connect(lambda _t: self.refresh())
+        self._size = QSize()
+        state.changed.connect(lambda t: self.refresh() if t in ("view", "tool", "watermark", "job", "analysis",
+                                                                "playing", "phase") else None)
         self.refresh()
 
     def refresh(self):
@@ -584,12 +604,18 @@ class HintLabel(QLabel):
                 text = {"fixEye": "在鸟眼的准确位置点击（可按住拖动微调）· 推算不准的帧逐一修正后，前后帧会自动跟着重算",
                         "pickBird": "点击要跟踪的鸟",
                         "none": "拖动虚线框移动取景 · 拖动四角缩放取景范围 · 拖动圆圈修正鸟眼 · 滚轮缩放"}[st.source_tool]
+                if st.is_aircraft:
+                    text = {"fixEye":"点击当前帧机头的准确位置，可拖动微调","pickBird":"点击要跟踪的飞机",
+                            "none":"拖动虚线框移动取景 · 拖动四角缩放 · 拖动圆圈修正当前帧机头"}[st.source_tool]
             elif st.watermark.active and st.watermark_qimage is not None:
                 text = "拖动水印调整位置，拖动右下角圆点调整大小"
         self.setVisible(text is not None)
         if text:
             self.setText(text)
-            self.adjustSize()
+            s = self.sizeHint()
+            if s != self._size:
+                self._size = s
+                self.adjustSize()
 
 
 class StatusCard(QFrame):
@@ -622,7 +648,7 @@ class StatusCard(QFrame):
         head.addLayout(tv, 1)
         lay.addLayout(head)
         self.steps = []
-        for name in STAGES:
+        for name in [*STAGES, ""]:
             row = QHBoxLayout()
             mark = QLabel("○")
             mark.setFixedWidth(18)
@@ -659,9 +685,12 @@ class StatusCard(QFrame):
         if not show:
             return
         importing, failed = st.phase == "importing", st.phase == "failed"
-        for mark, lbl, pct in self.steps:
+        stages = ["识别飞机","分析画面","定位/跟踪机头","评估画面清晰度","计算飞机轨迹"] if st.is_aircraft else STAGES
+        weights = [.15,.05,.75,.04,.01] if st.is_aircraft else self.WEIGHTS
+        for index,(mark, lbl, pct) in enumerate(self.steps):
+            lbl.setText(stages[index] if index < len(stages) else "")
             for w in (mark, lbl, pct):
-                w.setVisible(st.phase == "analyzing")
+                w.setVisible(st.phase == "analyzing" and index < len(stages))
         self.bar.setVisible(st.phase == "analyzing")
         self.cancel.setVisible(st.phase == "analyzing")
         if importing:
@@ -676,10 +705,10 @@ class StatusCard(QFrame):
             fr = st.current_frames
             self.title.setText(f"正在分析 {len(fr)} 张照片")
             self.sub.setText(f"{fr[0].file_name} – {fr[-1].file_name}" if fr else "")
-            k = STAGES.index(st.stage) if st.stage in STAGES else -1
+            k = stages.index(st.stage) if st.stage in stages else -1
             overall = 0.0
             if k >= 0:
-                overall = min(1.0, sum(self.WEIGHTS[:k]) + self.WEIGHTS[k] * st.stage_progress)
+                overall = min(1.0, sum(weights[:k]) + weights[k] * st.stage_progress)
             for j, (mark, lbl, pct) in enumerate(self.steps):
                 if j < k:
                     mark.setText("✓")
@@ -699,7 +728,7 @@ class StatusCard(QFrame):
             self.bar.setValue(int(overall * 1000))
             el = time.time() - st.analysis_started
             if k < 0:
-                txt = "加载识别模型…" if st.stage == "加载识别模型" else "准备中…"
+                txt = "等待上次分析结束…" if st.stage == "等待上次分析结束" else ("加载识别模型…" if st.stage == "加载识别模型" else "准备中…")
             elif overall > 0.04 and el > 2:
                 remain = el * (1 - overall) / overall
                 txt = f"{overall * 100:.0f}% · 约剩 {max(1, remain):.0f} 秒" if remain < 60 else f"{overall * 100:.0f}% · 约剩 {remain / 60:.0f} 分钟"
@@ -728,7 +757,7 @@ class DropZone(QFrame):
         t.setStyleSheet("font-size: 22px; font-weight: 600;")
         t.setAlignment(Qt.AlignCenter)
         lay.addWidget(t)
-        s = QLabel("支持 JPG / HEIF，整个文件夹或多选照片都可以。\n自动识别鸟眼并锁定，一键生成连拍视频。")
+        s = QLabel("支持 JPG / HEIF，整个文件夹或多选照片都可以。\n自动识别并锁定主体，一键生成连拍视频。")
         s.setObjectName("caption")
         s.setAlignment(Qt.AlignCenter)
         lay.addWidget(s)
@@ -755,20 +784,23 @@ class PreviewArea(QWidget):
         self.hint = HintLabel(state, self)
         self.card = StatusCard(state, self)
         self.drop = DropZone(on_choose, self)
-        state.changed.connect(lambda _t: self._layout())
+        state.changed.connect(lambda t: self._layout() if t in ("phase", "view", "job", "analysis", "tool",
+                                                                "watermark", "playing") else None)
         self._layout()
 
     def resizeEvent(self, _):
         self._layout()
+
+    def showEvent(self, _):
+        self._layout()          # the first layout runs before the window is shown: re-center now
 
     def _layout(self):
         st = self.state
         self.canvas.setGeometry(self.rect())
         empty = not st.frames and st.phase not in ("importing", "analyzing")
         self.drop.setVisible(empty and st.phase != "failed")
-        if self.drop.isVisible():
-            self.drop.adjustSize()
-            self.drop.move((self.width() - self.drop.width()) // 2, (self.height() - self.drop.height()) // 2)
+        self.drop.adjustSize()
+        self.drop.move((self.width() - self.drop.width()) // 2, (self.height() - self.drop.height()) // 2)
         self.tools.move(12, 12)
         self.tools.raise_()
         self.badges.resize(self.badges.sizeHint())

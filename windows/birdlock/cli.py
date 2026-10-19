@@ -136,6 +136,24 @@ def cmd_selftest(_args):
     from .core.phasecorr import PhaseCorrelator
     from .core import solver
     ok = True
+    import hashlib
+    from pathlib import Path
+    from .core.sounds import assets, asset_path
+    library = assets()
+    sound_ok = len(library) == 12 and len({e["id"] for e in library}) == 12
+    sound_ok &= {e.get("cameraID") for e in library if e.get("kind")=="burst"} == {"sony-a1m2","sony-a93","sony-a7m5","sony-a7r6","nikon-z8"}
+    sound_ok &= any(e["id"]=="single-canon-rebel" and e.get("license")=="CC0-1.0" for e in library)
+    sound_ok &= all(hashlib.sha256(Path(asset_path(e["id"])).read_bytes()).hexdigest() == e["sha256"] for e in library)
+    from .core.paths import resource_dir
+    support = resource_dir()/"support"
+    if not support.is_dir():support=Path(__file__).resolve().parents[2]/"SharedResources"/"Support"
+    import json
+    try:
+        support_meta=json.loads((support/"manifest.json").read_text(encoding="utf-8"))
+        sound_ok &= hashlib.sha256((support/"alipay-coffee.jpg").read_bytes()).hexdigest()==support_meta["sha256"]
+    except (OSError,ValueError,KeyError):sound_ok=False
+    print("sound library and support image:", len(library), "PASS" if sound_ok else "FAIL")
+    ok &= sound_ok
     rng = np.random.default_rng(1)
     n = 128
     yy, xx = np.mgrid[0:n, 0:n]

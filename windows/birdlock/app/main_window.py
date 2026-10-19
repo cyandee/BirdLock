@@ -4,20 +4,21 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QIcon, QKeySequence
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
-                               QLabel, QMainWindow, QMessageBox, QProgressBar, QPushButton, QSizePolicy, QTextBrowser,
-                               QVBoxLayout, QWidget)
+from PySide6.QtCore import QSize, Qt, QUrl, Signal
+from PySide6.QtGui import QAction, QDesktopServices, QIcon, QImage, QKeySequence, QPixmap
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
+                               QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
+                               QProgressBar, QPushButton, QSizePolicy, QTextBrowser, QVBoxLayout, QWidget)
 
 from . import theme
 from .inspector import Inspector
 from .preview import PreviewArea
-from .state import AppState, is_audio_file
+from .state import AppState, is_audio_file, to_qimage
 from .timeline import TimelinePanel, fmt_time
-from .. import APP_NAME, CONTACT_EMAIL, __version__
+from .. import APP_NAME, CONTACT_EMAIL, CONTACT_TEXT, __version__
 from ..core import frames as F
 from ..core.paths import IS_WINDOWS, data_dir, docs_dir
 
@@ -140,6 +141,119 @@ def show_licenses(parent):
     DocDialog("许可与第三方组件", text, parent).exec()
 
 
+class ImportPreviewDialog(QDialog):
+    """Shows the photos found in the chosen folder (with thumbnails and checkboxes) before importing,
+    so it is always clear what will be imported."""
+
+    _thumb_ready = Signal(int, QImage)
+
+    def __init__(self, folder: str, parent=None):
+        super().__init__(parent)
+        self.folder = folder
+        self.files = F.collect_image_paths([folder])
+        self._stop = threading.Event()
+        self.setWindowTitle("确认要导入的照片")
+        self.resize(880, 640)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(16, 14, 16, 12)
+        v.setSpacing(10)
+        head = QVBoxLayout()
+        self.title = QLabel()
+        self.title.setStyleSheet("font-size: 15px; font-weight: 600;")
+        self.sub = QLabel()
+        self.sub.setObjectName("caption")
+        self.sub.setWordWrap(True)
+        head.addWidget(self.title)
+        head.addWidget(self.sub)
+        v.addLayout(head)
+        self.merge_groups = QCheckBox("归为一组，合成同一视频（不勾选则按拍摄间隔分组）")
+        v.addWidget(self.merge_groups)
+        self.list = QListWidget()
+        self.list.setViewMode(QListWidget.IconMode)
+        self.list.setIconSize(QSize(96, 96))
+        self.list.setResizeMode(QListWidget.Adjust)
+        self.list.setUniformItemSizes(True)
+        self.list.setSpacing(6)
+        self.list.setObjectName("importList")
+        self.list.setStyleSheet("QListWidget#importList { background: #1c1d20; border: 1px solid rgba(255,255,255,0.08);"
+                                " border-radius: 8px; }")
+        v.addWidget(self.list, 1)
+        btns = QHBoxLayout()
+        all_b = QPushButton("全选")
+        none_b = QPushButton("全不选")
+        all_b.clicked.connect(lambda: self._set_all(True))
+        none_b.clicked.connect(lambda: self._set_all(False))
+        btns.addWidget(all_b)
+        btns.addWidget(none_b)
+        btns.addStretch(1)
+        cancel = QPushButton("取消")
+        self.go = QPushButton("导入所选照片…")
+        self.go.setObjectName("primary")
+        self.go.clicked.connect(self.accept)
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(cancel)
+        btns.addWidget(self.go)
+        v.addLayout(btns)
+        self._thumb_ready.connect(self._add_thumb)
+        self._fill()
+
+    def _fill(self):
+        n = len(self.files)
+        if not n:
+            self.title.setText("这个文件夹里没有找到照片")
+            self.sub.setText("支持 JPG / JPEG / HEIC / HEIF / HIF / PNG / TIFF（也会查找子文件夹）。\n"
+                             "如果照片在别处，请重新选择文件夹。")
+            self.list.hide()
+            self.go.hide()
+            self.resize(560, 220)
+            return
+        self.title.setText(f"找到 {n} 张照片")
+        self.sub.setText(self.folder)
+        for k, p in enumerate(self.files):
+            it = QListWidgetItem(os.path.basename(p))
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked)
+            it.setToolTip(p)
+            it.setTextAlignment(Qt.AlignHCenter | Qt.AlignBottom)
+            self.list.addItem(it)
+        self._update_count()
+        self.list.itemChanged.connect(lambda _it: self._update_count())
+        threading.Thread(target=self._load_thumbs, daemon=True).start()
+
+    def _load_thumbs(self):
+        for k, p in enumerate(self.files):
+            if self._stop.is_set() or k >= 600:     # thumbnails for the first few hundred are enough
+                return
+            img = F.load_thumbnail(p)
+            if img is not None:
+                self._thumb_ready.emit(k, to_qimage(img))
+
+    def _add_thumb(self, k: int, im: QImage):
+        if self._stop.is_set() or k >= self.list.count():
+            return
+        it = self.list.item(k)
+        if it is not None and it.icon().isNull():
+            it.setIcon(QPixmap.fromImage(im))
+
+    def _set_all(self, on: bool):
+        for k in range(self.list.count()):
+            self.list.item(k).setCheckState(Qt.Checked if on else Qt.Unchecked)
+
+    def _update_count(self):
+        n = sum(1 for k in range(self.list.count()) if self.list.item(k).checkState() == Qt.Checked)
+        self.go.setText(f"导入所选照片（{n} 张）")
+        self.go.setEnabled(n > 0)
+
+    @property
+    def selected(self) -> list[str]:
+        return [self.files[k] for k in range(min(self.list.count(), len(self.files)))
+                if self.list.item(k).checkState() == Qt.Checked]
+
+    def reject(self):
+        self._stop.set()
+        super().reject()
+
+
 class ExportDialog(QDialog):
     def __init__(self, state: AppState, parent=None):
         super().__init__(parent)
@@ -229,7 +343,8 @@ class ExportDialog(QDialog):
             if self.kind == "video":
                 rows.append(("时长", f"{job.duration:.1f} 秒，{len(job.output_frames)} 帧 @ {job.export.outputFPS:g} fps"))
                 rows.append(("编码", job.export.codec.title))
-                rows.append(("音乐", f"{Path(st.audio.path).stem}（从 {fmt_time(st.audio.startOffset)} 开始）" if st.audio.active else "无"))
+                mix = job.mixed_audio(st.audio)
+                rows.append(("音频", f"{len(mix.arranged_tracks)} 段音频（含启用的特写快门）" if mix.active else "无"))
             elif self.kind == "images":
                 rows.append(("图片", f"{len(job.used)} 张 JPEG（对齐裁剪后）"))
             else:
@@ -328,9 +443,14 @@ class MainWindow(QMainWindow):
         imp.setToolTip("导入连拍照片（文件夹或多张 JPG / HEIF）  Ctrl+O")
         imp.clicked.connect(self.choose_photos)
         tb.addWidget(imp)
+        self.subject_combo = QComboBox()
+        self.subject_combo.addItem("鸟类","bird");self.subject_combo.addItem("飞机（试验）","aircraft")
+        self.subject_combo.setToolTip("飞机自动识别机头和机身；复杂视角请检查，可逐帧修正。首次分析较慢。")
+        self.subject_combo.currentIndexChanged.connect(lambda k: self.state.change_subject(self.subject_combo.itemData(k)) if k >= 0 else None)
+        tb.addWidget(self.subject_combo)
         self.seg_combo = QComboBox()
         self.seg_combo.setToolTip("文件夹里检测到多组连拍，选择要处理的一组")
-        self.seg_combo.currentIndexChanged.connect(lambda k: self.state.select_segment(k) if k >= 0 else None)
+        self.seg_combo.currentIndexChanged.connect(lambda k: self.state.select_segment(self.seg_combo.itemData(k)) if k >= 0 else None)
         self.seg_action = tb.addWidget(self.seg_combo)
         sp = QWidget()
         sp.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -400,7 +520,8 @@ class MainWindow(QMainWindow):
         act(m, "原图放大 / 全图", self._toggle_zoom, "Z")
         m = mb.addMenu("帮助")
         act(m, "BirdLock 使用说明", self.open_manual, "F1")
-        act(m, "反馈意见（发邮件）", lambda: QDesktopServices.openUrl(QUrl(f"mailto:{CONTACT_EMAIL}?subject=BirdLock%20意见反馈")))
+        act(m, "反馈与交流（邮箱）", self.contact)
+        act(m, "请作者喝杯咖啡…", self.support)
         m.addSeparator()
         act(m, "用户协议…", lambda: DocDialog("用户协议", agreement_text(), self).exec())
         act(m, "许可与第三方组件…", lambda: show_licenses(self))
@@ -409,6 +530,10 @@ class MainWindow(QMainWindow):
     def _changed(self, topic):
         st = self.state
         has = st.analysis is not None
+        self.subject_combo.blockSignals(True)
+        self.subject_combo.setCurrentIndex(self.subject_combo.findData(st.subject))
+        self.subject_combo.setEnabled(not st.export_running and st.phase != "importing")
+        self.subject_combo.blockSignals(False)
         self.view_box.setVisible(has)
         self.export_action.setVisible(has)
         self.transport.setVisible(has)
@@ -422,10 +547,10 @@ class MainWindow(QMainWindow):
             self.seg_action.setVisible(len(segs) > 1)
             self.seg_combo.blockSignals(True)
             self.seg_combo.clear()
+            self.seg_combo.addItem("合并选中组 → 同一视频", -1)
             for k, s in enumerate(segs):
-                self.seg_combo.addItem(f"第 {k + 1} 组 · {s.count} 张")
-            if 0 <= st.segment_index < len(segs):
-                self.seg_combo.setCurrentIndex(st.segment_index)
+                self.seg_combo.addItem(f"第 {k + 1} 组 · {s.count} 张", k)
+            self.seg_combo.setCurrentIndex(self.seg_combo.findData(st.segment_index))
             self.seg_combo.blockSignals(False)
 
     # ---------------------------------------------------------------- actions
@@ -451,14 +576,32 @@ class MainWindow(QMainWindow):
         st.changed.emit("zoom")
 
     def choose_photos(self):
-        d = QFileDialog.getExistingDirectory(self, "选择连拍照片所在的文件夹")
-        if d:
-            self.state.import_paths([d])
+        # the native Windows folder picker never lists files: use the Qt dialog so the
+        # photos inside are visible (greyed) while picking the folder
+        dlg = QFileDialog(self, "选择连拍照片所在的文件夹")
+        dlg.setFileMode(QFileDialog.Directory)
+        dlg.setOption(QFileDialog.DontUseNativeDialog, True)
+        dlg.setOption(QFileDialog.ShowDirsOnly, False)
+        if dlg.exec() != QDialog.Accepted or not dlg.selectedFiles():
+            return
+        d = dlg.selectedFiles()[0]
+        if not d:
+            return
+        preview = ImportPreviewDialog(d, self)
+        if preview.exec() == QDialog.Accepted and preview.selected:
+            self.state.import_paths(preview.selected,merge=preview.merge_groups.isChecked())
 
     def choose_photo_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "选择连拍照片（可多选）", "", PHOTO_FILTER)
         if files:
-            self.state.import_paths(files)
+            choice=QMessageBox(self)
+            choice.setWindowTitle("导入分组")
+            choice.setText("这些连拍照片如何分组？")
+            one=choice.addButton("归为一组",QMessageBox.AcceptRole)
+            multi=choice.addButton("按间隔分多组",QMessageBox.AcceptRole)
+            choice.addButton(QMessageBox.Cancel)
+            choice.exec()
+            if choice.clickedButton() in (one,multi):self.state.import_paths(files,merge=choice.clickedButton() is one)
 
     def choose_audio(self):
         p, _ = QFileDialog.getOpenFileName(self, "选择背景音乐", "", AUDIO_FILTER)
@@ -490,11 +633,38 @@ class MainWindow(QMainWindow):
                           "<p>飞鸟连拍对齐鸟眼，一键生成连拍视频。</p>"
                           f"<p>Copyright © 2026 cyanol<br>依据 GNU AGPL-3.0 开源<br>"
                           f"源代码：<a href='https://github.com/cyandee/BirdLock'>github.com/cyandee/BirdLock</a><br>"
-                          f"联系：<a href='mailto:{CONTACT_EMAIL}'>{CONTACT_EMAIL}</a></p>")
+                          f"邮箱：<a href='mailto:{CONTACT_EMAIL}'>{CONTACT_EMAIL}</a></p>")
+
+    def contact(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("BirdLock 反馈与交流")
+        box.setText(CONTACT_TEXT)
+        copy = box.addButton("复制邮箱", QMessageBox.ActionRole)
+        box.addButton("关闭", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is copy:
+            from PySide6.QtWidgets import QApplication
+            QApplication.clipboard().setText(CONTACT_EMAIL)
+
+    def support(self):
+        from ..core.paths import resource_dir
+        dialog = QDialog(self); dialog.setWindowTitle("请作者喝杯咖啡")
+        layout = QVBoxLayout(dialog)
+        text = QLabel("如果 BirdLock 帮到了你，欢迎自愿赞赏。\n5 元、10 元、20 元或任意金额，心意随意。\n所有功能均可免费使用，赞赏不影响使用。")
+        text.setWordWrap(True); text.setAlignment(Qt.AlignCenter); layout.addWidget(text)
+        image = QLabel(); image.setAlignment(Qt.AlignCenter)
+        candidates = (resource_dir()/"support"/"alipay-coffee.jpg",Path(__file__).resolve().parents[3]/"SharedResources"/"Support"/"alipay-coffee.jpg")
+        path = next((p for p in candidates if p.is_file()),None)
+        pixmap = QPixmap(str(path)) if path else QPixmap()
+        if pixmap.isNull():image.setText("暂时找不到赞赏二维码，可通过邮箱联系作者。")
+        else:image.setPixmap(pixmap.scaled(QSize(340,510),Qt.KeepAspectRatio,Qt.SmoothTransformation))
+        layout.addWidget(image); layout.addWidget(QLabel("支付宝扫码 · 自愿支持"))
+        close = QPushButton("关闭"); close.clicked.connect(dialog.accept); layout.addWidget(close)
+        dialog.exec()
 
     def clear_cache(self):
         size = self.state.cache.total_size() / (1 << 20)
-        if QMessageBox.question(self, "清空缓存", f"缓存占用约 {size:.0f} MB（缩略图和分析结果）。\n清空后再打开同一组照片需要重新分析。确定清空？") \
+        if QMessageBox.question(self, "清空缓存", f"缓存占用约 {size:.0f} MB（缩略图、分析结果和照片编辑）。\n清空会移除已保存的手动修正、排除帧和特写设置，下次打开需要重新分析。\n请先保存需要的成片。确定清空？", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) \
                 == QMessageBox.Yes:
             self.state.cache.clear()
 
@@ -523,6 +693,5 @@ class MainWindow(QMainWindow):
             self.state.import_paths([p for p in paths if not is_audio_file(p)])
 
     def closeEvent(self, ev):
-        self.state.stop()
-        self.state._save_settings_now()
+        self.state.close()
         super().closeEvent(ev)

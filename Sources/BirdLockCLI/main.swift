@@ -19,7 +19,7 @@ func positional(_ k: Int) -> String? {
     var skip = false
     for (i, s) in CommandLine.arguments.enumerated() where i > 0 {
         if skip { skip = false; continue }
-        if s.hasPrefix("--") { skip = !["--proxy", "--noreg", "--fresh", "--exif", "--nodeflicker", "--dump-plan", "--focus"].contains(s); continue }
+        if s.hasPrefix("--") { skip = !["--proxy", "--noreg", "--fresh", "--exif", "--nodeflicker", "--dump-plan", "--focus", "--capture-flash"].contains(s); continue }
         out.append(s)
     }
     return k < out.count ? out[k] : nil
@@ -33,7 +33,7 @@ func selftest() {
     print("== phase correlation")
     let n = 128
     var base = [Float](repeating: 0, count: n * n)
-    var rng = SystemRandomNumberGenerator()
+    var rng = SplitMix(seed: 1)
     // smooth random texture
     for _ in 0..<40 {
         let cx = Double.random(in: 0..<Double(n), using: &rng), cy = Double.random(in: 0..<Double(n), using: &rng)
@@ -69,6 +69,7 @@ func selftest() {
     let rq = pc.correlate(a, GrayPatch(width: n, height: n, data: noise))!
     print(String(format: "  unrelated q %.1f", rq.quality))
     print(maxErr < 0.15 ? "  PASS" : "  FAIL max err \(maxErr)")
+    guard maxErr < 0.15 else { fail("phase correlation selftest failed") }
 
     print("== trajectory solver")
     var truth: [V2] = []; var p = V2(100, 100)
@@ -87,6 +88,7 @@ func selftest() {
     print(String(format: "  raw err mean %.2f  fused err mean %.2f max %.2f  frame-to-frame jitter mean %.3f",
                  rawErr.reduce(0, +) / 200, errs.reduce(0, +) / 200, errs.max()!, jit.reduce(0, +) / 199))
     print(jit.reduce(0, +) / 199 < 0.3 ? "  PASS" : "  FAIL")
+    guard jit.reduce(0, +) / 199 < 0.3 else { fail("trajectory solver selftest failed") }
 }
 
 // MARK: - helpers
@@ -219,7 +221,7 @@ func synth(src: String, out: String, count: Int, seed: UInt64, upscale: Double =
     print("wrote \(count) frames to \(out)")
 }
 
-struct SplitMix {
+struct SplitMix: RandomNumberGenerator {
     var s: UInt64
     init(seed: UInt64) { s = seed }
     mutating func next() -> UInt64 { s &+= 0x9E3779B97F4A7C15; var z = s; z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9; z = (z ^ (z >> 27)) &* 0x94D049BB133111EB; return z ^ (z >> 31) }
@@ -259,7 +261,8 @@ extension Double { var squared: Double { self * self } }
 
 // MARK: - export
 
-func runExport(_ a: SequenceAnalysis) {
+func runExport(_ original: SequenceAnalysis) {
+    var a = original
     var comp = Composition()
     if let pid = arg("preset"), let p = CompositionPreset.all.first(where: { $0.id == pid }) { comp = p.composition }
     if let f = arg("framing"), let v = Double(f) { comp.framing = v }
@@ -279,6 +282,21 @@ func runExport(_ a: SequenceAnalysis) {
     if let c = arg("codec"), let v = VideoCodec(rawValue: c) { ex.codec = v }
     if flag("exif") { ex.overlay.showExif = true }
     if flag("focus") { ex.focusMark.enabled = true }
+    if let targets = arg("focus-targets") {
+        let names = targets.split(separator: ",")
+        ex.focusMark.enabled = true
+        ex.focusMark.showEye = names.contains("eye")
+        ex.focusMark.showHead = names.contains("head")
+        ex.focusMark.showBody = names.contains("body")
+    }
+    ex.focusMark.captureFlash = flag("capture-flash")
+    for (name, path) in [("eye-color", \FocusMarkSettings.eyeColor), ("head-color", \FocusMarkSettings.headColor),
+                         ("body-color", \FocusMarkSettings.bodyColor), ("capture-color", \FocusMarkSettings.captureColor)] {
+        if let raw = arg(name), let color = FocusMarkColor(rawValue: raw) { ex.focusMark[keyPath: path] = color }
+    }
+    if let v = arg("body-size").flatMap(Double.init) { ex.focusMark.bodySize = v }
+    if let v = arg("capture-size").flatMap(Double.init) { ex.focusMark.captureSize = v }
+    if let v = arg("flash-rate").flatMap(Double.init) { ex.focusMark.flashRate = v }
     if let st = arg("focus-style"), let v = FocusMarkStyle(rawValue: st) { ex.focusMark.enabled = true; ex.focusMark.style = v }
     ex.useFullResolution = !flag("proxy")
     var look = LookSettings()
@@ -296,6 +314,28 @@ func runExport(_ a: SequenceAnalysis) {
         var au = AudioSettings(); au.url = URL(fileURLWithPath: m)
         if let v = arg("audio-offset").flatMap(Double.init) { au.startOffset = v }
         audio = au
+    }
+    if let soundID = arg("shutter") {
+        guard SoundLibrary.url(for: soundID) != nil else { fail("找不到内置音效：\(soundID)") }
+        var settings = audio ?? AudioSettings()
+        var track = AudioTrack(); track.assetID = soundID
+        track.timelineStart = arg("shutter-start").flatMap(Double.init) ?? 0
+        track.duration = arg("shutter-duration").flatMap(Double.init) ?? 0
+        settings.tracks.append(track)
+        audio = settings
+    }
+    if let raw = arg("cuts") {
+        let cuts = [0] + raw.split(separator: ",").compactMap { Int($0) }.filter { $0 > 0 && $0 < a.count }.sorted() + [a.count]
+        a.clips = zip(cuts,cuts.dropFirst()).map { BurstClip(start: $0.0,count: $0.1-$0.0,fps: FrameImporter.estimateFPS(Array(a.frames[$0.0..<$0.1]))) }
+        a.track = TrackBuilder.build(a)
+    }
+    if let frame = arg("closeup").flatMap(Int.init), frame > 0, frame <= a.count {
+        var shot = Closeup(); shot.frame = frame-1; shot.endFrame = max(shot.frame,min(a.count-1,(arg("closeup-end").flatMap(Int.init) ?? frame)-1))
+        shot.seconds = arg("closeup-seconds").flatMap(Double.init) ?? 2
+        shot.zoom = arg("closeup-zoom").flatMap(Double.init) ?? 1.5
+        shot.centerX = arg("closeup-x").flatMap(Double.init) ?? 0.5
+        shot.centerY = arg("closeup-y").flatMap(Double.init) ?? 0.5
+        a.closeups = [shot]
     }
     let job = RenderJob(analysis: a, composition: comp, look: look, export: ex, selection: sel, watermark: wm)
     let out = URL(fileURLWithPath: arg("out", "out.\(ex.codec.fileExtension)")!)

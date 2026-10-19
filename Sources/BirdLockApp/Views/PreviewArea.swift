@@ -421,8 +421,8 @@ struct SourceToolBar: View {
         if state.viewMode == .source, let a = state.analysis {
             let predicted = state.predictedFrames
             HStack(spacing: 6) {
-                toolButton(.fixEye, "scope", "修正鸟眼", "点击（或拖动）到鸟眼的准确位置。本帧作为强约束，前后帧自动重新计算（E）")
-                toolButton(.pickBird, "hand.tap", "选择目标鸟", "画面里有多只鸟时，点击要跟踪的那只（会重新识别）")
+                toolButton(.fixEye, "scope", state.isAircraft ? "修正机头" : "修正鸟眼", state.isAircraft ? "点击当前帧机头的准确位置（E）" : "点击（或拖动）到鸟眼的准确位置。本帧作为强约束，前后帧自动重新计算（E）")
+                toolButton(.pickBird, "hand.tap", state.isAircraft ? "选择飞机" : "选择目标鸟", "点击要跟踪的主体（会重新识别）")
                 Divider().frame(height: 18)
                 Picker("", selection: Binding(get: { zoomStep }, set: { state.sourceZoom = $0 })) {
                     Text("全图").tag(1.0)
@@ -431,7 +431,7 @@ struct SourceToolBar: View {
                     Text("8×").tag(8.0)
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
-                .help("放大查看鸟头（跟随鸟头，逐帧检查时很方便）。触控板可双指缩放（Z 切换）")
+                .help("放大查看锁定区域（跟随锁定点，逐帧检查时很方便）。触控板可双指缩放（Z 切换）")
                 if !predicted.isEmpty {
                     Divider().frame(height: 18)
                     Button { state.jumpToPredicted(-1) } label: { Image(systemName: "chevron.left") }.help("上一个推算帧 [")
@@ -482,9 +482,9 @@ struct PreviewHint: View {
         guard !state.isPlaying else { return nil }
         if state.viewMode == .source {
             switch state.sourceTool {
-            case .fixEye: return "在鸟眼的准确位置点击（可按住拖动微调）· 推算不准的帧逐一修正后，前后帧会自动跟着重算"
-            case .pickBird: return "点击要跟踪的鸟"
-            case .none: return "拖动虚线框移动取景 · 拖动四角缩放取景范围 · 拖动圆圈修正鸟眼"
+            case .fixEye: if state.isAircraft { return "点击当前帧机头的准确位置，可拖动微调" };return "在鸟眼的准确位置点击（可按住拖动微调）· 推算不准的帧逐一修正后，前后帧会自动跟着重算"
+            case .pickBird: return state.isAircraft ? "点击要跟踪的飞机" : "点击要跟踪的鸟"
+            case .none: return "拖动虚线框移动取景 · 拖动四角缩放取景范围 · 拖动圆圈修正锁定点"
             }
         }
         if state.watermark.isActive && state.watermarkImage != nil { return "拖动水印调整位置，拖动右下角圆点调整大小" }
@@ -504,6 +504,10 @@ struct FrameBadges: View {
             HStack(spacing: 6) {
                 if st != .ok { badge(label(st), Theme.bad) }
                 if a.manualEye[i] != nil { badge("手动修正", Theme.manual) }
+                else if state.isAircraft {
+                    badge(tf.hasData ? (a.perFrame[i].aircraft?.source == .tracked ? "机头跟踪" : "机头识别") : "未定位机头", tf.hasData ? Theme.ok : Theme.warn)
+                    Button("修正机头") { state.startFixingEye() }.controlSize(.small)
+                }
                 else if tf.eyeVisible { badge("鸟眼", Theme.ok) }
                 else if tf.hasData {
                     badge("鸟头推算", Theme.warn)

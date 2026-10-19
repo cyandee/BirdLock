@@ -24,9 +24,8 @@ struct BirdLockApp: App {
             }
             CommandGroup(replacing: .help) {
                 Button("BirdLock 使用说明") { AppDocs.openManual() }
-                Button("反馈意见（发邮件）") {
-                    if let u = URL(string: "mailto:cyanodee@gmail.com?subject=BirdLock%20%E6%84%8F%E8%A7%81%E5%8F%8D%E9%A6%88") { NSWorkspace.shared.open(u) }
-                }
+                Button("反馈与交流（邮箱）") { AppIdentity.showContact() }
+                Button("请作者喝杯咖啡…") { AppIdentity.showSupport() }
             }
             CommandGroup(replacing: .newItem) {
                 Button("导入连拍…") { openImportPanel(state) }.keyboardShortcut("o")
@@ -73,7 +72,11 @@ func openImportPanel(_ state: AppState) {
     p.canChooseFiles = true
     p.allowedContentTypes = [.jpeg, .heic, .heif, .png, .tiff]
     p.message = "选择连拍照片所在的文件夹，或直接选中多张照片"
-    if p.runModal() == .OK { state.importURLs(p.urls) }
+    let grouping = NSButton(checkboxWithTitle: "归为一组，合成同一视频（不勾选则按拍摄间隔分组）", target: nil, action: nil)
+    grouping.setButtonType(.switch)
+    p.accessoryView = grouping
+    p.isAccessoryViewDisclosed = true
+    if p.runModal() == .OK { state.importURLs(p.urls, merge: grouping.state == .on) }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {

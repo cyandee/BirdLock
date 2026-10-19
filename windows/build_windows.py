@@ -7,6 +7,7 @@
 import argparse
 import io
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -73,9 +74,18 @@ def version_file(ver: str):
 
 
 def main():
+    with open(os.path.join(REPO, "VERSION"), encoding="utf-8") as f:
+        version = f.read().strip()
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise SystemExit("VERSION 必须使用 major.minor.patch 格式")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--version", default="1.0")
+    ap.add_argument("--version", default=version)
     a = ap.parse_args()
+    if a.version != version:
+        raise SystemExit("打包版本与 VERSION 不一致，请先统一更新 VERSION")
+    subprocess.check_call([sys.executable, "-I", os.path.join(REPO,"scripts","fetch_aircraft_model.py")])
+    subprocess.check_call([sys.executable,"-I",os.path.join(REPO,"scripts","verify_bundle.py"),
+                           "--aircraft-resources",os.path.join(REPO,"SharedResources","AircraftModels")])
     fetch_ffmpeg()
     subprocess.check_call([sys.executable, os.path.join(REPO, "scripts", "md2html.py"),
                            os.path.join(REPO, "docs", "windows", "使用说明.md"),

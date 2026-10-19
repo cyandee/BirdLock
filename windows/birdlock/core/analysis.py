@@ -10,7 +10,7 @@ import math
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -24,6 +24,7 @@ from .models import BirdModels, PoseSchema
 from .paths import cache_dir
 from .phasecorr import PhaseCorrelator, extract_exact, sharpness
 from .util import clamp, fill_gaps, gaussian, median, running_median, unwrap_angles
+from .aircraft_sequence import AircraftFrameObservation
 
 ANALYSIS_VERSION = 3
 
@@ -63,6 +64,7 @@ class FrameAnalysis:
     bgLinear: list = field(default_factory=lambda: [0.0, 0.0, 0.0])   # mean linear RGB of the background
     sharpness: float | None = None
     link: dict | None = None                           # {"delta": [dx, dy], "quality": q, "patchScale": s}
+    aircraft: AircraftFrameObservation | None = None
 
     @property
     def target_box(self) -> Box | None:
@@ -73,12 +75,14 @@ class FrameAnalysis:
     def to_dict(self):
         return {"index": self.index, "birds": [b.__dict__ for b in self.birds], "target": self.target,
                 "keypoints": [list(k) for k in self.keypoints], "poseScore": self.poseScore, "head": self.head.to_dict(),
-                "bgLinear": self.bgLinear, "sharpness": self.sharpness, "link": self.link}
+                "bgLinear": self.bgLinear, "sharpness": self.sharpness, "link": self.link,
+                "aircraft": None if self.aircraft is None else self.aircraft.to_dict()}
 
     @staticmethod
     def from_dict(d):
         return FrameAnalysis(d["index"], [Box(**b) for b in d["birds"]], d["target"], [tuple(k) for k in d["keypoints"]],
-                             d["poseScore"], HeadObservation.from_dict(d["head"]), d["bgLinear"], d["sharpness"], d["link"])
+                             d["poseScore"], HeadObservation.from_dict(d["head"]), d["bgLinear"], d["sharpness"], d["link"],
+                             None if d.get("aircraft") is None else AircraftFrameObservation.from_dict(d["aircraft"]))
 
 
 @dataclass
@@ -111,6 +115,11 @@ class SequenceAnalysis:
     manualEye: dict = field(default_factory=dict)      # {frame: (x, y)}
     excluded: set = field(default_factory=set)
     track: Track | None = None
+    clips: list = field(default_factory=list)
+    closeups: list = field(default_factory=list)
+    groupedDetection: bool = False
+    subject: str = "bird"
+    modelIdentity: str | None = None
 
     @property
     def count(self) -> int:
@@ -118,9 +127,10 @@ class SequenceAnalysis:
 
     def to_dict(self):
         return {"version": ANALYSIS_VERSION, "fingerprint": self.fingerprint, "frames": [f.to_dict() for f in self.frames],
-                "fps": self.fps, "proxyLongSide": self.proxyLongSide, "perFrame": [p.to_dict() for p in self.perFrame],
+                "fps": self.fps, "clips": self.clips, "closeups": [s.to_dict() for s in self.closeups], "groupedDetection": self.groupedDetection, "proxyLongSide": self.proxyLongSide, "perFrame": [p.to_dict() for p in self.perFrame],
                 "poseSchema": {"keypoints": self.poseSchema.keypoints, "inputCropExpand": self.poseSchema.inputCropExpand},
-                "manualEye": {str(k): list(v) for k, v in self.manualEye.items()}, "excluded": sorted(self.excluded)}
+                "manualEye": {str(k): list(v) for k, v in self.manualEye.items()}, "excluded": sorted(self.excluded),
+                "subject": self.subject, "modelIdentity": self.modelIdentity}
 
     @staticmethod
     def from_dict(d) -> "SequenceAnalysis":
@@ -128,19 +138,30 @@ class SequenceAnalysis:
                              [FrameAnalysis.from_dict(p) for p in d["perFrame"]],
                              PoseSchema(d["poseSchema"]["keypoints"], d["poseSchema"].get("inputCropExpand", 1.25)),
                              {int(k): tuple(v) for k, v in d.get("manualEye", {}).items()}, set(d.get("excluded", [])))
+        from .settings import Closeup
+        a.clips = d.get("clips", [])
+        a.closeups = [Closeup.from_dict(s) for s in d.get("closeups", [])]
+        a.groupedDetection = d.get("groupedDetection", False)
+        a.subject = d.get("subject", "bird")
+        if a.subject not in ("bird", "aircraft"):
+            raise ValueError("分析缓存主体类型无效。")
+        a.modelIdentity = d.get("modelIdentity")
         return a
 
     def copy_edits(self) -> "SequenceAnalysis":
         """Shallow copy with independent user edits (manual eyes, exclusions)."""
-        b = SequenceAnalysis(self.fingerprint, self.frames, self.fps, self.proxyLongSide, self.perFrame, self.poseSchema,
-                             dict(self.manualEye), set(self.excluded), self.track)
-        return b
+        return replace(self, manualEye=dict(self.manualEye), excluded=set(self.excluded), clips=list(self.clips),
+                       closeups=[s.copy() for s in self.closeups])
 
 
-def fingerprint(frames: list) -> str:
+def fingerprint(frames: list, subject="bird", model_identity: str | None = None) -> str:
+    if subject not in ("bird", "aircraft") or (subject == "aircraft" and not model_identity):
+        raise ValueError("飞机分析需要明确的独立模型标识。")
     h = hashlib.sha256()
     for f in frames:
         h.update(f"{f.path}|{f.fileSize}|{f.modified}\n".encode())
+    if subject == "aircraft":
+        h.update(f"subject=aircraft|model={model_identity}\n".encode())
     return h.hexdigest()[:24]
 
 
@@ -196,14 +217,21 @@ class ProxyCache:
 # ---------------------------------------------------------------------------------------------- target tracking
 
 
-def track_targets(birds: list[list[Box]], hint: tuple[int, tuple[float, float]] | None = None) -> list[int | None]:
+def track_targets(birds: list[list[Box]], hint: tuple[int, tuple[float, float]] | None = None, clips=None) -> list[int | None]:
     """Pick one bird per frame and keep its identity through the sequence."""
+    if clips and len(clips) > 1:
+        out = []
+        for clip in clips:
+            start, stop = clip['start'], clip['start'] + clip['count']
+            local_hint = (hint[0]-start, hint[1]) if hint is not None and start <= hint[0] < stop else None
+            out.extend(track_targets(birds[start:stop], local_hint))
+        return out
     n = len(birds)
     out: list[int | None] = [None] * n
     if n == 0:
         return out
     seed_f = seed_i = -1
-    if hint is not None and hint[0] < n and birds[hint[0]]:
+    if hint is not None and 0 <= hint[0] < n and birds[hint[0]]:
         seed_f = hint[0]
         pt = np.array(hint[1])
         seed_i = min(range(len(birds[seed_f])), key=lambda j: float(np.linalg.norm(birds[seed_f][j].center - pt)))
@@ -255,7 +283,25 @@ def track_targets(birds: list[list[Box]], hint: tuple[int, tuple[float, float]] 
 def build_track(a: SequenceAnalysis, eye_sigma_hl=0.05, predicted_eye_sigma_hl=0.12, center_sigma_hl=0.06,
                 link_min_quality=12.0, link_sigma_patch_px=0.05, use_registration=True) -> Track:
     """Raw per-frame analysis + user edits -> solved, smooth-but-faithful track."""
+    if len(a.clips) > 1:
+        from dataclasses import replace
+        parts = []
+        for clip in a.clips:
+            start, stop = clip["start"], clip["start"] + clip["count"]
+            sub = replace(a, frames=a.frames[start:stop], perFrame=a.perFrame[start:stop], clips=[], track=None,
+                          manualEye={i-start:v for i,v in a.manualEye.items() if start <= i < stop},
+                          excluded={i-start for i in a.excluded if start <= i < stop})
+            parts.append(build_track(sub, eye_sigma_hl, predicted_eye_sigma_hl, center_sigma_hl, link_min_quality, link_sigma_patch_px, use_registration))
+        names = ("eye", "head_center", "head_length", "angle", "eye_visible", "has_data", "confidence")
+        values = {name:np.concatenate([getattr(p, name) for p in parts]) for name in names}
+        return Track(eye=values["eye"], head_center=values["head_center"], head_length=values["head_length"], angle=values["angle"],
+                     measured_eye=[m for p in parts for m in p.measured_eye], eye_visible=values["eye_visible"], has_data=values["has_data"],
+                     confidence=values["confidence"], reflect_dominant=parts[0].reflect_dominant, facing_right=parts[0].facing_right,
+                     median_head_length=float(np.median(values["head_length"])))
     n = a.count
+    if a.subject == "aircraft":
+        from .aircraft_analysis import build_aircraft_track
+        return build_aircraft_track(a)
     schema = a.poseSchema
     li, ri = schema.index("left_eye"), schema.index("right_eye")
     obs = [p.head for p in a.perFrame]
@@ -445,8 +491,9 @@ class Analyzer:
         return results
 
     def analyze(self, frames: list, fps: float, hint=None, progress: Callable | None = None,
-                cancelled: Callable[[], bool] = lambda: False) -> SequenceAnalysis:
+                cancelled: Callable[[], bool] = lambda: False, clips=None) -> SequenceAnalysis:
         n = len(frames)
+        clips = clips or []
         fp = fingerprint(frames)
         cdir = self.cache.directory(fp)
         det, pose, schema = self.models.detector, self.models.pose, self.models.schema
@@ -470,7 +517,7 @@ class Analyzer:
             progress(STAGES[0], 0.0)
         self._map(pass1, list(range(n)), progress, STAGES[0], cancelled)
 
-        targets = track_targets([p.birds for p in per], hint)
+        targets = track_targets([p.birds for p in per], hint, clips)
         for i in range(n):
             per[i].target = targets[i]
 
@@ -516,6 +563,8 @@ class Analyzer:
         self._map(pass1b, list(range(n)), progress, STAGES[1], cancelled)
 
         a = SequenceAnalysis(fp, frames, fps, self.proxy_long_side, per, schema)
+        a.clips = clips
+        a.groupedDetection = True
         initial = build_track(a)
         a.track = initial
 
@@ -553,7 +602,10 @@ class Analyzer:
 
         pc = PhaseCorrelator(N)
         pc.set_gaussian_window(clamp(0.6 * med_hl * g / D, 8, N / 4))
+        cut_starts = {c['start'] for c in clips[1:]}
         for i in range(1, n):
+            if i in cut_starts:
+                continue
             pa, pb = patches[i - 1], patches[i]
             if pa is None or pb is None:
                 continue

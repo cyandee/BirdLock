@@ -137,18 +137,33 @@ struct MainToolbar: ToolbarContent {
     var body: some ToolbarContent {
         @Bindable var state = state
         ToolbarItemGroup(placement: .navigation) {
+            Picker("识别主体", selection: Binding(get: { state.subject },set: { state.changeSubject($0) })) {
+                Text("鸟类").tag(AnalysisSubject.bird)
+                Text("飞机（试验）").tag(AnalysisSubject.aircraft)
+            }
+            .frame(width: 125)
+            .disabled(state.exportState.running || state.phase == .importing)
+            .help("飞机模式自动识别机头和机身；复杂视角请检查机头，可逐帧修正。首次分析较慢。")
             Button { openImportPanel(state) } label: { Label("导入", systemImage: "photo.stack") }
                 .help("导入连拍照片（文件夹或多张 JPG / HEIF）")
             if state.segments.count > 1 {
                 // Iterate over values (not indices): the list can shrink when another folder is loaded.
                 let items = state.segments.enumerated().map { (index: $0.offset, count: $0.element.range.count) }
                 Picker("连拍组", selection: Binding(get: { state.segmentIndex }, set: { state.selectSegment($0) })) {
+                    Text("合并选中组 → 同一视频").tag(-1)
                     ForEach(items, id: \.index) { item in
                         Text("第 \(item.index + 1) 组 · \(item.count) 张").tag(item.index)
                     }
                 }
                 .frame(width: 160)
                 .help("文件夹里检测到多组连拍，选择要处理的一组")
+                Menu("选择合并组") {
+                    ForEach(items, id: \.index) { item in
+                        Toggle("第 \(item.index + 1) 组 · \(item.count) 张", isOn: Binding(
+                            get: { state.mergeGroupIndices.contains(item.index) },
+                            set: { state.includeGroup(item.index, enabled: $0) }))
+                    }
+                }
             }
         }
         ToolbarItemGroup(placement: .principal) {
@@ -181,7 +196,7 @@ struct DropZoneView: View {
                 Image(systemName: "bird.fill").font(.system(size: 46)).foregroundStyle(Theme.accent)
             }
             Text("把连拍照片拖到这里").font(.title2.weight(.semibold))
-            Text("支持 JPG / HEIF，整个文件夹或多选照片都可以。\n自动识别鸟眼并锁定，一键生成连拍视频。")
+            Text("支持 JPG / HEIF，整个文件夹或多选照片都可以。\n自动识别并锁定主体，一键生成连拍视频。")
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Button("选择文件夹…") { openImportPanel(state) }
                 .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.large)
@@ -221,13 +236,17 @@ struct AnalyzingOverlay: View {
         (.solving, 0.05, "point.topleft.down.to.point.bottomright.curvepath"),
     ]
 
-    private var stageIndex: Int { Self.stages.firstIndex { $0.stage.rawValue == stage } ?? -1 }
+    private var stages: [(stage: AnalysisStage, weight: Double, icon: String)] {
+        state.isAircraft ? [(.aircraftDetecting,0.15,"airplane"),(.background,0.05,"photo"),
+                            (.aircraftParts,0.75,"scope"),(.sharpness,0.04,"sparkle"),(.solving,0.01,"point.topleft.down.to.point.bottomright.curvepath")] : Self.stages
+    }
+    private var stageIndex: Int { stages.firstIndex { $0.stage.rawValue == stage } ?? -1 }
 
     private var overall: Double {
         let k = stageIndex
         guard k >= 0 else { return 0 }
-        let done = Self.stages[..<k].reduce(0) { $0 + $1.weight }
-        return min(1, done + Self.stages[k].weight * progress)
+        let done = stages[..<k].reduce(0) { $0 + $1.weight }
+        return min(1, done + stages[k].weight * progress)
     }
 
     var body: some View {
@@ -239,7 +258,7 @@ struct AnalyzingOverlay: View {
                     HStack(spacing: 14) {
                         ZStack {
                             Circle().fill(Theme.accent.opacity(0.14)).frame(width: 46, height: 46)
-                            Image(systemName: "bird.fill").font(.system(size: 20)).foregroundStyle(Theme.accent)
+                            Image(systemName: state.isAircraft ? "airplane" : "bird.fill").font(.system(size: 20)).foregroundStyle(Theme.accent)
                         }
                         VStack(alignment: .leading, spacing: 3) {
                             Text("正在分析 \(frames.count) 张照片").font(.headline)
@@ -250,7 +269,7 @@ struct AnalyzingOverlay: View {
                         }
                     }
                     VStack(alignment: .leading, spacing: 10) {
-                        ForEach(Array(Self.stages.enumerated()), id: \.offset) { k, s in
+                        ForEach(Array(stages.enumerated()), id: \.offset) { k, s in
                             stageRow(k, s.stage.rawValue, s.icon)
                         }
                     }
@@ -270,7 +289,7 @@ struct AnalyzingOverlay: View {
 
     private var statusLine: String {
         let pct = String(format: "%.0f%%", overall * 100)
-        guard stageIndex >= 0 else { return stage == "加载识别模型" ? "加载识别模型…" : "准备中…" }
+        guard stageIndex >= 0 else { return stage == AnalysisStage.queued.rawValue ? "等待上次分析结束…" : (stage == "加载识别模型" ? "加载识别模型…" : "准备中…") }
         let elapsed = Date().timeIntervalSince(state.analysisStarted)
         guard overall > 0.04, elapsed > 2 else { return pct }
         let remain = elapsed * (1 - overall) / overall

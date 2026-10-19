@@ -11,7 +11,7 @@ public enum SizeMode: String, Codable, CaseIterable, Sendable, Identifiable {
     case lockSize      // bird keeps the same size on screen
     case fixedCrop     // constant crop size: bird grows/shrinks naturally
     public var id: String { rawValue }
-    public var title: String { self == .lockSize ? "锁定鸟的大小" : "固定取景（鸟自然远近）" }
+    public var title: String { self == .lockSize ? "锁定主体大小" : "固定取景（自然远近）" }
 }
 
 public enum RotationMode: String, Codable, CaseIterable, Sendable, Identifiable {
@@ -32,7 +32,7 @@ public enum EdgeFill: String, Codable, CaseIterable, Sendable, Identifiable {
     public var title: String {
         switch self {
         case .shift: return "平移取景，用满原图（推荐）"
-        case .autoZoom: return "放大避免越界（鸟始终锁定）"
+        case .autoZoom: return "放大避免越界（保持锁定）"
         case .blurExtend: return "模糊延展填充"
         case .black: return "黑边"
         }

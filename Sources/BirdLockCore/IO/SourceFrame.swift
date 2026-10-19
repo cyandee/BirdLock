@@ -159,10 +159,10 @@ public enum FrameImporter {
         var start = 0
         for i in 1..<max(1, frames.count) where i < frames.count {
             if let a = frames[i - 1].captureTime, let b = frames[i].captureTime, b - a > gap {
-                segs.append(BurstSegment(range: start..<i, fps: fps)); start = i
+                segs.append(BurstSegment(range: start..<i, fps: estimateFPS(Array(frames[start..<i])))); start = i
             }
         }
-        segs.append(BurstSegment(range: start..<frames.count, fps: fps))
+        segs.append(BurstSegment(range: start..<frames.count, fps: estimateFPS(Array(frames[start..<frames.count]))))
         return segs
     }
 }

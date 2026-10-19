@@ -1,19 +1,20 @@
-name: Windows build
+name: Windows package checks
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version number (e.g. 1.0)"
-        default: "1.0"
-      release:
-        description: "Attach the zip to this existing release tag (e.g. v1.0.1); empty = artifact only"
+        description: "Optional version assertion; must match VERSION"
         default: ""
-  push:
-    tags: ["v*"]
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: false
+        default: ""
 
 permissions:
-  contents: write     # upload the zip to the release
+  contents: read
 
 jobs:
   build:
@@ -35,9 +36,18 @@ jobs:
 
       - name: Version
         id: ver
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          BUILD_REF: ${{ github.ref }}
+          BUILD_TAG: ${{ github.ref_name }}
         run: |
-          $v = "${{ inputs.version }}"
-          if (-not $v) { $v = "${{ github.ref_name }}".TrimStart("v") }
+          $v = (Get-Content VERSION -Raw).Trim()
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid VERSION" }
+          $requested = $env:REQUESTED_VERSION
+          if ($requested -and $requested -ne $v) { throw "Version does not match VERSION" }
+          if ($env:BUILD_REF.StartsWith("refs/tags/") -and $env:BUILD_TAG -notmatch "^v$([regex]::Escape($v))(-[0-9A-Za-z.-]+)?$") {
+            throw "Tag does not match VERSION"
+          }
           "version=$v" >> $env:GITHUB_OUTPUT
 
       - name: Build portable package
@@ -45,6 +55,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHONIOENCODING: utf-8
         run: python windows/build_windows.py --version ${{ steps.ver.outputs.version }}
+
+      - name: Unit tests
+        env:
+          PYTHONPATH: windows
+        run: python -m unittest discover -s windows/tests -p "test_*.py"
 
       - name: Self-test from source (CPU / DirectML, FFmpeg)
         working-directory: windows
@@ -62,23 +77,15 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "selftest failed ($($p.ExitCode))" }
           $p = Start-Process $exe -ArgumentList "--smoketest" -Wait -PassThru
           Get-Content windows/dist/BirdLock/data/smoketest.log
+          if ($p.ExitCode -ne 0) { throw "smoketest failed ($($p.ExitCode))" }
           if (-not (Test-Path windows/dist/BirdLock/data/smoketest.png)) { throw "smoketest produced no screenshot" }
 
       - uses: actions/upload-artifact@v4
         with:
-          name: BirdLock-${{ steps.ver.outputs.version }}-Windows-x64
+          name: package-windows
           path: windows/dist/BirdLock-*-Windows-x64.zip
 
       - uses: actions/upload-artifact@v4
         with:
           name: smoketest-screenshot
           path: windows/dist/BirdLock/data/smoketest.png
-
-      - name: Attach to the GitHub release
-        if: startsWith(github.ref, 'refs/tags/') || inputs.release != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $tag = "${{ inputs.release }}"
-          if (-not $tag) { $tag = "${{ github.ref_name }}" }
-          gh release upload $tag (Get-ChildItem windows/dist/BirdLock-*-Windows-x64.zip).FullName --clobber --repo ${{ github.repository }}

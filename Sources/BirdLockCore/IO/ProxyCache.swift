@@ -7,7 +7,10 @@ public final class ProxyCache: @unchecked Sendable {
     public let root: URL
 
     public init(root: URL? = nil) {
-        if let root { self.root = root } else {
+        if let root { self.root = root }
+        else if let path = ProcessInfo.processInfo.environment["BIRDLOCK_CACHE"] {
+            self.root = URL(fileURLWithPath: path, isDirectory: true)
+        } else {
             let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
             self.root = base.appendingPathComponent("BirdLock", isDirectory: true)
         }

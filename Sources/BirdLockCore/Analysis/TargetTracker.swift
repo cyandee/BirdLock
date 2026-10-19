@@ -6,14 +6,21 @@ public enum TargetTracker {
     ///   - birds: detections per frame
     ///   - hint: optional (frame, point) – the user clicked this bird
     /// - Returns: index of the chosen detection per frame (nil = not found)
-    public static func track(_ birds: [[BoxD]], hint: (frame: Int, point: V2)? = nil) -> [Int?] {
+    public static func track(_ birds: [[BoxD]], hint: (frame: Int, point: V2)? = nil, clips: [BurstClip] = []) -> [Int?] {
+        if clips.count > 1 {
+            return clips.flatMap { clip in
+                let range = clip.start..<(clip.start + clip.count)
+                let localHint = hint.flatMap { range.contains($0.frame) ? (frame: $0.frame - clip.start, point: $0.point) : nil }
+                return track(Array(birds[range]), hint: localHint)
+            }
+        }
         let n = birds.count
         var out = [Int?](repeating: nil, count: n)
         guard n > 0 else { return out }
 
         // Seed
         var seedF = -1, seedI = -1
-        if let hint, hint.frame < n, !birds[hint.frame].isEmpty {
+        if let hint, hint.frame >= 0, hint.frame < n, !birds[hint.frame].isEmpty {
             seedF = hint.frame
             seedI = birds[hint.frame].indices.min { a, b in
                 (birds[hint.frame][a].center - hint.point).length < (birds[hint.frame][b].center - hint.point).length

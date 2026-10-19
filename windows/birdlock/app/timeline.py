@@ -7,7 +7,7 @@ import os
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from . import theme
 
@@ -44,7 +44,7 @@ class TransportBar(QFrame):
         tb("⏭", "下一帧 →", lambda: state.step(1))
         self.loop = tb("🔁", "循环播放", self._loop, checkable=True)
         self.loop.setChecked(True)
-        self.sound = tb("🔊", "预览时播放 / 静音音乐", state.toggle_preview_audio)
+        self.sound = tb("🔊", "预览时播放 / 静音音频", state.toggle_preview_audio)
         self.counter = QLabel()
         self.counter.setObjectName("value")
         self.fname = QLabel()
@@ -89,7 +89,7 @@ class TransportBar(QFrame):
     def refresh(self):
         st = self.state
         self.play.setText("⏸" if st.playing else "▶")
-        self.sound.setVisible(st.audio.active)
+        self.sound.setVisible((st.job.mixed_audio(st.audio).active if st.job else st.audio.active))
         self.sound.setText("🔊" if st.preview_audio else "🔇")
         a = st.analysis
         if a is not None and 0 <= st.current_frame < a.count:
@@ -154,6 +154,12 @@ class FrameTimeline(QWidget):
             else:
                 c = QColor(255, 255, 255, 30)
             p.fillRect(QRectF(x(i) - cell / 2, 8, cell + 0.5, 12), c)
+        p.setPen(QPen(theme.ACCENT,1))
+        for clip in a.clips[1:]:
+            px=x(clip["start"]);p.drawLine(QPointF(px,4),QPointF(px,H-18))
+        for shot in a.closeups:
+            left,right=x(shot.frame),x(max(shot.frame,shot.endFrame))
+            p.fillRect(QRectF(left-cell/2,22,max(cell,right-left+cell),4),theme.MANUAL)
         top, bottom = 28.0, H - 18.0
         ch = bottom - top
         p.setFont(QFont(p.font().family(), 8))
@@ -179,9 +185,9 @@ class FrameTimeline(QWidget):
             p.drawPath(path)
             p.drawText(QPointF(lx, H - 5), label)
 
-        curve(t.eye[:, 0], QColor(64, 217, 255, 215), "鸟眼 X", PAD)
-        curve(t.eye[:, 1], QColor(64, 217, 255, 115), "鸟眼 Y", PAD + 52)
-        curve(t.head_length, QColor(250, 184, 61, 205), "鸟头大小", PAD + 104)
+        curve(t.eye[:, 0], QColor(64, 217, 255, 215), ("机头 X" if self.state.is_aircraft else "鸟眼 X"), PAD)
+        curve(t.eye[:, 1], QColor(64, 217, 255, 115), ("机头 Y" if self.state.is_aircraft else "鸟眼 Y"), PAD + 52)
+        curve(t.head_length, QColor(250, 184, 61, 205), ("机头大小" if self.state.is_aircraft else "鸟头大小"), PAD + 104)
         curve([pp.sharpness if pp.sharpness is not None else np.nan for pp in a.perFrame], QColor(255, 255, 255, 90), "清晰度", PAD + 168)
         if job:
             s0 = min(job.selection.trimStart, n - 1)
@@ -195,7 +201,7 @@ class FrameTimeline(QWidget):
         p.setBrush(theme.ACCENT)
         p.setPen(Qt.NoPen)
         p.drawEllipse(QPointF(px, 6), 4, 4)
-        legend = [(theme.OK, "鸟眼"), (theme.WARN, "鸟头推算"), (theme.MANUAL, "手动修正"), (theme.BAD, "未识别/模糊")]
+        legend = ([(theme.WARN,"机头定位")] if self.state.is_aircraft else [(theme.OK,"鸟眼"),(theme.WARN,"鸟头推算")]) + [ (theme.MANUAL, "手动修正"), (theme.BAD, "未识别/模糊")]
         fm = p.fontMetrics()
         xx = W - PAD
         for color, label in reversed(legend):
@@ -349,12 +355,75 @@ class AudioLane(QWidget):
         p.drawText(QPointF(PAD + 11, 14), info)
 
 
+class ExtraAudioLanes(QWidget):
+    def __init__(self, state):
+        super().__init__()
+        self.state = state
+        self.drag = None
+        self.setToolTip("拖动音频块可调整视频起点；详细设置在「音效与多轨」中。")
+        state.changed.connect(self.refresh)
+        self.refresh("audio")
+
+    def refresh(self, topic):
+        if topic in ("audio", "job", "frame", "playing"):
+            self.setFixedHeight(max(1, len(self.state.audio.tracks) * 32))
+            self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        total = max(0.001, self.state.job.duration if self.state.job else 1)
+        width = max(1, self.width() - 52 - PAD * 2)
+        from ..core.sounds import assets
+        for i, track in enumerate(self.state.audio.tracks):
+            y = i * 32
+            p.fillRect(0, y, self.width(), 31, QColor(20, 21, 24))
+            p.setPen(theme.TEXT)
+            p.drawText(QRectF(0, y, 52, 31), Qt.AlignCenter, f"♫ {i + 1}")
+            start = min(total, max(0, track.timelineStart))
+            span = min(track.duration, total - start) if track.duration > 0 else total - start
+            rect = QRectF(52 + PAD + start / total * width, y + 3, max(1, span / total * width), 26)
+            color = QColor(theme.ACCENT)
+            color.setAlpha(35 if track.muted else 95)
+            p.setBrush(color)
+            p.setPen(Qt.NoPen)
+            p.drawRoundedRect(rect, 4, 4)
+            name = next((e["title"] for e in assets() if e["id"] == track.assetID), os.path.basename(track.path))
+            p.setPen(theme.TEXT)
+            p.drawText(rect.adjusted(5, 0, -3, 0), Qt.AlignVCenter, p.fontMetrics().elidedText(name, Qt.ElideRight, max(1, int(rect.width()) - 8)))
+        if self.state.job:
+            p.setPen(theme.ACCENT)
+            x = 52 + PAD + self.state.playhead / self.state.job.export.outputFPS / total * width
+            p.drawLine(QPointF(x, 0), QPointF(x, self.height()))
+
+    def mousePressEvent(self, event):
+        i = int(event.position().y() // 32)
+        if event.button() == Qt.LeftButton and event.position().x() >= 52 and i < len(self.state.audio.tracks):
+            track = self.state.audio.tracks[i]
+            self.drag = (track, event.position().x(), track.timelineStart)
+
+    def mouseMoveEvent(self, event):
+        if self.drag and self.state.job:
+            track, x, start = self.drag
+            total = self.state.job.duration
+            width = max(1, self.width() - 52 - PAD * 2)
+            track.timelineStart = min(total, max(0, start + (event.position().x() - x) / width * total))
+            self.state.audio_settings_changed()
+
+    def mouseReleaseEvent(self, event):
+        self.drag = None
+
+
 class TimelinePanel(QWidget):
     def __init__(self, state, on_choose_audio, parent=None):
         super().__init__(parent)
         self.setObjectName("panel")
         self.setFixedHeight(100 + 1 + 48)
-        lay = QHBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        lay = QHBoxLayout()
+        outer.addLayout(lay)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         labels = QVBoxLayout()
@@ -382,3 +451,19 @@ class TimelinePanel(QWidget):
         lanes.addWidget(sep)
         lanes.addWidget(self.audio)
         lay.addLayout(lanes, 1)
+        extra = QScrollArea()
+        extra.setFrameShape(QFrame.NoFrame)
+        extra.setWidgetResizable(True)
+        extra.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        extra.setWidget(ExtraAudioLanes(state))
+        outer.addWidget(extra)
+
+        def refresh(topic):
+            if topic not in ("audio", "job", "all"):
+                return
+            height = min(3, len(state.audio.tracks)) * 32
+            extra.setVisible(height > 0)
+            extra.setFixedHeight(height)
+            self.setFixedHeight(149 + height)
+        state.changed.connect(refresh)
+        refresh("audio")

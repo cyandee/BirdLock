@@ -13,7 +13,21 @@ public struct TrackOptions: Sendable {
 /// Converts raw per-frame analysis + user edits into a solved, smooth-but-faithful track.
 public enum TrackBuilder {
     public static func build(_ a: SequenceAnalysis, options o: TrackOptions = TrackOptions()) -> Track {
+        if let clips = a.clips, clips.count > 1 {
+            let tracks = clips.map { clip -> Track in
+                let range = clip.start..<(clip.start + clip.count)
+                var sub = a
+                sub.frames = Array(a.frames[range]); sub.perFrame = Array(a.perFrame[range]); sub.clips = nil; sub.track = nil
+                sub.manualEye = Dictionary(uniqueKeysWithValues: a.manualEye.filter { range.contains($0.key) }.map { ($0.key - clip.start, $0.value) })
+                sub.excluded = Set(a.excluded.filter(range.contains).map { $0 - clip.start })
+                return build(sub, options: o)
+            }
+            let frames = tracks.flatMap(\.frames)
+            return Track(frames: frames, template: tracks.first?.template, reflectDominant: tracks.first?.reflectDominant ?? false,
+                         facingRight: tracks.first?.facingRight ?? true, medianHeadLength: Stats.median(frames.map(\.headLength)) ?? 100)
+        }
         let n = a.count
+        if a.analysisSubject == .aircraft { return AircraftTrackBuilder.build(a) }
         // Decide which labelled eye (left/right) is the visible one, smoothed over time so the anchor never
         // hops between the two eyes from frame to frame (the far eye is often also predicted).
         let schema = a.poseSchema

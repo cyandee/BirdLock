@@ -17,6 +17,11 @@ public enum AnalysisStage: String, Sendable {
     case keypoints = "定位鸟头/鸟眼"
     case registering = "亚像素配准"
     case solving = "计算轨迹"
+    case aircraftDetecting = "识别飞机"
+    case aircraftParts = "定位/跟踪机头"
+    case background = "分析画面"
+    case sharpness = "评估画面清晰度"
+    case queued = "等待上次分析结束"
 }
 
 public typealias AnalysisProgress = @Sendable (AnalysisStage, Double) -> Void
@@ -33,9 +38,13 @@ public final class Analyzer: @unchecked Sendable {
         self.cache = cache
     }
 
-    public static func fingerprint(_ frames: [SourceFrame]) -> String {
+    public static func fingerprint(_ frames: [SourceFrame]) -> String { fingerprint(frames, aircraftModelIdentity: nil) }
+
+    /// Aircraft observations are isolated by the actual model and algorithm identity; bird keys stay unchanged.
+    public static func fingerprint(_ frames: [SourceFrame], aircraftModelIdentity: String?) -> String {
         var h = SHA256()
         for f in frames { h.update(data: Data("\(f.url.path)|\(f.fileSize)|\(f.modified)\n".utf8)) }
+        if let identity = aircraftModelIdentity { h.update(data: Data("subject=aircraft|model=\(identity)\n".utf8)) }
         return h.finalize().prefix(12).map { String(format: "%02x", $0) }.joined()
     }
 
@@ -61,7 +70,8 @@ public final class Analyzer: @unchecked Sendable {
     }
 
     public func analyze(frames: [SourceFrame], fps: Double, targetHint: (frame: Int, point: V2)? = nil,
-                        progress: AnalysisProgress? = nil, isCancelled: @escaping @Sendable () -> Bool = { false }) throws -> SequenceAnalysis {
+                        progress: AnalysisProgress? = nil, isCancelled: @escaping @Sendable () -> Bool = { false },
+                        clips: [BurstClip] = []) throws -> SequenceAnalysis {
         let n = frames.count
         let fp = Self.fingerprint(frames)
         var per = (0..<n).map { FrameAnalysis(index: $0) }
@@ -89,7 +99,7 @@ public final class Analyzer: @unchecked Sendable {
         if isCancelled() { throw CancellationError() }
 
         // ---- Target tracking
-        let targets = TargetTracker.track(per.map { $0.birds }, hint: targetHint)
+        let targets = TargetTracker.track(per.map { $0.birds }, hint: targetHint, clips: clips)
         for i in 0..<n { per[i].target = targets[i] }
 
         // ---- Pass 1b: keypoints on the tracked bird + background stats
@@ -134,6 +144,8 @@ public final class Analyzer: @unchecked Sendable {
 
         var analysis = SequenceAnalysis(fingerprint: fp, frames: frames, fps: fps, proxyLongSide: opt.proxyLongSide,
                                         perFrame: per, poseSchema: schema, track: nil)
+        analysis.clips = clips
+        analysis.groupedDetection = true
         // ---- Initial track (no registration yet)
         progress?(.solving, 0)
         let initial = TrackBuilder.build(analysis)
@@ -173,7 +185,9 @@ public final class Analyzer: @unchecked Sendable {
 
         let pc = PhaseCorrelator(size: N)
         pc.setGaussianWindow(sigma: clamp(0.6 * medHL * g / Double(D), 8, Double(N) / 4))
+        let cutStarts = Set(clips.dropFirst().map(\.start))
         for i in 1..<max(1, n) where i < n {
+            if cutStarts.contains(i) { continue }
             guard let a = patches[i - 1], let b = patches[i] else { continue }
             guard let r = pc.correlate(a, b) else { continue }
             let ra = patchRects[i - 1], rb = patchRects[i]
@@ -194,7 +208,7 @@ public final class Analyzer: @unchecked Sendable {
     }
 
     /// Mean linear RGB of a heavily downsampled image, excluding `exclude` (image px coords of `img`).
-    static func backgroundStats(_ img: CGImage, exclude: CGRect?) -> [Double] {
+    public static func backgroundStats(_ img: CGImage, exclude: CGRect?) -> [Double] {
         let W = 96, H = max(1, Int(Double(96) * Double(img.height) / Double(img.width)))
         var buf = [UInt8](repeating: 0, count: W * H * 4)
         let cs = CGColorSpace(name: CGColorSpace.sRGB)!

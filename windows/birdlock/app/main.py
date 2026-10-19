@@ -13,6 +13,40 @@ def _redirect_output(name: str):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--subject-regression":
+        if not os.environ.get("BIRDLOCK_DATA"):
+            raise SystemExit("Subject regression requires a disposable BIRDLOCK_DATA directory")
+        _redirect_output("subject-regression.log")
+        try:
+            from .subject_regression import main as subject_regression
+            subject_regression(sys.argv[2:])
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise SystemExit(1)
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "--project-regression":
+        if not os.environ.get("BIRDLOCK_DATA"):
+            raise SystemExit("Project regression requires a disposable BIRDLOCK_DATA directory")
+        _redirect_output("project-regression.log")
+        try:
+            from .project_regression import main as project_regression
+            project_regression(sys.argv[2:])
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise SystemExit(1)
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "--gui-regression":
+        _redirect_output("regression.log")
+        try:
+            from .regression import main as regression
+            regression(sys.argv[2:])
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise SystemExit(1)
+        return
     if "--selftest" in sys.argv:          # used by CI on the packaged exe
         _redirect_output("selftest.log")
         from ..cli import main as cli
@@ -23,6 +57,8 @@ def main():
         _redirect_output("smoketest.log")
     from ..core import log as _log
     _log.setup()
+    if sys.stdout is None or sys.stderr is None:   # windowed exe (pythonw / PyInstaller noconsole)
+        _redirect_output("app.log")
     # quieter ONNX Runtime logs, crisp rendering on high-DPI screens
     os.environ.setdefault("ORT_LOG_SEVERITY_LEVEL", "3")
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")

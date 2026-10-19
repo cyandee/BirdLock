@@ -91,18 +91,19 @@ class FocusMarkColor(Choice):
     GREEN = "green"
     WHITE = "white"
     ORANGE = "orange"
+    BLACK = "black"
 
     @property
     def bgr(self) -> tuple[int, int, int]:
-        r, g, b = {"green": (0.30, 0.92, 0.36), "white": (1, 1, 1), "orange": (1.0, 0.62, 0.12)}[self.value]
+        r, g, b = {"green": (0.30, 0.92, 0.36), "white": (1, 1, 1), "orange": (1.0, 0.62, 0.12), "black": (0, 0, 0)}[self.value]
         return int(b * 255), int(g * 255), int(r * 255)
 
 
 TITLES: dict[Choice, str] = {
     LockPoint.EYE: "鸟眼（遮挡时自动用鸟头）", LockPoint.HEAD_CENTER: "鸟头中心",
-    SizeMode.LOCK_SIZE: "锁定鸟的大小", SizeMode.FIXED_CROP: "固定取景（鸟自然远近）",
+    SizeMode.LOCK_SIZE: "锁定主体大小", SizeMode.FIXED_CROP: "固定取景（自然远近）",
     RotationMode.NONE: "不旋转", RotationMode.LOCK_HEAD: "锁定头部角度", RotationMode.FOLLOW_HEAD_SMOOTH: "柔和校正倾斜",
-    EdgeFill.SHIFT: "平移取景，用满原图（推荐）", EdgeFill.AUTO_ZOOM: "放大避免越界（鸟始终锁定）",
+    EdgeFill.SHIFT: "平移取景，用满原图（推荐）", EdgeFill.AUTO_ZOOM: "放大避免越界（保持锁定）",
     EdgeFill.BLUR_EXTEND: "模糊延展填充", EdgeFill.BLACK: "黑边",
     VideoCodec.H264: "H.264（兼容性最好）", VideoCodec.HEVC: "HEVC / H.265（体积小）",
     VideoCodec.PRORES_422HQ: "ProRes 422 HQ（后期剪辑）", VideoCodec.PRORES_4444: "ProRes 4444",
@@ -113,7 +114,7 @@ TITLES: dict[Choice, str] = {
     OverlayCorner.TOP_LEFT: "左上", OverlayCorner.TOP_RIGHT: "右上",
     OverlayCorner.BOTTOM_LEFT: "左下", OverlayCorner.BOTTOM_RIGHT: "右下",
     FocusMarkStyle.BOX: "方框（索尼鸟眼对焦）", FocusMarkStyle.BRACKETS: "四角框（追踪框）",
-    FocusMarkColor.GREEN: "绿色", FocusMarkColor.WHITE: "白色", FocusMarkColor.ORANGE: "橙色",
+    FocusMarkColor.GREEN: "绿色", FocusMarkColor.WHITE: "白色", FocusMarkColor.ORANGE: "橙色", FocusMarkColor.BLACK: "黑色",
 }
 
 
@@ -278,11 +279,41 @@ class OverlaySettings(Settings):
 @dataclass
 class FocusMarkSettings(Settings):
     enabled: bool = False
+    showEye: bool = True
+    showHead: bool = False
+    showBody: bool = False
+    blinkBody: bool = False
+    captureFlash: bool = False
+    flashRate: float = 6.0
     style: FocusMarkStyle = FocusMarkStyle.BOX
     color: FocusMarkColor = FocusMarkColor.GREEN
+    eyeColor: FocusMarkColor = FocusMarkColor.GREEN
+    headColor: FocusMarkColor = FocusMarkColor.GREEN
+    bodyColor: FocusMarkColor = FocusMarkColor.GREEN
+    bodySize: float = 1.0
+    captureColor: FocusMarkColor = FocusMarkColor.BLACK
+    captureSize: float = 0.88
     size: float = 1.0
     lineWidth: float = 1.0
     headWhenHidden: bool = True
+
+    @classmethod
+    def from_dict(cls, d):
+        if isinstance(d, dict):
+            d = dict(d)
+            for key in ("eyeColor", "headColor", "bodyColor"):
+                d.setdefault(key, d.get("color", "green"))
+            try:
+                d.setdefault("bodySize", max(1.0, float(d.get("size", 1.0))))
+            except (ValueError, TypeError):
+                d.setdefault("bodySize", 1.0)
+        return super().from_dict(d)
+
+    def color_for(self, target):
+        return {"eye": self.eyeColor, "head": self.headColor, "body": self.bodyColor}[target]
+
+    def flash_on(self, time):
+        return (time * max(1, min(120, self.flashRate))) % 1 < 0.35
 
 
 @dataclass
@@ -308,8 +339,12 @@ class WatermarkSettings(Settings):
 
 
 @dataclass
-class AudioSettings(Settings):
+class AudioTrack(Settings):
     path: str = ""
+    assetID: str = ""
+    timelineStart: float = 0.0
+    duration: float = 0.0
+    muted: bool = False
     startOffset: float = 0.0
     volume: float = 1.0
     fadeIn: float = 0.3
@@ -318,7 +353,58 @@ class AudioSettings(Settings):
 
     @property
     def active(self) -> bool:
-        return bool(self.path) and self.volume > 0.001
+        return not self.muted and bool(self.path or self.assetID) and self.volume > 0.001
+
+    @property
+    def source_path(self):
+        from .sounds import asset_path
+        return asset_path(self.assetID) if self.assetID else self.path
+
+
+@dataclass
+class AudioSettings(AudioTrack):
+    tracks: list[AudioTrack] = field(default_factory=list)
+
+    def to_dict(self):
+        result = super().to_dict()
+        result["tracks"] = [t.to_dict() for t in self.tracks]
+        return result
+
+    @classmethod
+    def from_dict(cls, d):
+        result = super().from_dict(d)
+        raw = d.get("tracks", []) if isinstance(d, dict) else []
+        result.tracks = [AudioTrack.from_dict(t) for t in raw if isinstance(t, dict)] if isinstance(raw, list) else []
+        return result
+
+    @property
+    def arranged_tracks(self):
+        primary = AudioTrack.from_dict(self.to_dict())
+        return [t for t in [primary, *self.tracks] if t.active]
+
+    @property
+    def active(self):
+        return super().active or any(t.active for t in self.tracks)
+
+
+@dataclass
+class Closeup(Settings):
+    frame: int = 0
+    endFrame: int = 0
+    seconds: float = 2.0
+    zoom: float = 1.5
+    centerX: float = 0.5
+    centerY: float = 0.5
+    animatedFrame: bool = True
+    color: FocusMarkColor = FocusMarkColor.WHITE
+    shutterEnabled: bool = True
+    shutterVolume: float = 0.7
+
+    @classmethod
+    def from_dict(cls, d):
+        result = super().from_dict(d)
+        if "shutterEnabled" not in (d or {}):result.shutterEnabled = False
+        return result
 
 
 @dataclass

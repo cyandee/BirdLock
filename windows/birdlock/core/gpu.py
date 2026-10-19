@@ -189,39 +189,40 @@ def _hidden_startupinfo():
     return {}
 
 
-@functools.lru_cache(maxsize=None)
-def encoder_works(name: str) -> bool:
-    """Actually encodes a few frames: a listed encoder may still lack a driver / GPU."""
+@functools.lru_cache(maxsize=64)
+def encoder_works(name: str, w: int = 256, h: int = 256) -> bool:
+    """Actually encodes a few frames at the requested size: a listed encoder may still lack a
+    driver / GPU, or reject large / portrait resolutions (seen with some QSV driver builds)."""
     ff = ffmpeg_path()
     if not ff:
         return False
-    cmd = [ff, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=black:s=256x256:r=30:d=0.2",
-           "-c:v", name, "-f", "null", "-"]
+    cmd = [ff, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+           "-i", f"color=black:s={w}x{h}:r=30:d=0.3", "-c:v", name, "-pix_fmt", "yuv420p", "-f", "null", "-"]
     try:
         return subprocess.run(cmd, capture_output=True, timeout=30, **_hidden_startupinfo()).returncode == 0
     except Exception:
         return False
 
 
-def available_encoder_families() -> list[str]:
+def available_encoder_families(w: int = 256, h: int = 256) -> list[str]:
     fams = []
     order = ["nvenc", "amf", "qsv"] if IS_WINDOWS else ["videotoolbox"] if IS_MAC else ["nvenc", "amf", "qsv"]
     for f in order:
-        if encoder_works(ENCODERS[f]["h264"]):
+        if encoder_works(ENCODERS[f]["h264"], w, h):
             fams.append(f)
     fams.append("software")
     return fams
 
 
-def pick_encoder(codec: str, preference: str = "auto") -> str:
-    """ffmpeg encoder name for codec 'h264' / 'hevc'."""
+def pick_encoder(codec: str, preference: str = "auto", w: int = 256, h: int = 256) -> str:
+    """ffmpeg encoder name for codec 'h264' / 'hevc', validated at the real output size."""
     if preference not in ("auto", "software") and preference in ENCODERS:
         enc = ENCODERS[preference][codec]
-        if encoder_works(enc):
+        if encoder_works(enc, w, h):
             return enc
     if preference == "auto":
-        for fam in available_encoder_families():
+        for fam in available_encoder_families(w, h):
             enc = ENCODERS[fam][codec]
-            if fam == "software" or encoder_works(enc):
+            if fam == "software" or encoder_works(enc, w, h):
                 return enc
     return ENCODERS["software"][codec]

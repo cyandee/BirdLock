@@ -9,6 +9,10 @@ dist/
 *.xcodeproj/xcuserdata
 .swiftpm/
 .DS_Store
+._*
+.venv/
+local-tests/
+local-*.log
 testdata/
 飞鸟连拍合成/
 tools/train/*.log
@@ -23,3 +27,15 @@ __pycache__/
 windows/ffmpeg/
 windows/version_info.txt
 docs/windows/使用说明.html
+
+# Optional aircraft research/integration weights; fixed provenance lives in manifest.json.
+SharedResources/AircraftModels/*.onnx
+SharedResources/AircraftModels/*.part
+
+# Local maintenance snapshots, user uploads and private delivery archives
+.codex-local/
+交付/
+音频文件/
+赞赏/
+SharedResources/AudioArchive/
+SharedResources/Audio/originals/

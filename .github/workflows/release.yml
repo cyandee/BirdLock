@@ -1,0 +1,140 @@
+name: Unified macOS and Windows packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate shared version and tag
+        id: version
+        env:
+          BUILD_REF: ${{ github.ref }}
+          BUILD_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          version = Path('VERSION').read_text().strip()
+          if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+              raise SystemExit('Invalid VERSION')
+          tagged = os.environ['BUILD_REF'].startswith('refs/tags/')
+          tag = os.environ['BUILD_TAG']
+          if tagged and not re.fullmatch('v' + re.escape(version) + r'(-[0-9A-Za-z.-]+)?', tag):
+              raise SystemExit('Tag does not match VERSION')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'version={version}\nprerelease={str(tagged and "-" in tag).lower()}\n')
+          PY
+
+  macos:
+    needs: version
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Core and bundle validation tests
+        run: |
+          swift test
+          python3 -m unittest discover -s scripts/tests
+      - name: Build universal app and DMG
+        run: zsh scripts/make_dmg.sh
+      - name: Verify bundle signature
+        run: codesign --verify --deep --strict dist/BirdLock.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-macos
+          path: dist/BirdLock-*.dmg
+          if-no-files-found: error
+
+  windows:
+    needs: version
+    uses: ./.github/workflows/windows.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  source:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Archive corresponding source at this exact commit
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          git archive --format=zip --prefix="BirdLock-$VERSION-source/" HEAD -o "dist/BirdLock-$VERSION-source.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-source
+          path: dist/BirdLock-*-source.zip
+          if-no-files-found: error
+
+  assemble:
+    needs: [version, macos, windows, source]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          merge-multiple: true
+          path: release-assets
+      - name: Require both platforms and source, then checksum
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, os
+          from pathlib import Path
+          version = os.environ['VERSION']
+          root = Path('release-assets')
+          expected = {f'BirdLock-{version}.dmg', f'BirdLock-{version}-Windows-x64.zip', f'BirdLock-{version}-source.zip'}
+          files = {p.name: p for p in root.iterdir() if p.is_file()}
+          if set(files) != expected or any(p.stat().st_size == 0 for p in files.values()):
+              raise SystemExit('Incomplete or unexpected release assets')
+          checksums = ''.join(f'{hashlib.sha256(files[name].read_bytes()).hexdigest()}  {name}\n' for name in sorted(files))
+          (root/'SHA256SUMS.txt').write_text(checksums)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BirdLock-${{ needs.version.outputs.version }}-all-platforms
+          path: release-assets/*
+          if-no-files-found: error
+
+  draft-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [version, assemble]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: BirdLock-${{ needs.version.outputs.version }}-all-platforms
+          path: release-assets
+      - name: Create one reviewable draft with all assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          flags=(--verify-tag --draft --generate-notes)
+          if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" release-assets/* "${flags[@]}" --title "BirdLock $RELEASE_TAG"

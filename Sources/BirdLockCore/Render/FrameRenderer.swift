@@ -23,6 +23,14 @@ public struct LookSettings: Codable, Hashable, Sendable {
 /// Per-frame RGB gains that remove exposure/white-balance flicker.
 public enum Deflicker {
     public static func gains(_ a: SequenceAnalysis, look: LookSettings) -> [[Double]] {
+        if let clips = a.clips, clips.count > 1 {
+            return clips.flatMap { clip -> [[Double]] in
+                var sub = a
+                let range = clip.start..<(clip.start + clip.count)
+                sub.frames = Array(a.frames[range]); sub.perFrame = Array(a.perFrame[range]); sub.clips = nil
+                return gains(sub, look: look)
+            }
+        }
         let n = a.count
         let ev = pow(2, look.exposureEV)
         guard look.deflicker, n > 2 else { return Array(repeating: [ev, ev, ev], count: n) }

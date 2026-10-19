@@ -4,7 +4,14 @@
 set -e
 ROOT="${0:A:h:h}"
 cd "$ROOT"
-export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+if [ -z "${DEVELOPER_DIR:-}" ] && [ -d /Applications/Xcode.app/Contents/Developer ]; then
+  export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+fi
+EXPECTED_VERSION="$(<VERSION)"
+VERSION="${VERSION:-$EXPECTED_VERSION}"
+[ "$VERSION" = "$EXPECTED_VERSION" ] || { echo "打包版本与 VERSION 不一致" >&2; exit 1; }
+python3 -I scripts/fetch_aircraft_model.py
+python3 -I scripts/verify_bundle.py --aircraft-resources SharedResources/AircraftModels
 
 # UNIVERSAL=1 builds for Apple silicon and Intel (needed when distributing to other Macs)
 ARCH_ARGS=()
@@ -12,10 +19,15 @@ ARCH_ARGS=()
 swift build -c release --product BirdLock "${ARCH_ARGS[@]}"
 BIN="$(swift build -c release "${ARCH_ARGS[@]}" --show-bin-path)/BirdLock"
 
-APP="$ROOT/dist/BirdLock.app"
+APP="${APP_OUTPUT:-$ROOT/dist/BirdLock.app}"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Models"
 cp "$BIN" "$APP/Contents/MacOS/BirdLock"
+chmod 755 "$APP/Contents/MacOS/BirdLock"
+cp VERSION "$APP/Contents/Resources/"
+cp -R SharedResources/Audio "$APP/Contents/Resources/Audio"
+cp -R SharedResources/Support "$APP/Contents/Resources/Support"
+cp -R SharedResources/AircraftModels "$APP/Contents/Resources/AircraftModels"
 cp -R Models/*.mlmodelc "$APP/Contents/Resources/Models/"
 cp Models/*.json "$APP/Contents/Resources/Models/" 2>/dev/null || true
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
@@ -29,7 +41,6 @@ HTML2PDF="$ROOT/.build/html2pdf"
 [ "$HTML2PDF" -nt scripts/html2pdf.swift ] || swiftc -O scripts/html2pdf.swift -o "$HTML2PDF"
 "$HTML2PDF" "$DOCS/使用说明.html" "$DOCS/使用说明.pdf" >/dev/null
 
-VERSION="${VERSION:-1.0}"
 BUILD="$(date +%Y%m%d%H%M)"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -69,4 +80,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 
 codesign --force --deep --sign - "$APP" >/dev/null
+VERIFY_ARGS=()
+[ "${UNIVERSAL:-0}" = "1" ] && VERIFY_ARGS=(--universal)
+python3 -I scripts/verify_bundle.py "$APP" --version "$VERSION" "${VERIFY_ARGS[@]}"
 echo "✅ 已生成 $APP"

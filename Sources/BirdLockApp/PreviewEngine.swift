@@ -137,7 +137,8 @@ final class PreviewEngine: @unchecked Sendable {
         if fullResolution {
             let f = job.analysis.frames[frame.a]
             let proxyScale = Double(job.analysis.proxyLongSide) / Double(max(f.pixelWidth, f.pixelHeight))
-            let needed = min(1, max(job.plan.xforms[frame.a].z, job.plan.xforms[frame.b].z) * scale * 1.2)
+            let zoom = frame.closeup >= 0 ? (job.analysis.closeups?[frame.closeup].zoom ?? 1) : 1
+            let needed = min(1, max(job.plan.xforms[frame.a].z, job.plan.xforms[frame.b].z) * scale * zoom * 1.2)
             guard needed > proxyScale * 1.05 else { return }
             let s = decodeScale(needed: needed)
             hiRes.submit { [weak self] in

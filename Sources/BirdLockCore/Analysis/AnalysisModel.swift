@@ -1,6 +1,12 @@
 import Foundation
 import CoreGraphics
 
+public enum AnalysisSubject: String, Codable, CaseIterable, Sendable, Identifiable {
+    case bird, aircraft
+    public var id: String { rawValue }
+    public var title: String { self == .bird ? "鸟类" : "飞机" }
+}
+
 public struct BoxD: Codable, Hashable, Sendable {
     public var x: Double, y: Double, w: Double, h: Double, score: Double
     public init(_ d: Detection) { x = d.x; y = d.y; w = d.w; h = d.h; score = d.score }
@@ -27,6 +33,7 @@ public struct FrameAnalysis: Codable, Sendable {
     public var bgLinear: [Double] = [0, 0, 0]  // mean linear RGB of background
     public var sharpness: Double? = nil
     public var link: RegistrationLink? = nil
+    public var aircraft: AircraftFrameObservation? = nil
 
     public init(index: Int) { self.index = index }
     public var targetBox: BoxD? { target.flatMap { $0 < birds.count ? birds[$0] : nil } }
@@ -65,6 +72,22 @@ public struct SequenceAnalysis: Codable, Sendable {
     /// User edits
     public var manualEye: [Int: V2] = [:]
     public var excluded: Set<Int> = []
+    public var clips: [BurstClip]? = nil
+    public var closeups: [Closeup]? = nil
+    /// Older caches selected a target across cuts; rebuild those raw observations once, preserving edits.
+    public var groupedDetection: Bool? = nil
+    public var subject: AnalysisSubject? = nil
+    public var modelIdentity: String? = nil
+
+    public var analysisSubject: AnalysisSubject { subject ?? .bird }
+
+    public init(fingerprint: String, frames: [SourceFrame], fps: Double, proxyLongSide: Int,
+                perFrame: [FrameAnalysis], poseSchema: PoseSchema, track: Track? = nil,
+                subject: AnalysisSubject? = nil, modelIdentity: String? = nil) {
+        self.fingerprint = fingerprint; self.frames = frames; self.fps = fps; self.proxyLongSide = proxyLongSide
+        self.perFrame = perFrame; self.poseSchema = poseSchema; self.track = track
+        self.subject = subject; self.modelIdentity = modelIdentity
+    }
 
     public var count: Int { frames.count }
 }

@@ -90,6 +90,13 @@ class YOLOModel:
                 return i
         return 14 if self.num_classes == 80 else 0
 
+    @property
+    def airplane_class(self) -> int | None:
+        for i, name in enumerate(self.class_names):
+            if name.lower() == "airplane":
+                return i
+        return 4 if self.num_classes == 80 else None
+
     def _letterbox(self, img: np.ndarray, region: tuple[float, float, float, float]):
         """Crop `region` (x, y, w, h; may exceed the image) and fit it into a gray square input."""
         S = self.input_size

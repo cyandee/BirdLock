@@ -1,5 +1,6 @@
 """Colours and the dark style (mirrors the macOS app's Theme)."""
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import QColor, QPalette, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QApplication
 
 CANVAS = QColor(19, 20, 22)
@@ -52,7 +53,14 @@ QComboBox QAbstractItemView {{ background: #2a2b2f; border: 1px solid #3a3b40; s
 QSlider::groove:horizontal {{ height: 4px; background: rgba(255,255,255,0.12); border-radius: 2px; }}
 QSlider::sub-page:horizontal {{ background: {hexa(ACCENT)}; border-radius: 2px; }}
 QSlider::handle:horizontal {{ background: #e8e8ea; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px; }}
-QCheckBox::indicator {{ width: 15px; height: 15px; }}
+QCheckBox::indicator, QRadioButton::indicator {{ width: 16px; height: 16px; border: 1px solid rgba(255,255,255,0.45);
+    background: rgba(255,255,255,0.07); }}
+QCheckBox::indicator {{ border-radius: 4px; }}
+QRadioButton::indicator {{ border-radius: 8px; }}
+QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: rgba(255,255,255,0.75);
+    background: rgba(255,255,255,0.14); }}
+QCheckBox::indicator:checked, QRadioButton::indicator:checked {{ border-color: {hexa(ACCENT)};
+    background: {hexa(ACCENT, 0.30)}; }}
 QTabBar::tab {{ background: transparent; padding: 6px 18px; border-radius: 6px; margin: 2px; }}
 QTabBar::tab:selected {{ background: rgba(255,255,255,0.12); }}
 QTabWidget::pane {{ border: none; }}
@@ -68,6 +76,31 @@ QMenu::item:selected {{ background: {hexa(ACCENT, 0.35)}; }}
 QToolTip {{ background: #2a2b2f; color: #eee; border: 1px solid #444; padding: 4px; }}
 QStatusBar {{ background: {hexa(PANEL)}; color: {hexa(SECONDARY)}; }}
 """
+
+
+def _check_image() -> str | None:
+    """Small dark tick drawn on the amber checked indicator (rendered once into the data folder)."""
+    try:
+        from ..core.paths import data_dir
+        d = data_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / "check.png"
+        if not p.exists():
+            pm = QPixmap(12, 12)
+            pm.fill(Qt.transparent)
+            pt = QPainter(pm)
+            pt.setRenderHint(QPainter.Antialiasing)
+            pen = QPen(QColor("#161616"), 2.2)
+            pen.setCapStyle(Qt.RoundCap)
+            pen.setJoinStyle(Qt.RoundJoin)
+            pt.setPen(pen)
+            pt.drawPolyline([QPointF(2.2, 6.6), QPointF(5.0, 9.4), QPointF(9.8, 2.6)])
+            pt.end()
+            if not pm.save(str(p)):
+                return None
+        return str(p).replace("\\", "/")
+    except Exception:
+        return None
 
 
 def apply(app: QApplication):
@@ -86,4 +119,9 @@ def apply(app: QApplication):
     p.setColor(QPalette.ToolTipText, TEXT)
     p.setColor(QPalette.PlaceholderText, TERTIARY)
     app.setPalette(p)
-    app.setStyleSheet(STYLE)
+    tick = _check_image()
+    extra = ""
+    if tick:
+        extra = (f"QCheckBox::indicator:checked {{ image: url({tick}); }}"
+                 f"QRadioButton::indicator:checked {{ image: url({tick}); }}")
+    app.setStyleSheet(STYLE + extra)

@@ -5,11 +5,11 @@ import math
 import os
 import threading
 
-from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDoubleValidator, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QGridLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QTabBar,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QGridLayout,
+                               QHBoxLayout, QLabel, QLayout, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QSlider,
+                               QSpinBox, QStackedWidget, QTabBar, QVBoxLayout, QWidget)
 
 from . import theme
 from .timeline import fmt_time
@@ -71,10 +71,23 @@ class Tab(QScrollArea):
         self.v = QVBoxLayout(body)
         self.v.setContentsMargins(10, 10, 10, 10)
         self.v.setSpacing(10)
+        # Never let the content's minimum width grow the body beyond the viewport: by default the
+        # body reports the layout's minimum-size-hint (~360 px > the 330 px panel), so it overflows
+        # and every row gets clipped on the right. A tiny explicit minimum (>0, so it overrides the
+        # hint) plus an Ignored horizontal policy lets the scroll area shrink the body to the panel.
+        self.v.setSizeConstraint(QLayout.SetNoConstraint)
+        body.setMinimumWidth(1)
+        body.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.setWidget(body)
         self.b = Bindings()
 
     # ---- control factories (all bound to the state)
+
+    def bound_text(self, widget, text):
+        if callable(text):
+            widget.setText(text())
+            self.b.add(lambda: widget.setText(text()))
+        return widget
 
     def slider(self, card: Card, title, get, set_, lo, hi, fmt, log=False, step=None, tip=None, topic="settings"):
         box = QWidget()
@@ -82,7 +95,7 @@ class Tab(QScrollArea):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(2)
         h = QHBoxLayout()
-        t = QLabel(title)
+        t = self.bound_text(QLabel(title if isinstance(title,str) else title()),title)
         val = QLabel()
         val.setObjectName("value")
         h.addWidget(t)
@@ -134,7 +147,11 @@ class Tab(QScrollArea):
     def combo(self, card: Card | None, label, items, get, set_, topic="settings", tip=None):
         """items: [(title, value)]"""
         c = QComboBox()
-        for title, value in items:
+        c.setMinimumWidth(0)               # long entries must not force the panel wider
+        c.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        c.setMinimumContentsLength(4)
+        dynamic_items = items if callable(items) else None
+        for title, value in (items() if dynamic_items else items):
             c.addItem(title, value)
         if tip:
             c.setToolTip(tip)
@@ -151,6 +168,12 @@ class Tab(QScrollArea):
         c.currentIndexChanged.connect(changed)
 
         def refresh():
+            if dynamic_items:
+                values = dynamic_items()
+                if [(c.itemText(k),c.itemData(k)) for k in range(c.count())] != values:
+                    c.blockSignals(True);c.clear()
+                    for title,value in values:c.addItem(title,value)
+                    c.blockSignals(False)
             v = get()
             for k in range(c.count()):
                 if c.itemData(k) == v:
@@ -164,7 +187,7 @@ class Tab(QScrollArea):
             roww = QWidget()
             row = QHBoxLayout(roww)
             row.setContentsMargins(0, 0, 0, 0)
-            l = QLabel(label)
+            l = self.bound_text(QLabel(label if isinstance(label,str) else label()),label)
             l.setObjectName("caption")
             l.setFixedWidth(52)
             row.addWidget(l)
@@ -174,7 +197,8 @@ class Tab(QScrollArea):
         return c
 
     def check(self, card: Card, text, get, set_, topic="settings", tip=None):
-        cb = QCheckBox(text)
+        cb = self.bound_text(QCheckBox(text if isinstance(text,str) else text()),text)
+        cb.setMinimumWidth(0)              # long labels must not force the panel wider
         if tip:
             cb.setToolTip(tip)
 
@@ -278,23 +302,27 @@ class ComposeTab(Tab):
         grid = QGridLayout()
         grid.setSpacing(6)
         self.preset_btns = []
-        for k, pr in enumerate(PRESETS):
+        for k, pr in enumerate(st.presets):
             b = QPushButton(pr.name)
             b.setObjectName("chip")
             b.setCheckable(True)
             b.setToolTip(pr.detail)
-            b.clicked.connect(lambda _=False, pr=pr: st.apply_preset(pr))
+            b.clicked.connect(lambda _=False, k=k: st.apply_preset(st.presets[k]))
             grid.addWidget(b, k // 3, k % 3)
             self.preset_btns.append((b, pr))
         card.add(grid)
-        self.b.add(lambda: [b.setChecked(st.is_preset_active(pr)) for b, pr in self.preset_btns])
+        def refresh_presets():
+            for k,(button,_) in enumerate(self.preset_btns):
+                preset = st.presets[k]
+                button.setText(preset.name);button.setToolTip(preset.detail);button.setChecked(st.is_preset_active(preset))
+        self.b.add(refresh_presets)
         self.v.addWidget(card)
 
         card = Card("锁定", "◎")
-        self.combo(card, "锁定点", [(x.title, x) for x in LockPoint], lambda: c().lockPoint, lambda v: setattr(c(), "lockPoint", v))
+        self.combo(card, "锁定点", lambda: [("机头",LockPoint.HEAD_CENTER)] if st.is_aircraft else [(x.title,x) for x in LockPoint], lambda: c().lockPoint, lambda v: setattr(c(), "lockPoint", v))
         self.slider(card, "跟随方式", lambda: c().followSoftness, lambda v: setattr(c(), "followSoftness", v), 0, 1,
                     lambda v: "硬锁定" if v < 0.02 else f"柔和 {v * 100:.0f}%",
-                    tip="0 = 鸟眼钉死在画面一点；往右拉，镜头像摄像机一样柔和跟随，鸟在画面中轻微浮动")
+                    tip="0 = 锁定点固定在画面一点；往右拉，镜头像摄像机一样柔和跟随，主体在画面中轻微浮动")
         self.v.addWidget(card)
 
         card = Card("画面位置", "⌖")
@@ -302,9 +330,9 @@ class ComposeTab(Tab):
         self.pad = AnchorPad(st)
         row.addWidget(self.pad)
         col = QVBoxLayout()
-        col.addWidget(caption("拖动小圆点，设置鸟眼在成片中的位置。也可以在「原图+识别」里直接拖动取景框。"))
+        col.addWidget(caption("拖动小圆点，设置锁定点在成片中的位置。也可以在「原图+识别」里直接拖动取景框。"))
         lead = QCheckBox("飞行方向自动留白")
-        lead.setToolTip("鸟朝左飞时自动镜像水平位置，让鸟的前方留出空间")
+        lead.setToolTip("主体朝左飞时自动镜像水平位置，让主体的前方留出空间")
         lead.toggled.connect(lambda on: (setattr(c(), "autoLeadRoom", on), st.settings_changed()))
         self.b.add(lambda: (lead.blockSignals(True), lead.setChecked(c().autoLeadRoom), lead.blockSignals(False)))
         col.addWidget(lead)
@@ -345,8 +373,8 @@ class ComposeTab(Tab):
         minus, plus = QPushButton("−"), QPushButton("+")
         for bt in (minus, plus):
             bt.setFixedWidth(28)
-        minus.setToolTip("收紧取景（鸟更大）")
-        plus.setToolTip("放宽取景（鸟更小）")
+        minus.setToolTip("收紧取景（主体更大）")
+        plus.setToolTip("放宽取景（主体更小）")
         sl = QSlider(Qt.Horizontal)
         sl.setRange(0, 1000)
         lo, hi = math.log(FRAMING_RANGE[0]), math.log(FRAMING_RANGE[1])
@@ -372,7 +400,7 @@ class ComposeTab(Tab):
                 w.blockSignals(False)
         self.b.add(ref_framing)
         brow = QHBoxLayout()
-        brow.addWidget(caption("鸟更大"))
+        brow.addWidget(caption("主体更大"))
         brow.addStretch(1)
         full = QPushButton("用满原图")
         full.setObjectName("link")
@@ -380,25 +408,25 @@ class ComposeTab(Tab):
         full.clicked.connect(lambda: (setattr(c(), "framing", FRAMING_RANGE[1]), st.settings_changed()))
         brow.addWidget(full)
         brow.addStretch(1)
-        brow.addWidget(caption("鸟更小"))
+        brow.addWidget(caption("主体更小"))
         card.add(brow)
         self.status(card, lambda: (f"已到原图大小上限（{st.job.plan.image_limited_frames} 帧），再放宽不会更广", "caption")
                     if st.job and st.job.plan.image_limited_frames > 0 and c().edgeFill == EdgeFill.SHIFT else None)
         self.combo(card, "大小", [(x.title, x) for x in SizeMode], lambda: c().sizeMode, lambda v: setattr(c(), "sizeMode", v))
         sm = self.slider(card, "大小平滑", lambda: c().sizeSmoothing, lambda v: setattr(c(), "sizeSmoothing", v), 2, 60,
-                         lambda v: f"{v:.0f} 帧", tip="越大，鸟的大小变化越平缓")
+                         lambda v: f"{v:.0f} 帧", tip="越大，主体大小变化越平缓")
         self.visible_when(sm, lambda: c().sizeMode == SizeMode.LOCK_SIZE)
         self.v.addWidget(card)
 
         card = Card("画面边缘", "▭")
         self.combo(card, "越界时", [(x.title, x) for x in EdgeFill], lambda: c().edgeFill, lambda v: setattr(c(), "edgeFill", v))
-        expl = caption("鸟飞到原图边缘时，取景框在原图内平移，尽量用满原图像素；鸟会暂时离开锁定点，但不会贴边。")
+        expl = caption("主体到原图边缘时，取景框在原图内平移，尽量用满原图像素；主体会暂时离开锁定点，但不会贴边。")
         card.add(expl)
-        m1 = self.slider(card, "鸟眼离画面边缘至少", lambda: c().edgeMargin, lambda v: setattr(c(), "edgeMargin", v), 0, 0.3,
-                         lambda v: f"{v * 100:.0f}%", tip="取景框平移后，鸟眼与成片边缘保持的最小距离")
+        m1 = self.slider(card, "锁定点离画面边缘至少", lambda: c().edgeMargin, lambda v: setattr(c(), "edgeMargin", v), 0, 0.3,
+                         lambda v: f"{v * 100:.0f}%", tip="取景框平移后，锁定点与成片边缘保持的最小距离")
         m2 = self.slider(card, "为此最多放大", lambda: c().maxEdgeZoom, lambda v: setattr(c(), "maxEdgeZoom", v), 1, 3,
                          lambda v: "不放大" if v < 1.01 else f"{v:.1f}×",
-                         tip="鸟太靠近原图边缘时，允许稍微放大来保持上面的距离。设为「不放大」则只平移")
+                         tip="主体太靠近原图边缘时，允许稍微放大来保持上面的距离。设为「不放大」则只平移")
         for w in (expl, m1, m2):
             self.visible_when(w, lambda: c().edgeFill == EdgeFill.SHIFT)
 
@@ -407,7 +435,7 @@ class ComposeTab(Tab):
                 return None
             pl = st.job.plan
             if c().edgeFill == EdgeFill.SHIFT and pl.shifted_frames:
-                return (f"✓ {pl.shifted_frames} 帧鸟靠近原图边缘，已平移取景" + (f"（{pl.zoomed_frames} 帧略微放大）" if pl.zoomed_frames else ""), "ok")
+                return (f"✓ {pl.shifted_frames} 帧主体靠近原图边缘，已平移取景" + (f"（{pl.zoomed_frames} 帧略微放大）" if pl.zoomed_frames else ""), "ok")
             if c().edgeFill == EdgeFill.AUTO_ZOOM and pl.zoomed_frames:
                 return (f"{pl.zoomed_frames} 帧放大以避免越界", "warn")
             if c().edgeFill in (EdgeFill.BLUR_EXTEND, EdgeFill.BLACK) and pl.out_of_bounds_frames:
@@ -445,12 +473,12 @@ class LookTab(Tab):
 
         card = Card("选帧", "🎞")
         self.check(card, "跳过模糊帧", lambda: S().dropBlurry, lambda v: setattr(S(), "dropBlurry", v),
-                   tip="按鸟头区域的清晰度自动跳过失焦、拖影的帧")
+                   tip="按锁定区域的清晰度自动跳过失焦、拖影的帧")
         th = self.slider(card, "模糊判定", lambda: S().blurThreshold, lambda v: setattr(S(), "blurThreshold", v), 0.2, 0.95,
                          lambda v: f"低于中位数 {v * 100:.0f}%")
         self.visible_when(th, lambda: S().dropBlurry)
         self.status(card, lambda: (f"将跳过 {st.job.status.count('blurry')} 帧", "caption") if S().dropBlurry and st.job else None)
-        self.check(card, "跳过未识别到鸟的帧", lambda: S().dropUntracked, lambda v: setattr(S(), "dropUntracked", v))
+        self.check(card, lambda: "跳过未定位机头的帧" if st.is_aircraft else "跳过未识别到鸟的帧", lambda: S().dropUntracked, lambda v: setattr(S(), "dropUntracked", v))
         ex_row = QHBoxLayout()
         ex_lbl = caption("")
         ex_btn = QPushButton("全部恢复")
@@ -469,8 +497,8 @@ class LookTab(Tab):
         self.v.addWidget(card)
 
         card = Card("识别与修正", "🐦")
-        self.status(card, lambda: (f"识别到鸟：{int(st.analysis.track.has_data.sum())}/{st.analysis.count} 帧，其中鸟眼可见 "
-                                   f"{int(st.analysis.track.eye_visible.sum())} 帧", "caption")
+        self.status(card, lambda: ((f"机头已定位：{int(st.analysis.track.has_data.sum())}/{st.analysis.count} 帧" if st.is_aircraft else f"识别到鸟：{int(st.analysis.track.has_data.sum())}/{st.analysis.count} 帧，其中鸟眼可见 "
+                                   f"{int(st.analysis.track.eye_visible.sum())} 帧"), "caption")
                     if st.analysis and st.analysis.track is not None else None)
         pr_row = QHBoxLayout()
         pr_lbl = caption("", "warn")
@@ -493,15 +521,18 @@ class LookTab(Tab):
 
         def ref_fix():
             n = len(st.predicted_frames)
-            pr_w.setVisible(n > 0)
+            pr_w.setVisible(n > 0 and not st.is_aircraft)
             pr_lbl.setText(f"{n} 帧鸟眼被遮挡，位置为推算")
             m = len(st.analysis.manualEye) if st.analysis else 0
             man_w.setVisible(m > 0)
             man_lbl.setText(f"手动修正 {m} 帧")
         self.b.add(ref_fix)
-        card.add(caption("修正方法：切换到「原图+识别」，点「修正鸟眼」，在鸟眼的准确位置点击（或直接拖动圆圈）。前后帧会自动重新计算。"))
+        note = caption("")
+        self.b.add(lambda: note.setText("飞机识别为试验功能，复杂视角可能误定位。请逐帧检查；切到「原图+识别」，点「修正机头」后标记当前帧机头。" if st.is_aircraft else "修正方法：切换到「原图+识别」，点「修正鸟眼」，在鸟眼的准确位置点击（或拖动圆圈）。前后帧会自动重新计算。"))
+        card.add(note)
         row = QHBoxLayout()
         b1, b2 = QPushButton("修正鸟眼"), QPushButton("重新识别")
+        self.b.add(lambda: b1.setText("修正机头" if st.is_aircraft else "修正鸟眼"))
         b1.clicked.connect(st.start_fixing_eye)
         b2.clicked.connect(lambda: st.start_analysis(fresh=True))
         row.addWidget(b1)
@@ -598,11 +629,16 @@ class OutputTab(Tab):
 
         self.v.addWidget(self._hardware_card())
         self.v.addWidget(self._focus_card())
+        from .project_editor import ProjectEditor, MusicCueCard
+        self.v.addWidget(ProjectEditor(self.state))
         self.v.addWidget(self._music_card(choose_audio))
+        self.v.addWidget(MusicCueCard(self.state))
+        from .audio_tracks import AudioTracksCard
+        self.v.addWidget(AudioTracksCard(self.state))
         self.v.addWidget(self._watermark_card(choose_watermark))
 
         card = Card("文字水印", "T")
-        self.check(card, "显示拍摄参数（机身/镜头/快门/光圈/ISO）", lambda: E().overlay.showExif, lambda v: setattr(E().overlay, "showExif", v))
+        self.check(card, "显示拍摄参数（快门/光圈/ISO 等）", lambda: E().overlay.showExif, lambda v: setattr(E().overlay, "showExif", v))
         pf = self.check(card, "逐帧显示参数", lambda: E().overlay.exifPerFrame, lambda v: setattr(E().overlay, "exifPerFrame", v))
         self.visible_when(pf, lambda: E().overlay.showExif)
         txt = QLineEdit()
@@ -642,7 +678,7 @@ class OutputTab(Tab):
         row.addWidget(dev, 1)
         card.add(row)
         self.status(card, lambda: (f"当前：{st.device_text}", "caption") if st.device_text else ("下次识别时加载到所选设备", "caption"))
-        cl = QCheckBox("图像缩放 / 变换用显卡（OpenCL）")
+        cl = QCheckBox("图像缩放用显卡（OpenCL）")
         cl.setToolTip("渲染和导出时用显卡做重采样。个别显卡驱动有问题时可以关掉")
         cl.toggled.connect(st.set_gpu_image)
         self.b.add(lambda: (cl.blockSignals(True), cl.setChecked(st.gpu_image), cl.blockSignals(False)))
@@ -669,7 +705,8 @@ class OutputTab(Tab):
         self.b.add(ref_enc)
 
         def detect():
-            fams = gpu.available_encoder_families()
+            W, H = st.export.output_size
+            fams = gpu.available_encoder_families(W, H)
 
             def done():
                 for f in fams:
@@ -686,21 +723,39 @@ class OutputTab(Tab):
         Fm = lambda: st.export.focusMark   # noqa: E731
         card = Card("对焦框", "⌗")
         self.check(card, "在成片里显示对焦点", lambda: Fm().enabled, lambda v: setattr(Fm(), "enabled", v),
-                   tip="像索尼相机的鸟眼对焦一样，在鸟眼上画一个对焦框，让观众始终看到焦点在哪里")
+                   tip="模拟相机对焦，在锁定位置绘制对焦框，让观众看到焦点")
         box = QWidget()
         v = QVBoxLayout(box)
         v.setContentsMargins(0, 0, 0, 0)
         sub = Card("")
         sub.setStyleSheet("QFrame#card { background: transparent; border: none; }")
         sub.lay.setContentsMargins(0, 0, 0, 0)
+        eye = self.check(sub, "鸟眼框", lambda: Fm().showEye, lambda vv: setattr(Fm(), "showEye", vv))
+        self.visible_when(eye,lambda: not st.is_aircraft)
+        self.check(sub, lambda: "机头框" if st.is_aircraft else "鸟头框", lambda: Fm().showHead, lambda vv: setattr(Fm(), "showHead", vv))
+        self.check(sub, lambda: "机身框（含机翼）" if st.is_aircraft else "鸟身框（含展开的翅膀）", lambda: Fm().showBody, lambda vv: setattr(Fm(), "showBody", vv))
+        self.check(sub, lambda: "机身框闪烁" if st.is_aircraft else "鸟身框闪烁", lambda: Fm().blinkBody, lambda vv: setattr(Fm(), "blinkBody", vv))
         self.combo(sub, "样式", [(x.title, x) for x in FocusMarkStyle], lambda: Fm().style, lambda vv: setattr(Fm(), "style", vv))
-        self.combo(sub, "颜色", [(x.title, x) for x in FocusMarkColor], lambda: Fm().color, lambda vv: setattr(Fm(), "color", vv))
-        self.slider(sub, "大小", lambda: Fm().size, lambda vv: setattr(Fm(), "size", vv), 0.5, 2.5, lambda x: f"{x:.1f}×")
+        for label, key in [("鸟眼颜色", "eyeColor"), ("鸟头颜色", "headColor"), ("鸟身颜色", "bodyColor")]:
+            color = self.combo(sub, lambda k=key,l=label: ({"headColor":"机头颜色","bodyColor":"机身颜色"}.get(k,l) if st.is_aircraft else l), [(x.title, x) for x in FocusMarkColor], lambda k=key: getattr(Fm(), k), lambda vv, k=key: setattr(Fm(), k, vv))
+            if key == "eyeColor":self.visible_when(color.row,lambda: not st.is_aircraft)
+        self.slider(sub, lambda: "机身框大小" if st.is_aircraft else "鸟身框大小", lambda: Fm().bodySize, lambda vv: setattr(Fm(), "bodySize", vv), 0.5, 2.5, lambda x: f"{x:.1f}×")
+        self.slider(sub, lambda: "机头框大小" if st.is_aircraft else "眼/头框大小", lambda: Fm().size, lambda vv: setattr(Fm(), "size", vv), 0.5, 2.5, lambda x: f"{x:.1f}×")
         self.slider(sub, "线宽", lambda: Fm().lineWidth, lambda vv: setattr(Fm(), "lineWidth", vv), 0.5, 3, lambda x: f"{x:.1f}×")
-        self.check(sub, "鸟眼被遮挡时框住鸟头", lambda: Fm().headWhenHidden, lambda vv: setattr(Fm(), "headWhenHidden", vv))
+        hidden = self.check(sub, "鸟眼被遮挡时框住鸟头", lambda: Fm().headWhenHidden, lambda vv: setattr(Fm(), "headWhenHidden", vv))
+        self.visible_when(hidden,lambda: not st.is_aircraft)
         v.addWidget(sub)
         card.add(box)
         self.visible_when(box, lambda: Fm().enabled)
+        self.check(card, "快门闪烁边框", lambda: Fm().captureFlash, lambda vv: setattr(Fm(), "captureFlash", vv))
+        color = self.combo(card, "边框颜色", [(x.title, x) for x in FocusMarkColor], lambda: Fm().captureColor, lambda vv: setattr(Fm(), "captureColor", vv))
+        size = self.slider(card, "边框大小", lambda: Fm().captureSize, lambda vv: setattr(Fm(), "captureSize", vv), 0.25, 0.98, lambda x: f"{x * 100:.0f}%")
+        self.visible_when(color, lambda: Fm().captureFlash)
+        self.visible_when(size, lambda: Fm().captureFlash)
+        rate = self.slider(card, "闪烁频率", lambda: Fm().flashRate, lambda vv: setattr(Fm(), "flashRate", vv),
+                           1, 120, lambda x: f"{x:.0f} 次/秒", step=1)
+        self.visible_when(rate, lambda: Fm().captureFlash or Fm().blinkBody)
+        card.add(caption("视频帧率应至少为闪烁频率的 2 倍；过高频率可能显示为静止或较慢闪烁。"))
         return card
 
     def _music_card(self, choose_audio) -> Card:
@@ -873,8 +928,12 @@ class Inspector(QWidget):
             self.tabbar.addTab(t)
         v.addWidget(self.tabbar)
         self.tabs = [ComposeTab(state), LookTab(state), OutputTab(state, choose_audio, choose_watermark)]
+        # QStackedWidget manages show/hide + re-layout of the pages; plain setVisible leaves
+        # scroll-area geometry stale when switching back (overlapping controls)
+        self.stack = QStackedWidget()
         for t in self.tabs:
-            v.addWidget(t, 1)
+            self.stack.addWidget(t)
+        v.addWidget(self.stack, 1)
         self.tabbar.currentChanged.connect(self._tab)
         foot = QFrame()
         foot.setObjectName("panel")
@@ -899,10 +958,20 @@ class Inspector(QWidget):
         self.refresh()
 
     def _tab(self, k):
-        for i, t in enumerate(self.tabs):
-            t.setVisible(i == k)
+        self.stack.setCurrentIndex(k)
+        cur = self.tabs[k]
         self.state.inspector_tab = k
         self.state.save_settings()
+        # QScrollArea's widgetResizable stops tracking after a page is hidden/shown: the body
+        # keeps its sizeHint width and overflows. Force it back to the viewport width once shown.
+        QTimer.singleShot(0, lambda: self._relayout_tab(cur))
+
+    @staticmethod
+    def _relayout_tab(cur: "Tab"):
+        vp = cur.viewport()
+        w = cur.widget()
+        if vp.width() > 0 and w.width() != vp.width():
+            w.resize(vp.width(), w.height())
 
     def _changed(self, topic):
         if topic in ("frame", "preview", "source", "progress", "playing", "zoom"):
@@ -916,5 +985,5 @@ class Inspector(QWidget):
         if job:
             W, H = job.output_size
             self.sum1.setText(f"{W}×{H} · {job.export.outputFPS:g} fps · {job.duration:.1f} 秒")
-            extra = (" · ♪" if self.state.audio.active else "") + (" · 水印" if self.state.watermark.active else "")
+            extra = (" · ♪" if (self.state.job.mixed_audio(self.state.audio).active if self.state.job else self.state.audio.active) else "") + (" · 水印" if self.state.watermark.active else "")
             self.sum2.setText(job.export.codec.title.split("（")[0] + extra)

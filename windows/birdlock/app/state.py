@@ -16,6 +16,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -28,7 +29,11 @@ from ..core.log import log
 from ..core.analysis import Analyzer, Cancelled, ProxyCache, SequenceAnalysis, build_track, fingerprint
 from ..core.exporter import ExportCancelled, VideoExporter, audio_overview, render_audio_preview
 from ..core.models import BirdModels
-from ..core.paths import IS_MAC, IS_WINDOWS, data_dir
+from ..core.models import YOLOModel
+from ..core.paths import IS_MAC, IS_WINDOWS, data_dir, models_dir
+from ..core.aircraft import model_directory
+from ..core.aircraft_analysis import AircraftAnalyzer, analysis_identity
+from ..core.subjects import SubjectProfile, presets as subject_presets
 from ..core.render import OutputFrame, RenderJob
 from ..core.settings import (FRAMING_RANGE, PRESETS, AudioSettings, Composition, EdgeFill, ExportSettings, FrameSelection,
                              LookSettings, WatermarkSettings)
@@ -68,23 +73,38 @@ class LatestOnly:
     def __init__(self, name: str):
         self._cv = threading.Condition()
         self._job = None
-        threading.Thread(target=self._run, name=name, daemon=True).start()
+        self._closed = False
+        self._thread = threading.Thread(target=self._run, name=name, daemon=True)
+        self._thread.start()
 
     def submit(self, fn):
         with self._cv:
+            if self._closed:
+                return
             self._job = fn
             self._cv.notify()
+
+    def close(self):
+        with self._cv:
+            self._closed = True
+            self._job = None
+            self._cv.notify_all()
 
     def _run(self):
         while True:
             with self._cv:
-                while self._job is None:
+                while self._job is None and not self._closed:
                     self._cv.wait()
+                if self._closed:
+                    return
                 fn, self._job = self._job, None
             try:
                 fn()
             except Exception as e:  # keep the worker alive
-                print("preview error:", e, file=sys.stderr)
+                try:
+                    print("preview error:", e, file=sys.stderr)
+                except Exception:
+                    pass                # windowed builds may have no stdout/stderr
 
 
 class PreviewEngine:
@@ -94,6 +114,7 @@ class PreviewEngine:
     def __init__(self):
         self.fast = LatestOnly("preview")
         self.sharp = LatestOnly("preview-hires")
+        self._prefetch = LatestOnly("prefetch")   # one worker instead of a new thread per tick
         self._lock = threading.Lock()
         self._proxies: collections.OrderedDict = collections.OrderedDict()
         self._originals: collections.OrderedDict = collections.OrderedDict()
@@ -140,7 +161,7 @@ class PreviewEngine:
         def run():
             for i in idx:
                 self.proxy(job, i)
-        threading.Thread(target=run, daemon=True).start()
+        self._prefetch.submit(run)
 
 
 class AppState(QObject):
@@ -149,16 +170,20 @@ class AppState(QObject):
 
     def __init__(self):
         super().__init__()
+        self._closing = False
         self._main.connect(lambda fn: fn())
         # input
         self.frames: list = []
         self.segments: list = []
         self.segment_index = 0
+        self.merge_group_indices = []
+        self._group_orders = {}
         self.phase = "empty"            # empty | importing | analyzing | ready | failed
         self.stage = ""
         self.stage_progress = 0.0
         self.analysis_started = time.time()
         self.message = ""
+        self.timeline_message = ""
         self.analysis: SequenceAnalysis | None = None
         # settings
         self.composition = Composition()
@@ -166,6 +191,9 @@ class AppState(QObject):
         self.export = ExportSettings()
         self.selection = FrameSelection()
         self.preset_id: str | None = "lead"
+        self.subject = "bird"
+        self._subject_profiles = {}
+        self._subject_rollback = None
         self.audio = AudioSettings()
         self.watermark = WatermarkSettings()
         self.device = "auto"            # auto | cpu | gpu:<index>
@@ -174,6 +202,7 @@ class AppState(QObject):
         # music & watermark
         self.audio_overview: tuple[float, np.ndarray] | None = None
         self.audio_message = ""
+        self.music_cues = []
         self.preview_audio = True
         self.watermark_qimage: QImage | None = None
         # preview
@@ -205,7 +234,9 @@ class AppState(QObject):
         self._job_gen = 0
         self._rebuild_timer = QTimer(singleShot=True, interval=60, timeout=self._rebuild_now)
         self._save_timer = QTimer(singleShot=True, interval=400, timeout=self._save_settings_now)
+        self._audio_rebuild_timer = QTimer(singleShot=True, interval=150, timeout=self._restart_audio)
         self._analysis_save_timer = QTimer(singleShot=True, interval=1000, timeout=self._save_analysis_now)
+        self._analysis_save_lock = threading.Lock()
         self._hires_timer = QTimer(singleShot=True, interval=300, timeout=self._render_hires)
         self._play_timer = QTimer(interval=8, timeout=self._tick)
         self._play_start = 0.0
@@ -216,14 +247,43 @@ class AppState(QObject):
         render.USE_GPU_IMAGE = gpu.setup_opencl(self.gpu_image)
 
     def on_main(self, fn):
-        self._main.emit(fn)
+        if self._closing:
+            return
+        try:
+            self._main.emit(lambda: fn() if not self._closing else None)
+        except RuntimeError:
+            if not self._closing:
+                raise
+
+    def close(self):
+        """Stop scheduling callbacks before Qt destroys the window and its signals."""
+        if self._closing:
+            return
+        self._closing = True
+        self.stop()
+        self._cancel.cancel()
+        self._export_cancel.cancel()
+        self._import_gen += 1
+        self._job_gen += 1
+        for timer in (self._save_timer, self._rebuild_timer, self._analysis_save_timer, self._hires_timer, self._audio_rebuild_timer):
+            timer.stop()
+        self._save_settings_now()
+        if self.analysis is not None:
+            try:
+                with self._analysis_save_lock:
+                    self.cache.save_analysis(self.analysis.copy_edits())
+            except OSError:
+                log.exception("could not save analysis while closing")
+        for worker in (self.engine.fast, self.engine.sharp, self.engine._prefetch):
+            worker.close()
 
     # ------------------------------------------------------------------ import & analysis
 
-    def import_paths(self, paths: list[str]):
+    def import_paths(self, paths: list[str], merge: bool = False):
         paths = [p for p in paths if p]
         if not paths:
             return
+        self._subject_rollback = None
         self.stop()
         self._cancel.cancel()
         self._import_gen += 1
@@ -249,6 +309,8 @@ class AppState(QObject):
                 if gen != self._import_gen:
                     return
                 self.frames, self.segments = fr, segs
+                saved=self._group_orders.get(fingerprint(fr),[])
+                self.merge_group_indices=list(saved) if isinstance(saved,list) and saved and all(type(i) is int and 0<=i<len(segs) for i in saved) and len(set(saved))==len(saved) else list(range(len(segs)))
                 self.segment_index = 0
                 self.current_frame = 0
                 if not fr:
@@ -256,7 +318,7 @@ class AppState(QObject):
                     self.message = "没有找到 JPG / HEIF 图片（也查找了子文件夹）"
                     self.changed.emit("phase")
                     return
-                self.segment_index = max(range(len(segs)), key=lambda k: segs[k].count)
+                self.segment_index = -1 if merge and len(segs)>1 else max(range(len(segs)), key=lambda k: segs[k].count)
                 self.changed.emit("frames")
                 self.start_analysis()
             self.on_main(done)
@@ -265,6 +327,11 @@ class AppState(QObject):
 
     @property
     def current_frames(self) -> list:
+        if self.segment_index == -1:
+            fr = [F.SourceFrame(**f.__dict__) for i in self.merge_group_indices if 0 <= i < len(self.segments)
+                  for f in self.frames[self.segments[i].start:self.segments[i].stop]]
+            for i,f in enumerate(fr):f.id=i
+            return fr
         if 0 <= self.segment_index < len(self.segments):
             s = self.segments[self.segment_index]
             fr = [F.SourceFrame(**{**f.__dict__}) for f in self.frames[s.start:s.stop]]
@@ -274,17 +341,124 @@ class AppState(QObject):
         return list(self.frames)
 
     def select_segment(self, k: int):
-        if k != self.segment_index and 0 <= k < len(self.segments):
+        if k != self.segment_index and (0 <= k < len(self.segments) or (k == -1 and len(self.segments)>1)):
+            if self.analysis is not None:self.cache.save_analysis(self.analysis)
             self.segment_index = k
             self.start_analysis()
 
-    def _get_models(self) -> BirdModels:
-        if self._models is None or self._models_device != self.device:
-            self._models = BirdModels(self.device)
-            self._models_device = self.device
-            self.device_text = self._models.device_description
-            self.on_main(lambda: self.changed.emit("device"))
-        return self._models
+    def timeline_clips(self):
+        if self.segment_index != -1:return []
+        clips, start = [], 0
+        for i in self.merge_group_indices:
+            if not 0 <= i < len(self.segments):continue
+            seg = self.segments[i]
+            clips.append({"start":start,"count":seg.count,"fps":F.estimate_fps(self.frames[seg.start:seg.stop])})
+            start += seg.count
+        return clips
+
+    def remember_group_order(self):
+        if not self.frames:return
+        self._group_orders[fingerprint(self.frames)]=list(self.merge_group_indices)
+        self._group_orders=dict(list(self._group_orders.items())[-20:])
+        self.save_settings()
+
+    def include_group(self, i, enabled):
+        if enabled and i not in self.merge_group_indices:self.merge_group_indices=self.merge_group_indices+[i]
+        elif not enabled and len(self.merge_group_indices)>1:self.merge_group_indices.remove(i)
+        self.remember_group_order()
+        if self.segment_index == -1:self.start_analysis()
+
+    def move_group(self, group, delta):
+        if self.phase != "ready" or group not in self.merge_group_indices:return
+        index=self.merge_group_indices.index(group);target=index+delta
+        if not 0<=target<len(self.merge_group_indices):return
+        order=list(self.merge_group_indices);order[index],order[target]=order[target],order[index]
+        if self.segment_index != -1 or self.analysis is None:
+            self.merge_group_indices=order;self.remember_group_order();self.changed.emit("frames");return
+        from ..core.clip_order import reorder
+        import shutil
+        old=self.analysis
+        try:
+            a,indices=reorder(old,[self.merge_group_indices.index(k) for k in order])
+            self.stop()
+            for new,previous in enumerate(indices):
+                src=self.cache.proxy_path(old.fingerprint,previous);dst=self.cache.proxy_path(a.fingerprint,new)
+                if src.is_file() and not dst.exists():shutil.copyfile(src,dst)
+            self.cache.save_analysis(old)
+            photo=old.frames[self.current_frame].path
+            self.merge_group_indices=order;self.remember_group_order();self.analysis=a
+            self.current_frame=next((i for i,f in enumerate(a.frames) if f.path==photo),0)
+            trimmed=self.selection.trimStart>0 or self.selection.trimEnd>=0
+            self.selection.trimStart,self.selection.trimEnd=0,-1
+            self.timeline_message="顺序已调整，裁剪范围恢复为全部；照片修正、排除和特写已跟随原照片。" if trimmed else ""
+            self.cache.save_analysis(a)
+            self.changed.emit("frames");self.changed.emit("analysis");self.rebuild_job(immediate=True)
+        except Exception as error:
+            self.timeline_message=str(error);self.changed.emit("analysis")
+
+    def _get_models(self, flag=None) -> BirdModels:
+        device = self.device
+        models = self._models if self._models_device == device else None
+        if models is None:
+            models = BirdModels(device)
+            # A cancelled bird job must not repopulate the cache after entering aircraft mode.
+            def remember():
+                if (flag is None or not flag.cancelled) and self.subject == "bird" and self.device == device:
+                    self._models,self._models_device = models,device
+                    self.device_text = models.device_description;self.changed.emit("device")
+            self.on_main(remember)
+        return models
+
+    @property
+    def is_aircraft(self):
+        return self.subject == "aircraft"
+
+    @property
+    def presets(self):
+        return subject_presets(self.subject)
+
+    def _profile(self):
+        return SubjectProfile(self.composition.copy(),self.look.copy(),self.export.copy(),self.selection.copy(),self.preset_id)
+
+    def _apply_profile(self, profile, reset_trim=True):
+        profile = profile.untrimmed() if reset_trim else profile.copy()
+        self.composition,self.look,self.export,self.selection = profile.composition,profile.look,profile.export,profile.selection
+        self.preset_id = profile.presetID
+
+    def change_subject(self, subject):
+        if subject not in ("bird","aircraft") or subject == self.subject or self.export_running:
+            return
+        self.stop();self._cancel.cancel();self._job_gen += 1
+        self._rebuild_timer.stop();self._analysis_save_timer.stop()
+        self._subject_profiles[self.subject] = self._profile()
+        if self.analysis is not None:
+            self.cache.save_analysis(self.analysis)
+            self._subject_rollback = (self.subject,self.analysis,self.job,self.current_frame,self.view_mode,self.source_zoom,
+                                      self.frames,self.segments,self.segment_index,list(self.merge_group_indices))
+        if self._subject_rollback is not None and subject == self._subject_rollback[0]:
+            self._restore_subject_transition()
+            return
+        self.subject = subject
+        if subject not in self._subject_profiles:
+            self._subject_profiles[subject] = SubjectProfile.initial_aircraft(self._subject_profiles["bird"]) if subject == "aircraft" else self._profile()
+        self._apply_profile(self._subject_profiles[subject])
+        self._models = None;self._models_device = None
+        self.analysis = None;self.job = None;self.preview_image = self.source_image = None;self.source_detail = None
+        self.source_tool = "none";self.current_frame = 0
+        self.save_settings();self.changed.emit("subject")
+        if self.frames and self.phase != "importing":self.start_analysis()
+        elif self.phase != "importing":self.phase = "empty";self.changed.emit("phase")
+
+    def _restore_subject_transition(self):
+        if self._subject_rollback is None:return
+        self._subject_profiles[self.subject] = self._profile()
+        (self.subject,self.analysis,self.job,self.current_frame,self.view_mode,self.source_zoom,
+         self.frames,self.segments,self.segment_index,self.merge_group_indices) = self._subject_rollback
+        self._subject_rollback = None
+        self._apply_profile(self._subject_profiles[self.subject],reset_trim=False)
+        self.source_tool = "none";self.source_detail = None;self.phase = "ready"
+        self.save_settings();self.changed.emit("subject");self.changed.emit("frames");self.changed.emit("phase")
+        self.rebuild_job(immediate=True)
 
     def start_analysis(self, hint=None, fresh: bool = False):
         self._cancel.cancel()
@@ -294,12 +468,25 @@ class AppState(QObject):
         fr = self.current_frames
         if not fr:
             return
-        fps = self.segments[self.segment_index].fps if self.segments else F.estimate_fps(fr)
+        fps = self.segments[self.segment_index].fps if 0 <= self.segment_index < len(self.segments) else F.estimate_fps(fr)
         self.phase = "analyzing"
         self.stage, self.stage_progress = "准备", 0.0
         self.analysis_started = time.time()
         self.changed.emit("phase")
-        fp = fingerprint(fr)
+        subject = self.subject
+        device = self.device
+        parts_directory = None
+        try:
+            if subject == "aircraft":
+                parts_directory = model_directory()
+                fp = fingerprint(fr,subject,analysis_identity(parts_directory))
+            else:fp = fingerprint(fr)
+        except Exception as error:
+            self.phase,self.message = "failed",str(error)
+            self.changed.emit("phase")
+            return
+        clips = self.timeline_clips()
+        kept_shots = [s.copy() for s in self.analysis.closeups] if self.analysis is not None and self.analysis.fingerprint == fp else []
         keep = (dict(self.analysis.manualEye), set(self.analysis.excluded)) \
             if hint is None and self.analysis is not None and self.analysis.fingerprint == fp else None
 
@@ -311,23 +498,43 @@ class AppState(QObject):
 
         def work():
             try:
+                edits, shots = keep, kept_shots
                 if hint is None and not fresh:
                     cached = self.cache.load_analysis(fp)
                     if cached is not None:
-                        cached.track = build_track(cached)
-                        self.on_main(lambda: self._finish_analysis(cached, flag))
-                        return
+                        if len(clips) <= 1 or (cached.groupedDetection and cached.clips == clips):
+                            cached.clips = clips
+                            cached.track = build_track(cached)
+                            self.on_main(lambda: self._finish_analysis(cached, flag))
+                            return
+                        if edits is None:
+                            edits = (dict(cached.manualEye), set(cached.excluded))
+                            shots = [s.copy() for s in cached.closeups]
                 self.stage = "加载识别模型"
                 self.on_main(lambda: self.changed.emit("progress"))
-                models = self._get_models()
-                log.info("analysis of %d frames on %s (providers %s)", len(fr), models.device_description, models.detector.providers)
                 t0 = time.time()
-                a = Analyzer(models).analyze(fr, fps, hint, progress, lambda: flag.cancelled)
-                log.info("analysis done in %.1fs: %d/%d birds", time.time() - t0, sum(p.target is not None for p in a.perFrame), a.count)
-                if keep:
-                    a.manualEye, a.excluded = keep
+                if subject == "aircraft":
+                    def make_models():
+                        detector = YOLOModel(str(models_dir()/"BirdDetector.onnx"),0,device)
+                        description = "机身："+gpu.describe_device(detector.providers,device)+" · 机头：CPU"
+                        def show_device():
+                            if not flag.cancelled:
+                                self.device_text = description;self.changed.emit("device")
+                        self.on_main(show_device)
+                        return SimpleNamespace(detector=detector)
+                    a = AircraftAnalyzer(cache=self.cache,parts_directory=parts_directory,models_factory=make_models).analyze(
+                        fr,fps,hint,progress,lambda:flag.cancelled,clips=clips)
+                else:
+                    models = self._get_models(flag)
+                    log.info("analysis of %d frames on %s (providers %s)", len(fr), models.device_description, models.detector.providers)
+                    a = Analyzer(models).analyze(fr, fps, hint, progress, lambda: flag.cancelled, clips=clips)
+                log.info("%s analysis done in %.1fs: %d/%d targets",subject,time.time()-t0,sum(p.target is not None for p in a.perFrame),a.count)
+                if edits:
+                    a.manualEye, a.excluded = edits
                     if a.manualEye:
                         a.track = build_track(a)
+                a.clips, a.closeups = clips, shots
+                if clips:a.track = build_track(a)
                 self.cache.save_analysis(a)
                 self.on_main(lambda: self._finish_analysis(a, flag))
             except Cancelled:
@@ -350,6 +557,8 @@ class AppState(QObject):
         self.source_detail = None
         self.current_frame = int(clamp(self.current_frame, 0, max(0, a.count - 1)))
         self.analysis = a
+        self._subject_rollback = None
+        self.timeline_message = ""
         self.phase = "ready"
         self.selection.trimStart, self.selection.trimEnd = 0, -1
         self.changed.emit("phase")
@@ -358,6 +567,9 @@ class AppState(QObject):
 
     def cancel_analysis(self):
         self._cancel.cancel()
+        if self._subject_rollback is not None:
+            self._restore_subject_transition()
+            return
         if self.analysis is None:
             self.frames, self.segments, self.segment_index = [], [], 0
             self.phase = "empty"
@@ -406,13 +618,14 @@ class AppState(QObject):
             def done():
                 if gen != self._job_gen or self.analysis is None or self.analysis.fingerprint != a.fingerprint:
                     return
-                dur_changed = self.job is None or abs(self.job.duration - job.duration) > 1e-6
+                audio_changed = self.job is None or abs(self.job.duration-job.duration)>1e-6 or self.job.mixed_audio(self.audio).to_dict()!=job.mixed_audio(self.audio).to_dict()
                 self.job = job
                 self.playhead = min(self.playhead, max(0, len(job.output_frames) - 1))
                 self.changed.emit("job")
                 self.refresh_preview()
-                if dur_changed:
+                if audio_changed:
                     self._audio_wav_cache.clear()
+                    self._audio_rebuild_timer.start()
             self.on_main(done)
 
         threading.Thread(target=work, daemon=True).start()
@@ -425,6 +638,27 @@ class AppState(QObject):
         self._analysis_save_timer.start()
         self.changed.emit("analysis")
         self.rebuild_job(immediate=True)
+
+    def add_closeup(self):
+        from ..core.settings import Closeup
+        if self.analysis is None:return
+        if any(s.frame<=self.current_frame<=s.endFrame for s in self.analysis.closeups):
+            self.timeline_message = "当前帧已有特写，请调整已有特写。"
+            self.changed.emit("analysis")
+            return
+        shot=Closeup(frame=self.current_frame,endFrame=self.current_frame)
+        if self.job and self.analysis.track is not None:
+            point=self.job.plan.xforms[self.current_frame].map(self.analysis.track.head_center[self.current_frame])
+            shot.centerX,shot.centerY=float(point[0]/self.job.output_size[0]),float(point[1]/self.job.output_size[1])
+        self.analysis.closeups.append(shot)
+        self.analysis.closeups.sort(key=lambda s:s.frame)
+        self.timeline_message = ""
+        self.project_changed()
+
+    def project_changed(self):
+        self._analysis_save_timer.start()
+        self.changed.emit("analysis")
+        self.rebuild_job(immediate=False)
 
     def set_manual_eye(self, p, frame: int | None = None):
         if self.analysis is None:
@@ -466,9 +700,14 @@ class AppState(QObject):
     def _save_analysis_now(self):
         if self.analysis is not None:
             a = self.analysis.copy_edits()
-            threading.Thread(target=lambda: self.cache.save_analysis(a), daemon=True).start()
+            def save():
+                with self._analysis_save_lock:
+                    if not self._closing:
+                        self.cache.save_analysis(a)
+            threading.Thread(target=save, daemon=True).start()
 
     def is_predicted(self, i: int) -> bool:
+        if self.is_aircraft:return False
         a = self.analysis
         if a is None or a.track is None or not 0 <= i < a.count:
             return False
@@ -498,7 +737,9 @@ class AppState(QObject):
         self.stop()
         self.view_mode = "source"
         self.source_tool = "fixEye"
-        if self.source_zoom < 2:
+        if self.is_aircraft and (self.analysis is None or self.analysis.track is None or not self.analysis.track.has_data[self.current_frame]):
+            self.source_zoom = 1.0
+        elif self.source_zoom < 2:
             self.source_zoom = 4.0
         self.changed.emit("view")
         self.refresh_preview()
@@ -562,7 +803,7 @@ class AppState(QObject):
                 self.source_detail = None
             return
         of = job.output_frames[self.playhead] if self.playing and self.playhead < len(job.output_frames) \
-            else OutputFrame(i, i, 0.0, 1.0)
+            else job.preview_frame(i)
         W, H = job.output_size
         scale = min(1.0, 1400 / max(W, H))
 
@@ -585,12 +826,15 @@ class AppState(QObject):
         job = self.job
         if job is None or self.playing or self.view_mode != "output" or not job.contains(self.current_frame):
             return
-        i = self.current_frame
+        selected = self.current_frame
+        of = job.preview_frame(selected)
+        i = of.a
         f = job.analysis.frames[i]
         W, H = job.output_size
         scale = min(1.0, 1800 / max(W, H))
         proxy_scale = job.analysis.proxyLongSide / max(f.pixelWidth, f.pixelHeight)
-        needed = min(1.0, job.plan.xforms[i].z * scale * 1.2)
+        zoom = job.analysis.closeups[of.closeup].zoom if of.closeup>=0 else 1
+        needed = min(1.0, job.plan.xforms[i].z * scale * zoom * 1.2)
         if needed <= proxy_scale * 1.05:
             return
         s = decode_scale(needed)
@@ -599,13 +843,13 @@ class AppState(QObject):
             src = self.engine.original(job, i, s)
             if src is None:
                 return
-            img = job.render_output(OutputFrame(i, i, 0.0, 1.0), scale=scale, include_watermark=False, fetch=lambda k: src)
+            img = job.render_output(of, scale=scale, include_watermark=False, fetch=lambda k: src)
             if img is None:
                 return
             q = to_qimage(img)
 
             def done():
-                if self.job is job and self.current_frame == i and not self.playing and self.view_mode == "output":
+                if self.job is job and self.current_frame == selected and not self.playing and self.view_mode == "output":
                     self.preview_image = q
                     self.changed.emit("preview")
             self.on_main(done)
@@ -738,8 +982,11 @@ class AppState(QObject):
     def _audio_changed(self, path_changed: bool):
         self._save_timer.start()
         self._audio_wav_cache.clear()
+        self.audio_message = ""
+        self._audio_rebuild_timer.start()
         if path_changed:
             self.audio_overview = None
+            self.music_cues = []
             self.audio_message = ""
             self._load_audio_overview()
         self.changed.emit("audio")
@@ -763,6 +1010,8 @@ class AppState(QObject):
                 if self.audio.path != path:
                     return
                 self.audio_overview, self.audio_message = ov, msg
+                from ..core.music_cues import analyze
+                self.music_cues = analyze(ov[1]) if ov else []
                 if ov and self.audio.startOffset > ov[0]:
                     self.audio.startOffset = 0.0
                 self.changed.emit("audio")
@@ -777,24 +1026,39 @@ class AppState(QObject):
             self._start_audio(self.playhead / self.job.export.outputFPS)
         self.changed.emit("audio")
 
+    def _restart_audio(self):
+        if self.playing and self.job:
+            self._start_audio(self.playhead / self.job.export.outputFPS)
+
     def _start_audio(self, t: float):
         self._stop_audio()
         job = self.job
-        if not (self.preview_audio and self.audio.active and job):
+        if not (self.preview_audio and job):
             return
-        s, dur = self.audio.copy(), job.duration
+        s, dur = job.mixed_audio(self.audio), job.duration
+        if not s.active:return
         key = (json.dumps(s.to_dict(), sort_keys=True), round(dur, 3), round(t, 2))
         token = object()
         self._audio_token = token
 
         def work():
-            wav = self._audio_wav_cache.get(key) or render_audio_preview(s, dur, t)
+            try:
+                wav = self._audio_wav_cache.get(key) or render_audio_preview(s, dur, t)
+            except Exception as error:
+                message = str(error)
+                def report():
+                    if self._audio_token is token:
+                        self.audio_message = "音频预览失败：" + message
+                        self.changed.emit("audio")
+                self.on_main(report)
+                return
             if wav:
                 self._audio_wav_cache[key] = wav
 
             def go():
                 if self._audio_token is token and self.playing and wav:
                     self._play_wav(wav)
+                    self.audio_message = ""
             self.on_main(go)
         threading.Thread(target=work, daemon=True).start()
 
@@ -925,11 +1189,13 @@ class AppState(QObject):
         self._save_timer.start()
 
     def _save_settings_now(self):
-        d = {"version": 2, "composition": self.composition.to_dict(), "look": self.look.to_dict(),
-             "export": self.export.to_dict(), "selection": {**self.selection.to_dict(), "trimStart": 0, "trimEnd": -1},
-             "presetID": self.preset_id, "watermark": self.watermark.to_dict(), "audio": self.audio.to_dict(),
+        self._subject_profiles[self.subject] = self._profile().untrimmed()
+        bird = self._subject_profiles.get("bird",SubjectProfile())
+        d = {"version": 3, **bird.untrimmed().to_dict(), "subject": self.subject,
+             "profiles": {k:v.untrimmed().to_dict() for k,v in self._subject_profiles.items()},
+             "watermark": self.watermark.to_dict(), "audio": self.audio.to_dict(),
              "device": self.device, "gpuImage": self.gpu_image, "agreementAccepted": self.agreement_accepted,
-             "inspectorTab": getattr(self, "inspector_tab", 0)}
+             "inspectorTab": getattr(self, "inspector_tab", 0), "groupOrders": self._group_orders}
         try:
             tmp = self.settings_path.with_suffix(".tmp")
             tmp.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -943,12 +1209,22 @@ class AppState(QObject):
         except Exception:
             self.composition = PRESETS[1].composition.copy()
             return
+        self._group_orders = d.get("groupOrders",{}) if isinstance(d.get("groupOrders"),dict) else {}
         self.composition = Composition.from_dict(d.get("composition"))
         self.look = LookSettings.from_dict(d.get("look"))
         self.export = ExportSettings.from_dict(d.get("export"))
         self.selection = FrameSelection.from_dict(d.get("selection"))
         self.selection.trimStart, self.selection.trimEnd = 0, -1
         self.preset_id = d.get("presetID")
+        if d.get("version",1) < 2 and self.composition.edgeFill == EdgeFill.AUTO_ZOOM:
+            self.composition.edgeFill = EdgeFill.SHIFT
+        self._subject_profiles = {k:SubjectProfile.from_dict(v) for k,v in d.get("profiles",{}).items()
+                                  if k in ("bird","aircraft") and isinstance(v,dict)}
+        self._subject_profiles.setdefault("bird",self._profile())
+        self.subject = d.get("subject") if d.get("subject") in ("bird","aircraft") else "bird"
+        if self.subject == "aircraft":
+            self._subject_profiles.setdefault("aircraft",SubjectProfile.initial_aircraft(self._subject_profiles["bird"]))
+        self._apply_profile(self._subject_profiles[self.subject])
         self.watermark = WatermarkSettings.from_dict(d.get("watermark"))
         if self.watermark.imagePath and not os.path.exists(self.watermark.imagePath):
             self.watermark.imagePath, self.watermark.enabled = "", False

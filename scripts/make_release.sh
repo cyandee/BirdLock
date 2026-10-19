@@ -7,7 +7,7 @@
 set -e
 ROOT="${0:A:h:h}"
 cd "$ROOT"
-VERSION="${VERSION:-1.0}"
+VERSION="${VERSION:-$(<VERSION)}"
 LABEL="${LABEL:-测试版}"
 NAME="BirdLock鸟眼锁定-${VERSION}${LABEL}"
 
@@ -16,6 +16,7 @@ UNIVERSAL=1 VERSION="$VERSION" zsh scripts/build_app.sh
 STAGE="$(mktemp -d)/$NAME"
 mkdir -p "$STAGE/源代码"
 ditto dist/BirdLock.app "$STAGE/BirdLock.app"
+codesign --verify --deep --strict "$STAGE/BirdLock.app"
 DOCS=dist/BirdLock.app/Contents/Resources/Docs
 cp "$DOCS/使用说明.pdf" "$STAGE/"
 python3 -I scripts/md2html.py docs/用户协议.md "$STAGE/.agreement.html"
@@ -28,15 +29,14 @@ BirdLock 鸟眼锁定 ${VERSION} ${LABEL}
 1. 把「BirdLock.app」拖到「应用程序」文件夹。
 2. 双击打开。如果提示“无法验证开发者”：先点「完成」，再打开「系统设置 → 隐私与安全性」，
    在下方找到 BirdLock，点「仍要打开」。（本软件暂未做 Apple 公证）
-   如果提示“已损坏，无法打开”：打开「终端」，运行
-   xattr -dr com.apple.quarantine /Applications/BirdLock.app
-   然后再打开。
+   如果提示“已损坏，无法打开”：先核对下载文件的SHA256，重新下载完整分发包，
+   并反馈具体报错。清除隔离标记不能修复损坏的签名，不作为损坏修复步骤。
 3. 第一次打开会显示用户协议，阅读后点「同意并继续」。
 4. 详细用法见「使用说明.pdf」，或软件菜单「帮助 → BirdLock 使用说明」。
 
 系统要求：macOS 14 或更高版本（Apple 芯片或 Intel）。
 本软件依据 GNU AGPL-3.0 开源，完整源代码见「源代码」文件夹。
-意见反馈：cyanodee@gmail.com
+意见反馈：邮箱 cyanodee@gmail.com（欢迎通过邮箱反馈问题与建议）
 TXT
 
 # Corresponding source: every tracked + new (not ignored) file of the repo
@@ -51,5 +51,7 @@ rm -rf "${SRC:h}"
 OUT="$ROOT/dist/$NAME.zip"
 rm -f "$OUT"
 (cd "${STAGE:h}" && ditto -c -k --sequesterRsrc --keepParent "$NAME" "$OUT")
+python3 -I scripts/verify_mac_artifact.py "$OUT" --app-relative "$NAME/BirdLock.app"
+(cd "${OUT:h}" && shasum -a 256 "${OUT:t}" > "${OUT:t}.sha256")
 rm -rf "${STAGE:h}"
 echo "✅ 已生成 $OUT（$(du -h "$OUT" | cut -f1)）"

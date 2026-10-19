@@ -202,6 +202,24 @@ def read_file_image(path: str, flags=cv2.IMREAD_COLOR) -> np.ndarray | None:
         return None
 
 
+def load_thumbnail(path: str, max_side: int = 160) -> np.ndarray | None:
+    """Small BGR preview for the import dialog (fast: JPEG decoded at 1/8 when possible)."""
+    img = read_file_image(path, cv2.IMREAD_REDUCED_COLOR_8)
+    if img is None:
+        try:
+            with Image.open(path) as im:
+                im = im.convert("RGB")
+                im.thumbnail((max_side, max_side))
+                img = cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)
+        except Exception:
+            return None
+    h, w = img.shape[:2]
+    k = max_side / max(h, w)
+    if k < 1:
+        img = cv2.resize(img, (max(1, round(w * k)), max(1, round(h * k))), interpolation=cv2.INTER_AREA)
+    return img
+
+
 def write_jpeg(img: np.ndarray, path: str, quality: int = 90) -> bool:
     ok, data = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
     if ok:
@@ -345,7 +363,7 @@ def segments(frames: list[SourceFrame]) -> list[BurstSegment]:
     for i in range(1, len(frames)):
         a, b = frames[i - 1].captureTime, frames[i].captureTime
         if a is not None and b is not None and b - a > gap:
-            segs.append(BurstSegment(start, i, fps))
+            segs.append(BurstSegment(start, i, estimate_fps(frames[start:i])))
             start = i
-    segs.append(BurstSegment(start, len(frames), fps))
+    segs.append(BurstSegment(start, len(frames), estimate_fps(frames[start:])))
     return segs

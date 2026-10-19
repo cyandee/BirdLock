@@ -92,6 +92,11 @@ public final class YOLOModel: @unchecked Sendable {
         return numClasses == 80 ? 14 : 0
     }
 
+    public var airplaneClassIndex: Int? {
+        if let i = classNames.firstIndex(where: { $0.lowercased() == "airplane" }) { return i }
+        return numClasses == 80 ? 4 : nil
+    }
+
     /// Letterbox `crop` (source coords, may exceed bounds) of `image` into the model input and run it.
     /// Returned detections are in source coordinates.
     public func detect(image: CGImage, crop: CGRect? = nil, classIndex: Int? = nil,

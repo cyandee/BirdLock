@@ -56,8 +56,22 @@ public final class RenderJob: @unchecked Sendable {
     public let cache: ProxyCache
     public let watermark: WatermarkSettings
     private var overlayCache: [String: CGImage] = [:]
+    private var overlayCacheBytes = 0
+    private static let overlayCacheLimit = 64 * 1024 * 1024
     private var watermarkImage: CIImage??
     private let lock = NSLock()
+
+    private func cacheOverlay(_ image: CGImage?, key: String) {
+        guard let image else { return }
+        let cost = image.bytesPerRow * image.height
+        guard cost <= Self.overlayCacheLimit else { return }
+        lock.lock(); defer { lock.unlock() }
+        if let old = overlayCache.removeValue(forKey:key) { overlayCacheBytes -= old.bytesPerRow * old.height }
+        if overlayCache.count >= 128 || overlayCacheBytes + cost > Self.overlayCacheLimit {
+            overlayCache.removeAll(); overlayCacheBytes = 0
+        }
+        overlayCache[key] = image; overlayCacheBytes += cost
+    }
 
     public init(analysis: SequenceAnalysis, composition: Composition, look: LookSettings, export: ExportSettings,
                 selection: FrameSelection, watermark: WatermarkSettings = WatermarkSettings(),
@@ -85,19 +99,36 @@ public final class RenderJob: @unchecked Sendable {
         status = st
         used = (0..<n).filter { st[$0] == .ok }
         let sz = export.outputSize
-        plan = CompositionPlanner.plan(track: track, frames: analysis.frames, composition: composition,
-                                       outW: Double(sz.w), outH: Double(sz.h), used: used.isEmpty ? nil : used)
+        plan = ProjectTimeline.plan(analysis, track: track, composition: composition, width: Double(sz.w), height: Double(sz.h), used: used)
         gains = Deflicker.gains(analysis, look: look)
-        outputFrames = TimeMapper.outputFrames(used: used, sourceFPS: analysis.fps, settings: export)
+        if analysis.clips?.isEmpty == false || analysis.closeups?.isEmpty == false {
+            outputFrames = ProjectTimeline.frames(used: used, clips: analysis.clips ?? [], closeups: analysis.closeups ?? [], fallbackFPS: analysis.fps, settings: export)
+        } else { outputFrames = TimeMapper.outputFrames(used: used, sourceFPS: analysis.fps, settings: export) }
+    }
+
+    /// Derived events follow the final edit, including reverse/repeat, without duplicating saved tracks.
+    public func mixedAudio(_ userAudio: AudioSettings? = nil) -> AudioSettings {
+        var result = userAudio ?? AudioSettings()
+        result.tracks += CloseupAudio.tracks(frames: outputFrames, closeups: analysis.closeups ?? [])
+        return result
     }
 
     public var outputSize: (w: Int, h: Int) { export.outputSize }
     public var duration: Double { Double(outputFrames.count) / export.outputFPS }
     public func contains(_ i: Int) -> Bool { i >= 0 && i < analysis.count && i < plan.xforms.count }
 
+    public func previewFrame(_ frame: Int) -> OutputFrame {
+        if let index = analysis.closeups?.firstIndex(where: { $0.frame <= frame && frame <= max($0.frame, $0.endFrame) }),
+           var of = outputFrames.first(where: { $0.closeup == index }) {
+            of.shotTime = 0.35
+            return of
+        }
+        return OutputFrame(a: frame, b: frame, t: 0, fade: 1)
+    }
+
     /// Decode scale for exporting at full quality: enough pixels for the largest zoom of any used frame
     /// (plus headroom for the Lanczos downsample), but no more.
-    public var exportDecodeScale: Double { decodeScale(needed: min(1, plan.maxUpscale * 1.2)) }
+    public var exportDecodeScale: Double { decodeScale(needed: min(1, plan.maxUpscale * max(1, analysis.closeups?.map(\.zoom).max() ?? 1) * 1.2)) }
 
     /// Decoded source as CIImage plus its scale relative to the original pixel grid.
     /// - Parameter scale: decode the original at this fraction of its size (1 = full resolution)
@@ -133,7 +164,7 @@ public final class RenderJob: @unchecked Sendable {
         lock.lock(); var img = overlayCache[key]; lock.unlock()
         if img == nil {
             img = TextOverlay.render(lines: lines, fontSize: fs)
-            lock.lock(); overlayCache[key] = img; lock.unlock()
+            cacheOverlay(img,key:key)
         }
         guard let img else { return [] }
         let origin = TextOverlay.place(img, corner: o.corner, outW: outW, outH: outH, margin: Double(min(outW, outH)) * 0.03)
@@ -163,32 +194,67 @@ public final class RenderJob: @unchecked Sendable {
         guard tf.hasData else { return nil }
         let fm = export.focusMark
         let xf = plan.xforms[i].scaled(scale)
-        let eyeSeen = tf.eyeVisible || analysis.manualEye[i] != nil
-        let onHead = !eyeSeen && fm.headWhenHidden
+        let aircraft = analysis.analysisSubject == .aircraft
+        let eyeSeen = !aircraft && (tf.eyeVisible || analysis.manualEye[i] != nil)
+        let onHead = aircraft || (!eyeSeen && fm.headWhenHidden)
         let side = tf.headLength * xf.z * (onHead ? 1.3 : 0.42) * fm.size
         return (xf.map(onHead ? tf.headCenter : tf.eye), max(10 * scale, side))
     }
 
-    private func focusMark(_ of: OutputFrame, scale: Double, outH: Int) -> CIImage? {
-        guard let ta = focusTarget(of.a, scale: scale) else { return nil }
-        var c = ta.center, side = ta.side
-        if of.t > 0.001, of.b != of.a, let tb = focusTarget(of.b, scale: scale) {
-            c = ta.center + (tb.center - ta.center) * of.t
-            side = ta.side + (tb.side - ta.side) * of.t
+    public func focusRect(_ i: Int, target: String, scale: Double) -> CGRect? {
+        let aircraft = analysis.analysisSubject == .aircraft
+        if aircraft && target == "eye" { return nil }
+        guard contains(i), track.frames[i].hasData || (aircraft && target == "body") else { return nil }
+        if target == "eye", let t = focusTarget(i, scale: scale) {
+            return CGRect(x: t.center.x - t.side / 2, y: t.center.y - t.side / 2, width: t.side, height: t.side)
+        }
+        let xf = plan.xforms[i].scaled(scale)
+        if target == "head" {
+            let c = xf.map(track.frames[i].headCenter)
+            let side = max(10 * scale, track.frames[i].headLength * xf.z * 1.3 * export.focusMark.size)
+            return CGRect(x: c.x - side / 2, y: c.y - side / 2, width: side, height: side)
+        }
+        guard target == "body", let b = analysis.perFrame[i].targetBox else { return nil }
+        var rect = b.rect
+        if aircraft && track.frames[i].hasData {
+            let nose = analysis.perFrame[i].aircraft?.nose
+            if nose != nil || analysis.manualEye[i] != nil {
+                let center = track.frames[i].headCenter
+                let w = nose?.w ?? track.frames[i].headLength, h = nose?.h ?? track.frames[i].headLength
+                rect = rect.union(CGRect(x: center.x-w/2,y: center.y-h/2,width: w,height: h))
+            }
+        }
+        // Transform all four corners, including wings, before computing the output bounding box.
+        let points = [V2(rect.minX, rect.minY), V2(rect.maxX, rect.minY), V2(rect.minX, rect.maxY), V2(rect.maxX, rect.maxY)].map(xf.map)
+        let minX = points.map(\.x).min()!, maxX = points.map(\.x).max()!
+        let minY = points.map(\.y).min()!, maxY = points.map(\.y).max()!
+        let r = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        let k = clamp(export.focusMark.bodySize, 0.5, 2.5) * 1.04
+        return r.insetBy(dx: -r.width * (k - 1) / 2, dy: -r.height * (k - 1) / 2)
+    }
+
+    private func focusMark(_ of: OutputFrame, target: String, scale: Double, outH: Int) -> CIImage? {
+        guard let a = focusRect(of.a, target: target, scale: scale) else { return nil }
+        var r = a
+        if of.t > 0.001, of.b != of.a, let b = focusRect(of.b, target: target, scale: scale) {
+            r = CGRect(x: a.minX + (b.minX - a.minX) * of.t, y: a.minY + (b.minY - a.minY) * of.t,
+                       width: a.width + (b.width - a.width) * of.t, height: a.height + (b.height - a.height) * of.t)
         }
         let fm = export.focusMark
         let outShort = Double(min(outputSize.w, outputSize.h)) * scale
         let line = max(1, (outShort * 0.0024 * fm.lineWidth).rounded())
-        let s = max(8, Int(side.rounded()))
-        let key = "focus|\(s)|\(line)|\(fm.style.rawValue)|\(fm.color.rawValue)"
+        let outW = max(2, Int((Double(outputSize.w) * scale).rounded()))
+        guard let layout = FocusMark.clippedLayout(rect:r,viewport:CGRect(x:0,y:0,width:outW,height:outH),line:line,style:fm.style) else { return nil }
+        let color = fm.color(for: target)
+        let key = "focus|\(layout.cacheKey)|\(line)|\(fm.style.rawValue)|\(color.rawValue)"
         lock.lock(); var cg = overlayCache[key]; lock.unlock()
         if cg == nil {
-            cg = FocusMark.image(side: s, line: line, style: fm.style, color: fm.color)
-            lock.lock(); overlayCache[key] = cg; lock.unlock()
+            cg = FocusMark.image(layout:layout,line:line,style:fm.style,color:color)
+            cacheOverlay(cg,key:key)
         }
         guard let cg else { return nil }
-        let half = Double(cg.width) / 2
-        return CIImage(cgImage: cg).transformed(by: CGAffineTransform(translationX: c.x - half, y: Double(outH) - c.y - half))
+        return CIImage(cgImage: cg).transformed(by: CGAffineTransform(translationX:layout.bounds.minX,
+                                                                     y:Double(outH)-layout.bounds.maxY))
     }
 
     /// - Parameter includeWatermark: false for the interactive preview (the app draws the watermark itself so it can be dragged)
@@ -203,6 +269,34 @@ public final class RenderJob: @unchecked Sendable {
         }
         let sz = outputSize
         let w = max(2, Int((Double(sz.w) * scale).rounded())), h = max(2, Int((Double(sz.h) * scale).rounded()))
+        let fm = export.focusMark
+        let flashOn = fm.flashOn(at: of.time)
+        if fm.enabled {
+            let targets = [("eye", fm.showEye), ("head", fm.showHead), ("body", fm.showBody && (!fm.blinkBody || flashOn))]
+            for (target, enabled) in targets where enabled {
+                if let mark = focusMark(of, target: target, scale: Double(w) / Double(sz.w), outH: h) { img = mark.composited(over: img) }
+            }
+        }
+        if of.closeup >= 0, let shots = analysis.closeups, shots.indices.contains(of.closeup) {
+            let shot = shots[of.closeup]
+            let zoom = clamp(shot.zoom, 1, 8)
+            let cx = clamp(shot.centerX, 0.5 / zoom, 1 - 0.5 / zoom)
+            let cy = clamp(shot.centerY, 0.5 / zoom, 1 - 0.5 / zoom)
+            img = img.transformed(by: CGAffineTransform(scaleX: zoom, y: zoom))
+                .transformed(by: CGAffineTransform(translationX: Double(w) * (0.5 - cx * zoom), y: Double(h) * (0.5 - (1 - cy) * zoom)))
+                .cropped(to: CGRect(x: 0, y: 0, width: w, height: h))
+            if shot.animatedFrame {
+                let phase = min(1, of.shotTime / 0.35)
+                let fraction = 0.84 + 0.08 * (1 - pow(1 - phase, 3))
+                if let mark = FocusMark.image(width: Int(Double(w) * fraction), height: Int(Double(h) * fraction),
+                    line: max(1, Double(min(w,h)) * 0.002), style: .brackets, color: shot.color) {
+                    let layer = CIImage(cgImage: mark)
+                    img = layer.transformed(by: CGAffineTransform(translationX: (Double(w) - layer.extent.width)/2, y: (Double(h) - layer.extent.height)/2))
+                        .applyingFilter("CIColorMatrix", parameters: ["inputAVector":CIVector(x:0,y:0,z:0,w:0.7 + 0.3 * sin(of.shotTime * .pi * 2))])
+                        .composited(over: img)
+                }
+            }
+        }
         for o in overlays(for: of.a, outW: w, outH: h) {
             let oi = CIImage(cgImage: o.image)
             let y = Double(h) - Double(o.origin.y) - Double(o.image.height)
@@ -212,8 +306,16 @@ public final class RenderJob: @unchecked Sendable {
             }
             img = placed.composited(over: img)
         }
-        if export.focusMark.enabled, let mark = focusMark(of, scale: Double(w) / Double(sz.w), outH: h) {
-            img = mark.composited(over: img)
+        if fm.captureFlash, flashOn {
+            let fraction = clamp(fm.captureSize, 0.25, 0.98)
+            if let mark = FocusMark.image(width: Int(Double(w) * fraction), height: Int(Double(h) * fraction),
+                                          line: max(1, Double(min(w, h)) * 0.0012), style: .box, color: fm.captureColor) {
+                let layer = CIImage(cgImage: mark)
+                img = layer.transformed(by: CGAffineTransform(translationX: (Double(w) - layer.extent.width) / 2,
+                                                               y: (Double(h) - layer.extent.height) / 2))
+                    .applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0.55)])
+                    .composited(over: img)
+            }
         }
         if includeWatermark, let wm = watermarkCIImage() {
             let r = watermark.rect(imageSize: wm.extent.size, outW: Double(w), outH: Double(h))

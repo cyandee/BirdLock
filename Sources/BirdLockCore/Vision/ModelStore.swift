@@ -20,6 +20,7 @@ public struct PoseSchema: Codable, Sendable {
     public static let cub15 = PoseSchema(keypoints: ["back", "beak", "belly", "breast", "crown", "forehead", "left_eye", "left_leg",
                                                      "left_wing", "nape", "right_eye", "right_leg", "right_wing", "tail", "throat"],
                                          inputCropExpand: 1.25)
+    public static let aircraft = PoseSchema(keypoints: [], inputCropExpand: nil)
 
     public func index(of part: BirdPart) -> Int? { keypoints.firstIndex(of: part.rawValue) }
 }

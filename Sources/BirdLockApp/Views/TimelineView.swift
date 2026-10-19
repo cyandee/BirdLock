@@ -18,11 +18,11 @@ struct TransportBar: View {
             .buttonStyle(.borderless)
             Toggle(isOn: $state.loopPlayback) { Image(systemName: "repeat") }
                 .toggleStyle(.button).buttonStyle(.borderless).help("循环播放")
-            if state.audio.isActive {
+            if (state.job?.mixedAudio(state.audio).isActive ?? state.audio.isActive) {
                 Button { state.togglePreviewAudio() } label: {
                     Image(systemName: state.previewAudio ? "speaker.wave.2.fill" : "speaker.slash.fill").frame(width: 18)
                 }
-                .buttonStyle(.borderless).help(state.previewAudio ? "预览时静音" : "预览时播放音乐")
+                .buttonStyle(.borderless).help(state.previewAudio ? "预览时静音" : "预览时播放音频")
             }
 
             if let a = state.analysis, a.frames.indices.contains(state.currentFrame) {
@@ -65,8 +65,11 @@ struct TransportBar: View {
 
 /// Bottom panel: the picture lane (frame status + curves) and the music lane, side by side in time.
 struct TimelinePanel: View {
+    @Environment(AppState.self) private var state
     var body: some View {
-        HStack(spacing: 0) {
+        @Bindable var state = state
+        VStack(spacing: 0) {
+          HStack(spacing: 0) {
             VStack(spacing: 0) {
                 laneLabel("画面", "photo.on.rectangle").frame(height: 100)
                 Divider()
@@ -79,9 +82,21 @@ struct TimelinePanel: View {
                 Divider()
                 AudioLane().frame(height: 48)
             }
+          }.frame(height: 149)
+          if !state.audio.tracks.isEmpty {
+              ScrollView(.vertical) {
+                  VStack(spacing: 1) {
+                      ForEach($state.audio.tracks) { $track in
+                          AudioTrackLane(track: $track, duration: state.job?.duration ?? 1,
+                                         playhead: Double(state.playheadOutput) / state.exportSettings.outputFPS)
+                              .frame(height: 32)
+                      }
+                  }
+              }.frame(height: CGFloat(min(3, state.audio.tracks.count) * 33))
+          }
         }
         // fixed height: the vertical divider would otherwise make the panel grow into the preview
-        .frame(height: 100 + 1 + 48)
+        .frame(height: CGFloat(149 + min(3, state.audio.tracks.count) * 33))
         .background(Theme.panel.opacity(0.75))
     }
 
@@ -92,6 +107,42 @@ struct TimelinePanel: View {
         }
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct AudioTrackLane: View {
+    @Binding var track: AudioTrack
+    let duration: Double
+    let playhead: Double
+    @State private var dragStart: Double?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Image(systemName: track.muted ? "speaker.slash" : "waveform").frame(width: 52)
+            GeometryReader { geo in
+                let width = max(1, geo.size.width - 24)
+                let total = max(0.001, duration)
+                let start = min(total, max(0, track.timelineStart))
+                let span = track.duration > 0 ? min(track.duration, total - start) : total - start
+                ZStack(alignment: .topLeading) {
+                    Color.black.opacity(0.12)
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Theme.accent.opacity(track.muted ? 0.12 : 0.35))
+                        .frame(width: max(1, width * span / total), height: 26)
+                        .overlay(alignment: .leading) {
+                            Text(track.title).font(.caption2).lineLimit(1).padding(.horizontal, 5)
+                        }
+                        .offset(x: 12 + width * start / total, y: 3)
+                        .gesture(DragGesture(minimumDistance: 2).onChanged { value in
+                            if dragStart == nil { dragStart = track.timelineStart }
+                            track.timelineStart = max(0, min(total, (dragStart ?? 0) + value.translation.width / width * total))
+                        }.onEnded { _ in dragStart = nil })
+                    Rectangle().fill(Theme.accent).frame(width: 1, height: 32)
+                        .offset(x: 12 + width * min(total, playhead) / total)
+                        .allowsHitTesting(false)
+                }.clipped()
+            }
+        }
     }
 }
 
@@ -125,6 +176,14 @@ struct FrameTimeline: View {
         func x(_ i: Int) -> Double { pad + (n == 1 ? 0 : Double(i) / Double(n - 1)) * w }
         let cellW = max(1, w / Double(n))
         let job = state.job
+        for clip in (a.clips ?? []).dropFirst() {
+            let px = x(clip.start)
+            ctx.stroke(Path { $0.move(to: CGPoint(x: px,y: 4)); $0.addLine(to: CGPoint(x: px,y: size.height-18)) }, with: .color(Theme.accent), lineWidth: 1)
+        }
+        for shot in a.closeups ?? [] {
+            let left = x(shot.frame), right = x(max(shot.frame,shot.endFrame))
+            ctx.fill(Path(CGRect(x: left-cellW/2,y: 22,width: max(cellW,right-left+cellW),height: 4)), with: .color(Theme.manual))
+        }
 
         // Status strip
         let stripY = 8.0, stripH = 12.0
@@ -160,9 +219,9 @@ struct FrameTimeline: View {
             ctx.draw(Text(label).font(.system(size: 9)).foregroundColor(color), at: CGPoint(x: labelX, y: size.height - 8), anchor: .leading)
         }
         // Eye motion in the source frame (camera shake + flight) – horizontal & vertical
-        curve(t.frames.map { $0.eye.x }, color: Theme.eye.opacity(0.85), label: "鸟眼 X", labelX: pad)
-        curve(t.frames.map { $0.eye.y }, color: Theme.eye.opacity(0.45), label: "鸟眼 Y", labelX: pad + 52)
-        curve(t.frames.map { $0.headLength }, color: Theme.accent.opacity(0.8), label: "鸟头大小", labelX: pad + 104)
+        curve(t.frames.map { $0.eye.x }, color: Theme.eye.opacity(0.85), label: state.isAircraft ? "机头 X" : "鸟眼 X", labelX: pad)
+        curve(t.frames.map { $0.eye.y }, color: Theme.eye.opacity(0.45), label: state.isAircraft ? "机头 Y" : "鸟眼 Y", labelX: pad + 52)
+        curve(t.frames.map { $0.headLength }, color: Theme.accent.opacity(0.8), label: state.isAircraft ? "机头大小" : "鸟头大小", labelX: pad + 104)
         curve(a.perFrame.map { $0.sharpness ?? .nan }, color: Color.white.opacity(0.35), label: "清晰度", labelX: pad + 168)
 
         // trim shading
@@ -176,8 +235,8 @@ struct FrameTimeline: View {
         ctx.fill(Path(CGRect(x: px - 0.75, y: 2, width: 1.5, height: size.height - 4)), with: .color(Theme.accent))
         ctx.fill(Path(ellipseIn: CGRect(x: px - 4, y: 2, width: 8, height: 8)), with: .color(Theme.accent))
         // legend right
-        let legend = Text("●").foregroundColor(Theme.ok) + Text(" 鸟眼   ").foregroundColor(.secondary)
-            + Text("●").foregroundColor(Theme.warn) + Text(" 鸟头推算   ").foregroundColor(.secondary)
+        let legend = Text(state.isAircraft ? "" : "●").foregroundColor(Theme.ok) + Text(state.isAircraft ? "" : " 鸟眼   ").foregroundColor(.secondary)
+            + Text("●").foregroundColor(Theme.warn) + Text(state.isAircraft ? " 机头定位   " : " 鸟头推算   ").foregroundColor(.secondary)
             + Text("●").foregroundColor(Theme.manual) + Text(" 手动修正   ").foregroundColor(.secondary)
             + Text("●").foregroundColor(Theme.bad) + Text(" 未识别/模糊").foregroundColor(.secondary)
         ctx.draw(legend.font(.system(size: 9)), at: CGPoint(x: size.width - pad, y: size.height - 8), anchor: .trailing)

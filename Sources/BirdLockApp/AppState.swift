@@ -3,6 +3,7 @@ import AppKit
 import AVFoundation
 import Observation
 import BirdLockCore
+import BirdLockAircraftRuntime
 import UniformTypeIdentifiers
 
 enum Phase: Equatable {
@@ -45,9 +46,12 @@ final class AppState {
     var frames: [SourceFrame] = []
     var segments: [BurstSegment] = []
     var segmentIndex = 0
+    var mergeGroupIndices: [Int] = []
     var phase: Phase = .empty
     var analysis: SequenceAnalysis?
     var analysisStarted = Date()
+    var timelineMessage: String?
+    private var jobGeneration = 0
 
     // Settings (persisted)
     var composition = Composition() { didSet { settingsChanged() } }
@@ -55,10 +59,27 @@ final class AppState {
     var exportSettings = ExportSettings() { didSet { settingsChanged() } }
     var selection = FrameSelection() { didSet { settingsChanged() } }
     var presetID: String? = "lead"
+    var subject: AnalysisSubject = .bird
+    private var subjectProfiles: [String: SubjectProfile] = [:]
+    private struct SubjectRollback {
+        var subject: AnalysisSubject
+        var analysis: SequenceAnalysis
+        var frame: Int
+        var view: ViewMode
+        var zoom: Double
+        var frames: [SourceFrame]
+        var segments: [BurstSegment]
+        var segmentIndex: Int
+        var mergeGroups: [Int]
+    }
+    private var subjectRollback: SubjectRollback?
+    var isAircraft: Bool { subject == .aircraft }
+    var presets: [CompositionPreset] { CompositionPreset.forSubject(subject) }
     var audio = AudioSettings() { didSet { audioChanged(from: oldValue) } }
     var watermark = WatermarkSettings() { didSet { watermarkChanged(from: oldValue) } }
 
     // Music & watermark
+    var musicCues: [MusicCue] = []
     var audioOverview: AudioMixer.Overview?
     var audioMessage: String?
     var previewAudio = true
@@ -93,13 +114,16 @@ final class AppState {
     private var audioBuildTask: Task<Void, Never>?
     private var audioOverviewTask: Task<Void, Never>?
 
-    init() {
+    private let defaults: UserDefaults
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         loadSettings()
     }
 
     // MARK: - Import & analysis
 
-    func importURLs(_ urls: [URL]) {
+    func importURLs(_ urls: [URL], merge: Bool = false) {
+        subjectRollback = nil
         stop()
         analysisTask?.cancel(); cancelFlag.cancel()
         importGeneration += 1
@@ -115,16 +139,23 @@ final class AppState {
                 self.segmentIndex = 0
                 self.frames = all
                 self.segments = segs
+                let saved = self.defaults.array(forKey: "groupOrder." + Analyzer.fingerprint(all)) as? [Int] ?? []
+                self.mergeGroupIndices = !saved.isEmpty && Set(saved).count == saved.count && saved.allSatisfy(segs.indices.contains) ? saved : Array(segs.indices)
                 self.currentFrame = 0
                 guard !all.isEmpty else { self.phase = .failed("没有找到 JPG / HEIF 图片"); return }
                 // choose the longest burst by default
-                self.segmentIndex = segs.indices.max { segs[$0].range.count < segs[$1].range.count } ?? 0
+                self.segmentIndex = merge && segs.count > 1 ? -1 : (segs.indices.max { segs[$0].range.count < segs[$1].range.count } ?? 0)
                 self.startAnalysis()
             }
         }
     }
 
     var currentFrames: [SourceFrame] {
+        if segmentIndex == -1 {
+            var result = mergeGroupIndices.filter { segments.indices.contains($0) }.flatMap { Array(frames[segments[$0].range]) }
+            for i in result.indices { result[i].id = i }
+            return result
+        }
         guard segments.indices.contains(segmentIndex), segments[segmentIndex].range.upperBound <= frames.count else { return frames }
         var f = Array(frames[segments[segmentIndex].range])
         for i in f.indices { f[i].id = i }
@@ -132,9 +163,32 @@ final class AppState {
     }
 
     func selectSegment(_ i: Int) {
-        guard i != segmentIndex, segments.indices.contains(i) else { return }
+        guard i != segmentIndex, segments.indices.contains(i) || (i == -1 && segments.count > 1) else { return }
+        if let a = analysis { ProxyCache.shared.saveAnalysis(a) }
         segmentIndex = i
         startAnalysis()
+    }
+
+    var timelineClips: [BurstClip] {
+        guard segmentIndex == -1 else { return [] }
+        var start = 0
+        return mergeGroupIndices.filter { segments.indices.contains($0) }.map { i in
+            let s = segments[i]
+            defer { start += s.range.count }
+            return BurstClip(start: start, count: s.range.count, fps: FrameImporter.estimateFPS(Array(frames[s.range])))
+        }
+    }
+
+    func rememberGroupOrder() {
+        guard !frames.isEmpty else { return }
+        defaults.set(mergeGroupIndices, forKey: "groupOrder." + Analyzer.fingerprint(frames))
+    }
+
+    func includeGroup(_ i: Int, enabled: Bool) {
+        if enabled, !mergeGroupIndices.contains(i) { mergeGroupIndices.append(i) }
+        if !enabled, mergeGroupIndices.count > 1 { mergeGroupIndices.removeAll { $0 == i } }
+        rememberGroupOrder()
+        if segmentIndex == -1 { startAnalysis() }
     }
 
     func startAnalysis(hint: (frame: Int, point: V2)? = nil, fresh: Bool = false) {
@@ -142,39 +196,69 @@ final class AppState {
         stop()
         let flag = CancelFlag(); cancelFlag = flag
         let fr = currentFrames
+        let clips = timelineClips
         guard !fr.isEmpty else { return }
         let fps = segments.indices.contains(segmentIndex) ? segments[segmentIndex].fps : FrameImporter.estimateFPS(fr)
         phase = .analyzing(stage: "准备", progress: 0)
         analysisStarted = Date()
         let existingModels = models
+        let kind = subject
+        let partsDirectory: URL?
+        let fpNow: String
+        do {
+            if kind == .aircraft {
+                let directory = try AircraftModelResources.directory()
+                let manifest = try AircraftModelManifest.load(directory: directory,verifyWeights: false)
+                partsDirectory = directory
+                fpNow = Analyzer.fingerprint(fr,aircraftModelIdentity: manifest.analysisIdentity)
+            } else { partsDirectory = nil;fpNow = Analyzer.fingerprint(fr) }
+        } catch { phase = .failed(error.localizedDescription);return }
+        let keptShots = analysis?.fingerprint == fpNow ? analysis?.closeups : nil
         // "重新识别" of the same photos keeps the user's corrections; picking another bird starts clean
-        let fpNow = Analyzer.fingerprint(fr)
         let keep: (eyes: [Int: V2], excluded: Set<Int>)? = (hint == nil && analysis?.fingerprint == fpNow)
             ? (analysis!.manualEye, analysis!.excluded) : nil
         analysisTask = Task.detached(priority: .userInitiated) { [weak self] in
             let fp = fpNow
+            var edits = keep
+            var shots = keptShots
             if hint == nil, !fresh, var cached = ProxyCache.shared.loadAnalysis(fingerprint: fp) {
-                cached.track = TrackBuilder.build(cached)
-                await self?.finishAnalysis(cached, flag: flag)
-                return
+                if clips.count <= 1 || (cached.groupedDetection == true && (cached.clips ?? []) == clips) {
+                    cached.clips = clips
+                    cached.track = TrackBuilder.build(cached)
+                    await self?.finishAnalysis(cached, flag: flag)
+                    return
+                }
+                if edits == nil { edits = (cached.manualEye, cached.excluded) }
+                if shots == nil { shots = cached.closeups }
             }
             do {
-                let m: BirdModels
-                if let existingModels { m = existingModels } else {
-                    await MainActor.run { self?.phase = .analyzing(stage: "加载识别模型", progress: 0) }
-                    m = try BirdModels()
-                    await MainActor.run { self?.models = m }
-                }
-                let az = Analyzer(models: m)
-                var a = try az.analyze(frames: fr, fps: fps, targetHint: hint, progress: { stage, p in
+                let progress: AnalysisProgress = { stage, p in
                     Task { @MainActor in
                         guard !flag.isCancelled else { return }
                         if case .analyzing = self?.phase { self?.phase = .analyzing(stage: stage.rawValue, progress: p) }
                     }
-                }, isCancelled: { flag.isCancelled })
-                a.manualEye = keep?.eyes ?? [:]
-                a.excluded = keep?.excluded ?? []
-                if !a.manualEye.isEmpty { a.track = TrackBuilder.build(a) }
+                }
+                var a: SequenceAnalysis
+                if kind == .aircraft, let partsDirectory {
+                    let az = try AircraftAnalyzer(detectorFactory: {
+                        guard let url = ModelStore.locate(ModelStore.detectorName) else { throw ModelError.notFound(ModelStore.detectorName) }
+                        return try YOLOModel(url: url,keypointCount: 0)
+                    },partsDirectory: partsDirectory)
+                    a = try az.analyze(frames: fr,fps: fps,targetHint: hint,clips: clips,progress: progress,isCancelled: { flag.isCancelled })
+                } else {
+                    let m: BirdModels
+                    if let existingModels { m = existingModels } else {
+                        await MainActor.run { if !flag.isCancelled { self?.phase = .analyzing(stage: "加载识别模型", progress: 0) } }
+                        m = try BirdModels()
+                        await MainActor.run { if !flag.isCancelled { self?.models = m } }
+                    }
+                    a = try Analyzer(models: m).analyze(frames: fr,fps: fps,targetHint: hint,progress: progress,isCancelled: { flag.isCancelled },clips: clips)
+                }
+                a.manualEye = edits?.eyes ?? [:]
+                a.excluded = edits?.excluded ?? []
+                a.clips = clips
+                a.closeups = shots
+                if !a.manualEye.isEmpty || !clips.isEmpty { a.track = TrackBuilder.build(a) }
                 ProxyCache.shared.saveAnalysis(a)
                 await self?.finishAnalysis(a, flag: flag)
             } catch is CancellationError {
@@ -193,6 +277,7 @@ final class AppState {
         sourceDetail = nil
         currentFrame = clamp(currentFrame, 0, max(0, a.count - 1))
         analysis = a
+        subjectRollback = nil
         phase = .ready
         selection.trimEnd = nil
         selection.trimStart = 0
@@ -202,6 +287,7 @@ final class AppState {
     func cancelAnalysis() {
         cancelFlag.cancel()
         analysisTask?.cancel()
+        if subjectRollback != nil { restoreSubjectTransition();return }
         if analysis == nil {
             frames = []; segments = []; segmentIndex = 0
             phase = .empty
@@ -212,7 +298,51 @@ final class AppState {
 
     // MARK: - Settings -> RenderJob
 
+    private var currentProfile: SubjectProfile {
+        SubjectProfile(composition: composition,look: look,export: exportSettings,selection: selection,presetID: presetID)
+    }
+
+    private func applyProfile(_ p: SubjectProfile, resetTrim: Bool = true) {
+        let wasLoading = loading;loading = true
+        defer { loading = wasLoading }
+        let p = resetTrim ? p.untrimmed : p
+        composition = p.composition;look = p.look;exportSettings = p.export;selection = p.selection;presetID = p.presetID
+    }
+
+    func changeSubject(_ next: AnalysisSubject) {
+        guard next != subject, !exportState.running else { return }
+        stop();analysisTask?.cancel();cancelFlag.cancel();jobGeneration += 1
+        rebuildWork?.cancel();saveWork?.cancel()
+        subjectProfiles[subject.rawValue] = currentProfile
+        if let a = analysis {
+            ProxyCache.shared.saveAnalysis(a)
+            subjectRollback = SubjectRollback(subject: subject,analysis: a,frame: currentFrame,view: viewMode,zoom: sourceZoom,
+                                               frames: frames,segments: segments,segmentIndex: segmentIndex,mergeGroups: mergeGroupIndices)
+        }
+        if subjectRollback?.subject == next { restoreSubjectTransition();return }
+        subject = next
+        if subjectProfiles[next.rawValue] == nil {
+            subjectProfiles[next.rawValue] = next == .aircraft ? .initialAircraft(from: subjectProfiles["bird"] ?? currentProfile) : currentProfile
+        }
+        applyProfile(subjectProfiles[next.rawValue]!)
+        models = nil;analysis = nil;job = nil;previewImage = nil;sourceImage = nil;sourceDetail = nil
+        sourceTool = .none;currentFrame = 0;scheduleSettingsSave()
+        if phase != .importing { if frames.isEmpty { phase = .empty } else { startAnalysis() } }
+    }
+
+    private func restoreSubjectTransition() {
+        guard let old = subjectRollback else { return }
+        subjectProfiles[subject.rawValue] = currentProfile
+        subjectRollback = nil;subject = old.subject
+        frames = old.frames;segments = old.segments;segmentIndex = old.segmentIndex;mergeGroupIndices = old.mergeGroups
+        analysis = old.analysis;currentFrame = old.frame;viewMode = old.view;sourceZoom = old.zoom
+        if let profile = subjectProfiles[subject.rawValue] { applyProfile(profile,resetTrim: false) }
+        sourceTool = .none;sourceDetail = nil;phase = .ready
+        scheduleSettingsSave();rebuildJob(immediate: true)
+    }
+
     private func settingsChanged() {
+        guard !loading else { return }
         scheduleSettingsSave()
         rebuildJob(immediate: false)
     }
@@ -235,17 +365,19 @@ final class AppState {
 
     func rebuildJob(immediate: Bool) {
         rebuildWork?.cancel()
+        jobGeneration += 1
+        let generation = jobGeneration
         guard let a = analysis else { return }
         let comp = composition, look = look, ex = exportSettings, sel = selection
         let work = DispatchWorkItem { [weak self] in
             let job = RenderJob(analysis: a, composition: comp, look: look, export: ex, selection: sel)
             DispatchQueue.main.async {
-                guard let self, self.analysis?.fingerprint == a.fingerprint else { return }
-                let durationChanged = abs((self.job?.duration ?? -1) - job.duration) > 1e-6
+                guard let self, generation == self.jobGeneration, self.analysis?.fingerprint == a.fingerprint else { return }
+                let audioChanged = abs((self.job?.duration ?? -1) - job.duration) > 1e-6 || self.job?.mixedAudio(self.audio) != job.mixedAudio(self.audio)
                 self.job = job
                 self.playheadOutput = min(self.playheadOutput, max(0, job.outputFrames.count - 1))
                 self.refreshPreview()
-                if durationChanged { self.rebuildAudioPlayer() }
+                if audioChanged { self.rebuildAudioPlayer() }
             }
         }
         rebuildWork = work
@@ -295,7 +427,7 @@ final class AppState {
         startAnalysis(hint: (currentFrame, p))
     }
 
-    private func scheduleSave() {
+    func scheduleSave() {
         saveWork?.cancel()
         guard let a = analysis else { return }
         let w = DispatchWorkItem { ProxyCache.shared.saveAnalysis(a) }
@@ -305,6 +437,7 @@ final class AppState {
 
     /// Frame whose eye position is inferred from the rest of the head (eye hidden), not yet corrected by hand.
     func isPredicted(_ i: Int) -> Bool {
+        if isAircraft { return false }
         guard let a = analysis, let t = a.track, t.frames.indices.contains(i) else { return false }
         return !t.frames[i].eyeVisible && t.frames[i].hasData && a.manualEye[i] == nil
     }
@@ -330,7 +463,8 @@ final class AppState {
         stop()
         viewMode = .source
         sourceTool = .fixEye
-        if sourceZoom < 2 { sourceZoom = 4 }
+        if isAircraft, analysis?.track?.frames[currentFrame].hasData != true { sourceZoom = 1 }
+        else if sourceZoom < 2 { sourceZoom = 4 }
         refreshPreview()
     }
 
@@ -394,7 +528,7 @@ final class AppState {
             if isPlaying, playheadOutput < job.outputFrames.count {
                 of = job.outputFrames[playheadOutput]
             } else {
-                of = OutputFrame(a: currentFrame, b: currentFrame, t: 0, fade: 1)
+                of = job.previewFrame(currentFrame)
             }
             engine.requestOutput(job: job, frame: of, maxSide: 1400) { [weak self] img in self?.previewImage = img }
             // When paused, follow up with a sharper render from the original file
@@ -503,9 +637,28 @@ final class AppState {
 
     func removeAudio() { audio.url = nil }
 
+    func addAudioTracks() {
+        let p = NSOpenPanel()
+        p.allowedContentTypes = [.audio, .mpeg4Audio, .mp3, .wav, .aiff, .movie]
+        p.allowsMultipleSelection = true
+        p.message = "添加独立音轨，可与背景音乐和快门声同时播放"
+        if p.runModal() == .OK {
+            for url in p.urls {
+                var track = AudioTrack(); track.url = url
+                audio.tracks.append(track)
+            }
+        }
+    }
+
+    func addShutter(_ assetID: String) {
+        guard SoundLibrary.url(for: assetID) != nil else { return }
+        var track = AudioTrack(); track.assetID = assetID
+        audio.tracks.append(track)
+    }
+
     private func audioChanged(from old: AudioSettings) {
         guard old != audio else { return }
-        if let d = try? JSONEncoder().encode(audio) { UserDefaults.standard.set(d, forKey: "audio.v1") }
+        if let d = try? JSONEncoder().encode(audio) { defaults.set(d, forKey: "audio.v1") }
         if old.url != audio.url { loadAudioOverview() }
         rebuildAudioPlayer()
     }
@@ -513,6 +666,7 @@ final class AppState {
     private func loadAudioOverview() {
         audioOverviewTask?.cancel()
         audioOverview = nil
+        musicCues = []
         audioMessage = nil
         guard let url = audio.url else { return }
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -526,6 +680,7 @@ final class AppState {
                 switch result {
                 case .success(let o):
                     self.audioOverview = o
+                    self.musicCues = MusicCues.analyze(peaks: o.peaks, binsPerSecond: o.binsPerSecond)
                     if self.audio.startOffset > o.duration { self.audio.startOffset = 0 }
                 case .failure(let e): self.audioMessage = e.localizedDescription
                 }
@@ -536,24 +691,34 @@ final class AppState {
     /// Rebuilds the preview player (same mix as the export) after music or duration changes.
     func rebuildAudioPlayer() {
         audioBuildTask?.cancel()
-        guard audio.isActive, let job, job.duration > 0 else {
+        guard let job, job.duration > 0, job.mixedAudio(audio).isActive else {
             audioPlayer?.pause(); audioPlayer = nil
             return
         }
-        let s = audio, duration = job.duration
+        let s = job.mixedAudio(audio), duration = job.duration
         audioBuildTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 120_000_000)   // debounce slider drags
-            guard !Task.isCancelled, let (comp, mix) = try? await AudioMixer.makeMix(s, duration: duration), !Task.isCancelled,
-                  let self else { return }
-            let item = AVPlayerItem(asset: comp)
-            item.audioMix = mix
-            if let p = self.audioPlayer { p.replaceCurrentItem(with: item) } else { self.audioPlayer = AVPlayer(playerItem: item) }
-            if self.isPlaying, let job = self.job { self.startAudio(at: Double(self.playheadOutput) / job.export.outputFPS) }
+            do {
+                try Task.checkCancellation()
+                let (comp, mix) = try await AudioMixer.makeMix(s, duration: duration)
+                try Task.checkCancellation()
+                guard let self else { return }
+                self.audioMessage = nil
+                let item = AVPlayerItem(asset: comp)
+                item.audioMix = mix
+                if let p = self.audioPlayer { p.replaceCurrentItem(with: item) } else { self.audioPlayer = AVPlayer(playerItem: item) }
+                if self.isPlaying, let job = self.job { self.startAudio(at: Double(self.playheadOutput) / job.export.outputFPS) }
+            } catch is CancellationError {
+            } catch {
+                guard !Task.isCancelled, let self else { return }
+                self.audioPlayer?.pause(); self.audioPlayer = nil
+                self.audioMessage = "音频预览失败：" + error.localizedDescription
+            }
         }
     }
 
     private func startAudio(at t: Double) {
-        guard previewAudio, audio.isActive, let p = audioPlayer else { return }
+        guard previewAudio, let p = audioPlayer else { return }
         p.seek(to: CMTime(seconds: t, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         p.play()
     }
@@ -597,7 +762,7 @@ final class AppState {
 
     private func watermarkChanged(from old: WatermarkSettings) {
         guard old != watermark else { return }
-        if let d = try? JSONEncoder().encode(watermark) { UserDefaults.standard.set(d, forKey: "watermark.v1") }
+        if let d = try? JSONEncoder().encode(watermark) { defaults.set(d, forKey: "watermark.v1") }
         if old.imagePath != watermark.imagePath { loadWatermarkImage() }
     }
 
@@ -659,17 +824,22 @@ final class AppState {
         var export: ExportSettings
         var selection: FrameSelection
         var presetID: String?
+        var subject: String?
+        var profiles: [String: SubjectProfile]?
     }
-    private static let settingsVersion = 2
+    private static let settingsVersion = 3
 
     private var loading = false
     private func scheduleSettingsSave() {
         guard !loading else { return }
         settingsSaveWork?.cancel()
-        let s = Saved(version: Self.settingsVersion, composition: composition, look: look, export: exportSettings,
-                      selection: selection, presetID: presetID)
+        subjectProfiles[subject.rawValue] = currentProfile.untrimmed
+        let bird = (subjectProfiles["bird"] ?? currentProfile).untrimmed
+        let s = Saved(version: Self.settingsVersion, composition: bird.composition, look: bird.look, export: bird.export,
+                      selection: bird.selection, presetID: bird.presetID,subject: subject.rawValue,profiles: subjectProfiles.mapValues(\.untrimmed))
+        let defaults = self.defaults
         let w = DispatchWorkItem {
-            if let d = try? JSONEncoder().encode(s) { UserDefaults.standard.set(d, forKey: "settings.v1") }
+            if let d = try? JSONEncoder().encode(s) { defaults.set(d, forKey: "settings.v1") }
         }
         settingsSaveWork = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: w)
@@ -678,7 +848,7 @@ final class AppState {
     private func loadSettings() {
         loading = true
         defer { loading = false }
-        let ud = UserDefaults.standard
+        let ud = defaults
         if let d = ud.data(forKey: "settings.v1"), let s = try? JSONDecoder().decode(Saved.self, from: d) {
             var comp = s.composition
             // v2: the new "shift" edge handling replaces auto-zoom as the default
@@ -686,6 +856,13 @@ final class AppState {
             composition = comp; look = s.look; exportSettings = s.export
             var sel = s.selection; sel.trimStart = 0; sel.trimEnd = nil
             selection = sel; presetID = s.presetID
+            subjectProfiles = (s.profiles ?? [:]).filter { AnalysisSubject(rawValue: $0.key) != nil }
+            if subjectProfiles["bird"] == nil { subjectProfiles["bird"] = currentProfile }
+            subject = AnalysisSubject(rawValue: s.subject ?? "bird") ?? .bird
+            if subject == .aircraft, subjectProfiles["aircraft"] == nil {
+                subjectProfiles["aircraft"] = .initialAircraft(from: subjectProfiles["bird"]!)
+            }
+            if let profile = subjectProfiles[subject.rawValue] { applyProfile(profile) }
         } else if let p = CompositionPreset.all.first(where: { $0.id == "lead" }) {
             composition = p.composition
         }

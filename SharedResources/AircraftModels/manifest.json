@@ -1,0 +1,20 @@
+{
+  "id": "grounding-dino-tiny-aircraft-parts-v1",
+  "name": "Grounding DINO tiny（飞机部位）",
+  "type": "open_vocabulary_detector",
+  "file": "AircraftParts.onnx",
+  "bytes": 203824675,
+  "sha256": "70bf2d3310d1ae73769c96a71e00cbf2861eb33a1f4d97d84a108a7bf02c03c9",
+  "revision": "ff690b0a8050566c290287545bd059350f3e9096",
+  "url": "https://huggingface.co/onnx-community/grounding-dino-tiny-ONNX/resolve/ff690b0a8050566c290287545bd059350f3e9096/onnx/model_quantized.onnx",
+  "upstream": "https://huggingface.co/IDEA-Research/grounding-dino-tiny",
+  "conversion": "https://huggingface.co/onnx-community/grounding-dino-tiny-ONNX",
+  "license": "Apache-2.0",
+  "query": "the nose of an airplane .",
+  "token_ids": [101, 1996, 4451, 1997, 2019, 13297, 1012, 102],
+  "nose_token_index": 2,
+  "input_size": 800,
+  "image_mean": [0.485, 0.456, 0.406],
+  "image_std": [0.229, 0.224, 0.225],
+  "status": "experimental_local_candidate"
+}

@@ -34,6 +34,10 @@ class OutputFrame:
     b: int          # blended with b by t
     t: float
     fade: float
+    time: float = 0.0
+    closeup: int = -1
+    shotTime: float = 0.0
+    audioCycle: int = 0
 
 
 def output_frames(used: list[int], source_fps: float, s: ExportSettings) -> list[OutputFrame]:
@@ -71,10 +75,48 @@ def output_frames(used: list[int], source_fps: float, s: ExportSettings) -> list
         fade = clamp(fade, 0.0, 1.0)
         if s.interpolation == FrameInterpolation.NEAREST:
             idx = i0 if fr < 0.5 else i1
-            out.append(OutputFrame(order[idx], order[idx], 0.0, fade))
+            out.append(OutputFrame(order[idx], order[idx], 0.0, fade, time))
         else:
-            out.append(OutputFrame(order[i0], order[i1], 0.0 if fr < 1e-6 else fr, fade))
+            out.append(OutputFrame(order[i0], order[i1], 0.0 if fr < 1e-6 else fr, fade, time))
     return out
+
+
+def project_frames(used, clips, closeups, source_fps, settings):
+    from dataclasses import replace
+    local = settings.copy()
+    local.loop, local.repeatCount, local.fadeInSeconds, local.fadeOutSeconds = LoopMode.FORWARD, 1, 0, 0
+    base = []
+    for clip in clips:
+        indices = [i for i in used if clip["start"] <= i < clip["start"] + clip["count"]]
+        base += output_frames(indices, clip["fps"] if clip["fps"] > 0 else source_fps, local)
+    if not clips:
+        base = output_frames(used, source_fps, local)
+    arranged, active = [], None
+    available = set(used)
+    for frame in base:
+        match = next((i for i,s in enumerate(closeups) if s.frame in available and s.frame <= frame.a <= max(s.frame,s.endFrame)), None)
+        if match is None:
+            arranged.append(frame)
+        elif match != active:
+            shot = closeups[match]
+            count = max(1, math.floor(min(3600,max(1/settings.outputFPS,shot.seconds))*settings.outputFPS+0.5))
+            arranged += [OutputFrame(shot.frame,shot.frame,0,1,closeup=match,shotTime=k/settings.outputFPS) for k in range(count)]
+        active = match
+    if settings.loop == LoopMode.REVERSE:
+        arranged.reverse()
+    elif settings.loop == LoopMode.PING_PONG:
+        arranged += list(reversed(arranged))[1:]
+    cycle = list(arranged)
+    for repetition in range(1,settings.repeatCount):
+        arranged += [replace(f,audioCycle=repetition) for f in (cycle[1:] if settings.loop == LoopMode.PING_PONG else cycle)]
+    duration = len(arranged)/settings.outputFPS
+    result = []
+    for k,frame in enumerate(arranged):
+        time, fade = k/settings.outputFPS,1
+        if settings.fadeInSeconds>0:fade=min(fade,time/settings.fadeInSeconds)
+        if settings.fadeOutSeconds>0:fade=min(fade,(duration-time)/settings.fadeOutSeconds)
+        result.append(replace(frame,time=time,fade=clamp(fade,0,1)))
+    return result
 
 
 # ---------------------------------------------------------------------------------------------- deflicker
@@ -82,6 +124,10 @@ def output_frames(used: list[int], source_fps: float, s: ExportSettings) -> list
 
 def deflicker_gains(a: SequenceAnalysis, look: LookSettings) -> np.ndarray:
     """Per-frame RGB gains (n, 3) removing exposure / white-balance flicker."""
+    if len(a.clips) > 1:
+        from dataclasses import replace
+        return np.concatenate([deflicker_gains(replace(a,frames=a.frames[c["start"]:c["start"]+c["count"]],
+            perFrame=a.perFrame[c["start"]:c["start"]+c["count"]],clips=[]),look) for c in a.clips])
     n = a.count
     ev = 2 ** look.exposureEV
     out = np.full((n, 3), ev)
@@ -224,13 +270,23 @@ def overlay_lines(exif, o) -> tuple[str, ...]:
     return tuple(out)
 
 
-def draw_focus_mark(img: np.ndarray, center, side: float, line: int, style: FocusMarkStyle, bgr):
+def project_source_time(frame, output_frames, closeups):
+    """First occurrence in output, resolving replaced photos; None for omitted photos."""
+    for index, shot in enumerate(closeups):
+        if shot.frame <= frame <= max(shot.frame, shot.endFrame):
+            match = next((of for of in output_frames if of.closeup == index), None)
+            if match is not None:
+                return match.time
+    return next((of.time for of in output_frames if of.a == frame), None)
+
+
+def draw_focus_mark(img: np.ndarray, center, side: float, line: int, style: FocusMarkStyle, bgr, height=None):
     """Camera-style AF frame: thin coloured square or corner brackets with a faint dark outline."""
     sh = 4                                    # fixed-point bits for sub-pixel drawing
     S = 1 << sh
     cx, cy = center
-    h = side / 2
-    x0, y0, x1, y1 = cx - h, cy - h, cx + h, cy + h
+    half_w, half_h = side / 2, (height if height is not None else side) / 2
+    x0, y0, x1, y1 = cx - half_w, cy - half_h, cx + half_w, cy + half_h
 
     def pt(x, y):
         return int(round(x * S)), int(round(y * S))
@@ -238,7 +294,7 @@ def draw_focus_mark(img: np.ndarray, center, side: float, line: int, style: Focu
     if style == FocusMarkStyle.BOX:
         segs = [((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))]
     else:
-        L = side * 0.28
+        L = min(side, height if height is not None else side) * 0.28
         segs = []
         for (px, py, dx, dy) in ((x0, y0, 1, 1), (x1, y0, -1, 1), (x0, y1, 1, -1), (x1, y1, -1, -1)):
             segs += [((px, py + dy * L), (px, py)), ((px, py), (px + dx * L, py))]
@@ -305,11 +361,30 @@ class RenderJob:
         self.used = [i for i in range(n) if st[i] == STATUS_OK]
         W, H = export.output_size
         self.plan: CompositionPlan = make_plan(self.track, analysis.frames, composition, float(W), float(H), self.used or None)
+        if len(analysis.clips) > 1:
+            from dataclasses import replace
+            parts=[]
+            for clip in analysis.clips:
+                start,stop=clip["start"],clip["start"]+clip["count"]
+                sub=replace(self.track, **{name:getattr(self.track,name)[start:stop] for name in ("eye","head_center","head_length","angle","measured_eye","eye_visible","has_data","confidence")})
+                sub.median_head_length=float(np.median(sub.head_length))
+                sub.facing_right=float(np.median(np.cos(sub.angle)))>=0
+                parts.append(make_plan(sub,analysis.frames[start:stop],composition,float(W),float(H),[i-start for i in self.used if start<=i<stop]))
+            self.plan=CompositionPlan([x for p in parts for x in p.xforms],float(W),float(H),max(p.max_upscale for p in parts),
+                 sum(p.out_of_bounds_frames for p in parts),sum(p.shifted_frames for p in parts),sum(p.zoomed_frames for p in parts),
+                 sum(p.image_limited_frames for p in parts),parts[0].mirrored)
         self.gains = deflicker_gains(analysis, look)
-        self.output_frames = output_frames(self.used, analysis.fps, export)
+        self.output_frames = project_frames(self.used, analysis.clips, analysis.closeups, analysis.fps, export) if analysis.clips or analysis.closeups else output_frames(self.used, analysis.fps, export)
         self._wm_img = None
         self._wm_loaded = False
         self._lock = threading.Lock()
+
+    def mixed_audio(self, user_audio=None):
+        from .settings import AudioSettings
+        from .closeup_audio import tracks
+        result = user_audio.copy() if user_audio else AudioSettings()
+        result.tracks += tracks(self.output_frames,self.analysis.closeups)
+        return result
 
     @property
     def output_size(self) -> tuple[int, int]:
@@ -322,9 +397,17 @@ class RenderJob:
     def contains(self, i: int) -> bool:
         return 0 <= i < self.analysis.count and i < len(self.plan.xforms)
 
+    def preview_frame(self, frame):
+        from dataclasses import replace
+        for i,shot in enumerate(self.analysis.closeups):
+            if shot.frame <= frame <= max(shot.frame,shot.endFrame):
+                match=next((of for of in self.output_frames if of.closeup==i),None)
+                if match is not None:return replace(match,shotTime=0.35)
+        return OutputFrame(frame,frame,0,1)
+
     @property
     def export_decode_scale(self) -> float:
-        return decode_scale(min(1.0, self.plan.max_upscale * 1.2))
+        return decode_scale(min(1.0, self.plan.max_upscale * max([1] + [s.zoom for s in self.analysis.closeups]) * 1.2))
 
     def source(self, i: int, proxy: bool, scale: float = 1.0):
         """(image, scale relative to the original pixel grid) or None."""
@@ -415,13 +498,48 @@ class RenderJob:
             return None
         fm = self.export.focusMark
         xf = self.plan.xforms[i].scaled(scale)
-        eye_seen = bool(self.track.eye_visible[i]) or i in self.analysis.manualEye
+        aircraft = getattr(self.analysis, "subject", "bird") == "aircraft"
+        eye_seen = not aircraft and (bool(self.track.eye_visible[i]) or i in self.analysis.manualEye)
         on_head = not eye_seen and fm.headWhenHidden
+        if aircraft:
+            on_head = True
         side = self.track.head_length[i] * xf.z * (1.3 if on_head else 0.42) * fm.size
         c = xf.map(self.track.head_center[i] if on_head else self.track.eye[i])
         return c, max(10 * scale, side)
 
     # -- full output frame
+
+    def focus_rect(self, i: int, target: str, scale: float):
+        aircraft = getattr(self.analysis, "subject", "bird") == "aircraft"
+        if aircraft and target == "eye":
+            return None
+        if not self.contains(i) or (not self.track.has_data[i] and not (aircraft and target == "body")):
+            return None
+        if target == "eye":
+            value = self.focus_target(i, scale)
+            return None if value is None else np.array([*value[0], value[1], value[1]])
+        xf = self.plan.xforms[i].scaled(scale)
+        if target == "head":
+            side = max(10 * scale, self.track.head_length[i] * xf.z * 1.3 * self.export.focusMark.size)
+            return np.array([*xf.map(self.track.head_center[i]), side, side])
+        pf = self.analysis.perFrame[i]
+        box = pf.target_box
+        if target != "body" or box is None:
+            return None
+        x0,y0,x1,y1 = box.x,box.y,box.x+box.w,box.y+box.h
+        if aircraft and self.track.has_data[i]:
+            nose = pf.aircraft.nose if pf.aircraft is not None else None
+            # COCO sometimes encloses only the wings/fuselage. Include the independently located
+            # nose in the displayed whole-airframe frame, keeping the raw detector box unchanged.
+            if nose is not None or i in self.analysis.manualEye:
+                center = self.track.head_center[i]
+                w,h = (nose.w,nose.h) if nose is not None else (self.track.head_length[i],self.track.head_length[i])
+                x0,y0 = min(x0,center[0]-w/2),min(y0,center[1]-h/2)
+                x1,y1 = max(x1,center[0]+w/2),max(y1,center[1]+h/2)
+        points = np.array([xf.map(q) for q in [(x0,y0),(x1,y0),(x0,y1),(x1,y1)]])
+        lo, hi = points.min(axis=0), points.max(axis=0)
+        size = (hi - lo) * clamp(self.export.focusMark.bodySize, 0.5, 2.5) * 1.04
+        return np.array([*((lo + hi) / 2), *size])
 
     def render_output(self, of: OutputFrame, scale: float = 1.0, include_watermark: bool = True, fetch=None,
                       interpolate=None) -> np.ndarray | None:
@@ -440,18 +558,42 @@ class RenderJob:
                 img = mixed if mixed is not None else cv2.addWeighted(img, 1 - of.t, b, of.t, 0)
         h, w = img.shape[:2]
         sx = w / self.output_size[0]
-        if self.export.focusMark.enabled:
-            ta = self.focus_target(of.a, sx)
-            if ta is not None:
-                c, side = ta
+        fm = self.export.focusMark
+        flash_on = fm.flash_on(of.time)
+        if fm.enabled:
+            for target, enabled in [("eye", fm.showEye), ("head", fm.showHead),
+                                    ("body", fm.showBody and (not fm.blinkBody or flash_on))]:
+                if not enabled:
+                    continue
+                rect = self.focus_rect(of.a, target, sx)
+                if rect is None:
+                    continue
                 if of.t > 0.001 and of.b != of.a:
-                    tb = self.focus_target(of.b, sx)
-                    if tb is not None:
-                        c = c + (tb[0] - c) * of.t
-                        side = side + (tb[1] - side) * of.t
-                fm = self.export.focusMark
+                    other = self.focus_rect(of.b, target, sx)
+                    if other is not None:
+                        rect = rect + (other - rect) * of.t
                 line = max(1, int(round(min(w, h) * 0.0024 * fm.lineWidth)))
-                draw_focus_mark(img, c, side, line, fm.style, fm.color.bgr)
+                draw_focus_mark(img, rect[:2], rect[2], line, fm.style, fm.color_for(target).bgr, height=rect[3])
+        if 0 <= of.closeup < len(self.analysis.closeups):
+            shot = self.analysis.closeups[of.closeup]
+            zoom = clamp(shot.zoom,1,8)
+            cx,cy=clamp(shot.centerX,0.5/zoom,1-0.5/zoom),clamp(shot.centerY,0.5/zoom,1-0.5/zoom)
+            matrix=np.array([[zoom,0,w*(0.5-cx*zoom)],[0,zoom,h*(0.5-cy*zoom)]],dtype=np.float64)
+            img=cv2.warpAffine(img,matrix,(w,h),flags=cv2.INTER_CUBIC,borderMode=cv2.BORDER_REPLICATE)
+            if shot.animatedFrame:
+                fraction=0.84+0.08*(1-(1-min(1,of.shotTime/0.35))**3)
+                layer=img.copy()
+                from .settings import FocusMarkStyle
+                draw_focus_mark(layer,(w/2,h/2),w*fraction,max(1,round(min(w,h)*0.002)),FocusMarkStyle.BRACKETS,shot.color.bgr,height=h*fraction)
+                alpha=0.7+0.3*math.sin(of.shotTime*math.pi*2)
+                img=cv2.addWeighted(layer,alpha,img,1-alpha,0)
+        if fm.captureFlash and flash_on:
+            layer = img.copy()
+            fraction = clamp(fm.captureSize, 0.25, 0.98)
+            px, py = round(w * (1 - fraction) / 2), round(h * (1 - fraction) / 2)
+            cv2.rectangle(layer, (px, py), (w - px - 1, h - py - 1), fm.captureColor.bgr,
+                          max(1, round(min(w, h) * 0.0012)), cv2.LINE_AA)
+            img = cv2.addWeighted(layer, 0.55, img, 0.45, 0)
         ov = self._text_overlay(of.a, w, h)
         if ov is not None:
             alpha_composite(img, ov[0], ov[1], ov[2], ov[3])

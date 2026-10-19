@@ -1,97 +1,90 @@
 # BirdLock 鸟眼锁定
 
-把飞鸟连拍（JPG / HEIF）自动对齐鸟眼，生成"鸟头不动、翅膀在动"的连拍视频。原生 macOS 应用，针对 Apple 芯片优化（Core ML 神经网络引擎 + Metal + 硬件编码）。
+把飞鸟连拍照片自动对齐到鸟眼，合成为鸟头稳定、翅膀运动的视频。支持原生 macOS 版（SwiftUI / Core ML）和 Windows 版（Python / Qt / ONNX Runtime），照片识别、编辑和视频合成在本地完成。
 
-## 下载与交流
+## 版本、下载与反馈
 
-- **下载安装包**：[Releases 页面](https://github.com/cyandee/BirdLock/releases)（macOS 14+，Apple 芯片和 Intel 都可以）
-- **用户交流群**：反馈软件问题和建议，也是鸟友分享作品、交流拍鸟心得的地方。微信扫码加入：
+当前源码版本为 **1.4.0**，由根目录 [VERSION](VERSION) 统一管理。**源码同步与安装包发布分开进行：本次更新源码和文档，尚未创建1.4.0标签或Release；下载安装包请核对Releases中的实际版本。**
 
-<img src="docs/images/wechat-group.png" width="240" alt="BirdLock 交流群二维码">
+- [下载安装包 / 查看历史测试版](https://github.com/cyandee/BirdLock/releases)
+- [报告问题](https://github.com/cyandee/BirdLock/issues) · [反馈邮箱](mailto:cyanodee@gmail.com)：`cyanodee@gmail.com`
+- [macOS 使用说明](docs/使用说明.md) · [Windows 使用说明](docs/windows/使用说明.md) · [文档导航](docs/README.md)
 
-> 群二维码每 7 天更新一次。如果已过期，请发邮件到 cyanodee@gmail.com 或在 [Issues](https://github.com/cyandee/BirdLock/issues) 留言，我会拉你进群。
+macOS 版支持 macOS 14+、Apple 芯片和 Intel；Windows 便携版面向 Windows 10/11 x64。macOS 15.4+ 可使用系统 AI 光流补帧。通用构建已完成，但实体 Intel Mac、Windows 实体显卡和低内存设备仍需补测。macOS 当前为临时签名，尚未进行 Developer ID 签名和 Apple 公证，详见[构建与发布](docs/构建与发布.md)。
 
-## Windows 版
+## 1.4.0 更新
 
-`windows/` 目录是 Windows 版（Python + Qt，绿色免安装，支持 NVIDIA / AMD / Intel 显卡加速），功能与 macOS 版一致。下载见 [Releases](https://github.com/cyandee/BirdLock/releases)，开发和打包说明见 [windows/README.md](windows/README.md)。
+- **连拍组排序**：导入多组照片后选择合并，上移/下移调整片段播放顺序；手动修正、排除标记和特写跟随原照片，组内保留拍摄顺序和各组连拍速度，不跨组补帧。
+- **特写单次快门声**：选择照片替换原时段，独立调时长、放大、构图和动态框；新增特写开始时可播放一次快门声，支持开关和独立音量，与背景音乐共存。
+- **相机 → fps / 录音**：使用维护者提供的完整原录音循环，不变速模拟其他档位。
+- **联系与支持**：统一邮箱 `cyanodee@gmail.com`，提供自愿[请作者喝杯咖啡](docs/赞赏.md)页面。全部功能免费，赞赏不影响使用。
+
+| 相机菜单 | 录音档位 |
+|---|---|
+| 索尼 A1 II（A1M2） | 5 / 10 / 15 / 20 / 30 fps |
+| 索尼 A9 III（A93） | 60 / 120 fps |
+| 索尼 A7 V（A7M5） | Hi+ 30 fps / Mid 15 fps |
+| 索尼 A7R VI（A7R6） | 原录音，fps尚未确认 |
+| 尼康 Z8 | 20 fps |
+
+单张快门使用另行标注来源的通用 Canon Digital Rebel 单拍声（CC0），不是上述各型号专用单拍录音。详见[音效资源说明](SharedResources/Audio/README.md)。旧A1 II保存选择会迁移到新录音；旧缓存特写保持无声，可手动开启。
+
+## 功能
+
+| 类别 | 功能 |
+|---|---|
+| 导入与组片 | JPG、HEIF/HEIC、PNG、TIFF；按拍摄时间排序；归为一组或按快门间隔分组；单组切换、多组合并和顺序调整；不导入外部视频作为片段 |
+| 鸟类锁定 | 鸟眼 / 鸟头；遮挡时推算；可手动修正、选择主体、排除照片和裁剪起止范围 |
+| 虚拟对焦框 | 鸟眼、鸟头、含展开翅膀的鸟身分别启用和配色；鸟身大小独立调整；方框 / 四角框 |
+| 快门模拟 | 鸟身闪烁与画面内侧边框；边框大小、颜色和1—120次/秒；实际视觉效果受视频帧率采样限制 |
+| 飞机（试验） | 机身与自动机头定位、序列跟踪、独立设置/缓存、机头修正及导出；机头/机身框分别配色、调大小，保留快门模拟 |
+| 构图 | 主体居中、前方留白、特写、全身/全机、柔和跟随等预置；缩放、移动、旋转、平移取景、模糊延展或黑边 |
+| 特写 | 替换所选照片时段，调整展示秒数、缩放、横纵构图、动态框、单拍声和音量 |
+| 音频 | 背景音乐与多条独立音轨、内置快门及自行上传；音量、静音、起点、长度、循环、淡入淡出；预览与导出共用混音 |
+| 卡点辅助 | 离线音乐节拍/能量高潮候选、画面候选和时点对齐；需人工试听确认，不宣称理解音乐语义 |
+| 输出 | 多种横竖比例、自定义比例、短边720—4320、24—120fps、速度、正放/倒放/往返、重复及淡入淡出 |
+| 导出与水印 | H.264、HEVC；macOS另有ProRes；GIF、对齐图片序列；图片/文字水印与拍摄参数 |
+
+飞机模型是通用文字区域检测器与图像跟踪组合，复杂倒置视角可能将翼尖误认为机头；受控变换测试不等于真实连拍精度。请逐帧检查并按需修正，详见[飞机模型与限制](docs/飞机识别调研.md)。
 
 ## 快速开始
 
-```zsh
-cd ~/Claude/bird
-zsh scripts/build_app.sh        # 生成 dist/BirdLock.app
-VERSION=1.1 zsh scripts/make_dmg.sh   # 生成可分发的 dist/BirdLock-1.1.dmg（Apple 芯片 + Intel 通用版）
-open dist/BirdLock.app
-```
+从Releases下载并完整解压Windows ZIP，或从完整Mac DMG复制整个.app。先核对随版本提供的SHA256，再导入连拍照片、选择主体与构图、试听预览并导出。请保留原始照片和需要的成片。
 
-把连拍文件夹拖进窗口。分析完成后挑一个构图风格，按 ⌘E 导出。
-
-> 第一次打开如果系统提示"无法验证开发者"，请右键点击 App，选「打开」。
-
-## 处理流程
-
-1. **导入**：读取 EXIF 拍摄时间（精确到亚秒）排序，自动识别连拍组和连拍速度。
-2. **识别鸟**：用 YOLO11m（Core ML）在缩略图上找鸟，并逐帧跟踪同一只鸟。画面中有多只鸟时也不会跳到别的鸟上。
-3. **定位鸟头 / 鸟眼**：在鸟的区域内用关键点模型定位眼睛、喙、头顶等部位。小鸟会自动用更高分辨率解码。
-4. **头部模型**：在整组照片上拟合一个头部模板（Procrustes 方法）。鸟眼被翅膀挡住时，用其他头部关键点推算鸟眼位置，不会跳回鸟头中心。
-5. **亚像素配准**：用相位相关对相邻帧的鸟头做精确对齐，精度约 0.05 像素。采样无重采样误差，全组使用同一解码尺度。
-6. **轨迹融合**：用鲁棒最小二乘把"绝对但有噪声"的关键点和"相对但精确"的配准结果融合。误检的关键点和配准失败的帧会被自动剔除影响。
-   - 合成测试：只用关键点时帧间抖动 0.39 px，融合后 **0.025 px**。
-7. **构图与渲染**：Core Image + Metal 渲染。大倍率缩小时先做 Lanczos 降采样；去闪烁可统一相邻帧的曝光和白平衡。
-8. **导出**：使用 AVFoundation 硬件编码，支持 H.264、HEVC、ProRes；也可导出 GIF 或对齐后的图片序列。
-
-## 功能一览
-
-| 类别 | 选项 |
-|---|---|
-| 构图风格 | 鸟眼居中 / 前方留白 / 头部特写 / 全身舒展 / 电影跟随 / 自然远近，以及全部手动调节 |
-| 锁定 | 鸟眼（被遮挡时自动推算）或鸟头中心；硬锁定 ↔ 柔和跟随 |
-| 位置 | 拖动小圆点设置鸟眼在画面中的位置；飞行方向自动留白 |
-| 取景 | 取景范围（画面短边 = 头长 × N，2–300，可直接输入数值，或「用满原图」）；在「原图+识别」里直接拖动取景框移动、拖四角缩放；锁定鸟的大小或固定取景 |
-| 画面边缘 | **平移取景（默认）**：鸟飞到原图边缘时取景框在原图内平移、尽量用满像素，鸟眼与成片边缘保持最小距离（可设），必要时略微放大；也可选放大避免越界、模糊延展、黑边 |
-| 旋转 | 不旋转 / 锁定头部角度 / 柔和校正倾斜；角度微调 |
-| 画面 | 去闪烁、曝光；跳过模糊帧（按鸟头清晰度判断）、跳过未识别的帧 |
-| 比例 | 9:16、3:4、4:5、1:1、5:4、4:3、3:2、16:9、1.85:1、2:1、2.39:1、21:9、自定义 |
-| 分辨率 | 短边 720 到 4320；界面会提示原图像素是否够用 |
-| 帧率与速度 | 24 到 120 fps；0.1× 到 2×；补帧方式：重复帧、帧混合、**AI 光流补帧**（VideoToolbox，macOS 15.4 以上） |
-| 顺序 | 正放、倒放、往返；重复次数；淡入淡出 |
-| 水印 | 图片水印（PNG 签名 / Logo，在成片预览里拖动位置、拖右下角调大小，或九宫格快速定位）；拍摄参数（机身、镜头、快门、光圈、ISO）、自定义文字 |
-| 对焦框 | 模仿索尼鸟眼对焦显示：鸟眼上画对焦框（方框 / 四角框，绿 / 白 / 橙），鸟眼被遮挡时框住鸟头 |
-| 音乐 | 导入背景音乐（MP3 / M4A / WAV / AIFF），在「音乐」轨道上拖动选择片段；音量、淡入淡出、循环；预览时同步播放，导出视频时合成 AAC 音轨 |
-| 修正 | 鸟头推算帧会标出「修正」按钮：切换到原图并放大跟随鸟头，点击或拖动鸟眼到准确位置，前后帧自动重算；上一个 / 下一个推算帧快速跳转；也能给未识别的帧手动标记；选择要跟踪的鸟；排除单帧；设置起点和终点 |
-
-## 快捷键
-
-空格 播放/暂停 · ← → 逐帧 · ⌘T 切换成片/原图 · X 排除当前帧 · E 修正鸟眼 · [ ] 上一个/下一个推算帧 · Z 原图放大 · ⌘E 导出 · ⌘O 导入
-
-也可以把文件夹拖到程序坞图标上，或在访达里用「打开方式」选择 BirdLock 导入。
-
-## 目录结构
-
-```
-Sources/BirdLockCore   算法与渲染（可单独测试）
-Sources/BirdLockApp    SwiftUI 界面
-Sources/BirdLockCLI    命令行工具（批量测试、调试）
-Models/                Core ML 模型（BirdDetector / BirdPose）
-tools/train/           模型导出与训练脚本（CUB-200 鸟类关键点）
-scripts/               打包脚本（build_app / make_dmg）、开发辅助脚本
-docs/                  使用说明、用户协议草稿
-```
-
-## 命令行
+macOS 从源码构建：
 
 ```zsh
-swift build -c release
-B=.build/release/birdlock-cli
-$B analyze <文件夹> --debug dbg/       # 分析并输出识别结果的可视化图片
-$B export <文件夹> --preset lead --aspect 9:16 --short 2160 --speed 0.5 --interp ai --out out.mp4
-#   其他选项：--framing 40  --edge shift|zoom|blur|black  --margin 0.12  --follow 0.5
-#            --audio 音乐.m4a --audio-offset 12.5  --watermark 签名.png --wm-x 0.85 --wm-y 0.9 --wm-size 0.25  --focus  --dump-plan
+zsh scripts/build_app.sh       # dist/BirdLock.app
+zsh scripts/make_dmg.sh        # dist/BirdLock-1.4.0.dmg，Apple芯片+Intel通用版
 ```
 
-## 模型
+Windows 构建与自检见 [windows/README.md](windows/README.md)。飞机权重由构建脚本按固定版本和SHA256准备，约204MB，不提交普通Git；分发包内已包含，应用运行时不联网下载。[统一构建流程](docs/构建与发布.md)支持手动构建，以及经批准推标签后创建含双平台、源码、校验值的同一个Release草稿。
 
-- `BirdDetector`：YOLO11m（COCO，鸟类）导出的 Core ML 模型，输入 1024。
-- `BirdPose`：鸟类关键点模型（CUB-200-2011 训练）。重新训练和导出方法见 `tools/train/`。
+## 目录与模型
 
-缓存（缩略图和分析结果）存放在 `~/Library/Caches/BirdLock`，可以随时删除。
+```text
+Sources/BirdLockCore/          识别、跟踪、构图、渲染、混音和导出
+Sources/BirdLockAircraftRuntime/  独立飞机部位推理运行库
+Sources/BirdLockApp/           macOS SwiftUI界面
+Sources/BirdLockCLI/           macOS命令行工具
+windows/                      Windows Qt界面、算法和打包
+Models/                       现有Core ML鸟类模型
+SharedResources/Audio/        双平台音效及来源/哈希
+SharedResources/AircraftModels/  飞机固定模型清单与完整许可
+SharedResources/Support/      维护者提供的自愿赞赏图片
+docs/                         使用、维护、验收和许可说明
+scripts/                      构建、分发完整性检查与辅助脚本
+Tests/、windows/tests/        自动回归
+```
+
+鸟类检测保留原YOLO11m；随包姿态为eye-pose-v0六关键点模型（喙、双眼、头顶、双肩），没有替换为训练目录中的十五关键点实验。模型来源和许可见[第三方许可](docs/第三方许可.md)。
+
+macOS 缓存在 `~/Library/Caches/BirdLock`；Windows 优先保存在应用目录的 `data/cache`，不可写时回退到用户数据目录。缓存包含手动修正、排除和特写，清空前请保存需要的成片。目前尚未提供独立可迁移的工程文件。
+
+## 文档、验证与支持
+
+[版本记录](docs/迭代记录.md) · [验收清单](docs/整批功能验收清单.md) · [构建与发布](docs/构建与发布.md) · [用户协议](docs/用户协议.md) · [Windows第三方许可](docs/windows/第三方许可.md)
+
+1.4.0本地验证包括Swift44项、Mac/Windows各62项、资源/分发11项，以及Windows成品80次布局、H.264/HEVC导出和短音频回归。验证范围与待测设备详见验收清单；云端workflow另以实际运行结果为准。
+
+BirdLock依据[AGPL-3.0](LICENSE)开源。如果愿意，可[请作者喝杯咖啡](docs/赞赏.md)，5、10、20元或任意金额均随意。反馈邮箱：`cyanodee@gmail.com`。

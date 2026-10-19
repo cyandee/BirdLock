@@ -73,7 +73,8 @@ public final class VideoExporter {
     /// Encodes the video; with `audio` the music is muxed in afterwards (the video stream is copied, not re-encoded).
     public func export(job: RenderJob, to url: URL, audio: AudioSettings? = nil, progress: @escaping (Double) -> Void,
                        isCancelled: @escaping () -> Bool) throws {
-        guard let audio, audio.isActive else {
+        let audio = job.mixedAudio(audio)
+        guard audio.isActive else {
             try exportVideo(job: job, to: url, progress: progress, isCancelled: isCancelled)
             return
         }
@@ -147,6 +148,7 @@ public final class VideoExporter {
         defer { _ = aiBox }
 
         for (k, of) in frames.enumerated() {
+            let cacheKey = of.renderKey(focus: s.focusMark, closeups: job.analysis.closeups ?? [])
             if isCancelled() { writer.cancelWriting(); throw ExportError.cancelled }
             // Prefetch upcoming sources
             var ahead: [Int] = []
@@ -158,7 +160,7 @@ public final class VideoExporter {
                 Thread.sleep(forTimeInterval: 0.002)
             }
             var pbOut: CVPixelBuffer? = nil
-            if let lk = lastKey, lk == of, let lb = lastBuffer {
+            if let lk = lastKey, lk == cacheKey, let lb = lastBuffer {
                 pbOut = lb   // identical frame (slow-motion hold) – reuse
             } else {
                 guard let pool = adaptor.pixelBufferPool else { throw ExportError.writer("no pixel buffer pool") }
@@ -176,7 +178,7 @@ public final class VideoExporter {
             if !adaptor.append(pbOut!, withPresentationTime: t) {
                 throw ExportError.writer(writer.error?.localizedDescription ?? "append")
             }
-            lastKey = of; lastBuffer = pbOut
+            lastKey = cacheKey; lastBuffer = pbOut
             pre.evict(keeping: Set(ahead))
             progress(Double(k + 1) / Double(frames.count))
         }

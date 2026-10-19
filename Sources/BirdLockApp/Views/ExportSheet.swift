@@ -34,12 +34,9 @@ struct ExportSheet: View {
                     GridRow { Text("来源").foregroundStyle(.secondary); Text("使用 \(job.used.count) / \(job.analysis.count) 张原图") }
                     if kind == .video {
                         GridRow {
-                            Text("音乐").foregroundStyle(.secondary)
-                            if let u = state.audio.url, state.audio.isActive {
-                                Text("\(u.deletingPathExtension().lastPathComponent)（从 \(formatTime(state.audio.startOffset)) 开始）").lineLimit(1)
-                            } else {
-                                Text("无").foregroundStyle(.tertiary)
-                            }
+                            Text("音频").foregroundStyle(.secondary)
+                            let mix = job.mixedAudio(state.audio)
+                            Text(mix.isActive ? "\(mix.arrangedTracks.count) 段音频（含启用的特写快门）" : "无")
                         }
                     }
                     GridRow {
