@@ -1,19 +1,16 @@
-# BirdLock 鸟眼锁定 — Windows 版
+# BirdLock Windows 版
 
-当前源码1.4.0，Python 3.12 x64 + Qt/PySide6 + ONNX Runtime。鸟类算法与macOS原生版对应；支持照片组片排序、独立眼/头/身框、快门模拟、机头/机身试验识别、特写单拍声、相机/fps两级音效、多轨音乐和自愿赞赏。
 
-使用方法见[Windows使用说明](../docs/windows/使用说明.md)，最新源代码与Releases安装包版本可能不同，请核对下载标签。[反馈邮箱](mailto:cyanodee@gmail.com)：cyanodee@gmail.com。
 
-## 加速与回退
+Windows 版使用 Python 3.12 x64、Qt/PySide6 和 ONNX Runtime。日常使用请看[使用说明](../docs/windows/使用说明.md)，这里放开发和打包的方法。
 
-- 识别使用ONNX Runtime DirectML（支持DirectX12的NVIDIA/AMD/Intel设备），失败时回退CPU。
-- 图像重采样可使用OpenCV OpenCL；视频编码优先NVENC/AMF/Quick Sync，不可用时回退x264/x265。
-- 飞机部位网络为独立CPU推理，不替换鸟类姿态模型。复杂视角需逐帧检查机头；真实连拍、低内存及实体显卡精度仍待补测。
-- Windows 10/11 x64为目标环境；Parallels Windows ARM中的x64模拟已用于本地回归，不能替代实体显卡验证。
+[下载 1.4.0 测试版](https://github.com/cyandee/BirdLock/releases/tag/v1.4.0-beta.1) · 联系我：cyanodee@gmail.com
 
-## 开发和打包
+## 从源码运行
 
-在项目根目录的Windows PowerShell中执行：
+
+
+在项目根目录打开 PowerShell：
 
 ```powershell
 py -3.12 -m venv windows/.venv
@@ -26,22 +23,40 @@ windows/.venv/Scripts/python -m birdlock.cli selftest
 windows/.venv/Scripts/python windows/build_windows.py
 ```
 
-打包输出 `windows/dist/BirdLock/` 和 `windows/dist/BirdLock-1.4.0-Windows-x64.zip`。版本统一读取根目录[VERSION](../VERSION)；显式`--version`必须与它一致。首次构建需要联网取得固定飞机权重、FFmpeg和依赖，运行成品时不联网下载模型。
+版本读取根目录的 [VERSION](../VERSION)，显式传入的 `--version` 必须相同。打包输出为 `windows/dist/BirdLock/` 和 `windows/dist/BirdLock-1.4.0-Windows-x64.zip`。首次构建会下载依赖、FFmpeg 和固定飞机权重，成品运行时不用下载模型。
+
+## 显卡加速
+
+
+
+- 鸟类识别使用 ONNX Runtime DirectML，支持 DirectX 12 的 NVIDIA / AMD / Intel 设备，不可用时回退 CPU。
+- 图像重采样可以使用 OpenCL；视频编码优先 NVENC / AMF / Quick Sync，失败时回退 x264 / x265。
+- 飞机机头使用独立 CPU 模型。鸟类姿态模型保持不变，复杂角度的机头仍需要检查和手动修正。
+
+目标环境是 Windows 10 / 11 x64。测试中也用过 Parallels Windows ARM 的 x64 模拟，但不同实体显卡还需要继续测试。
+
+## 开发测试
+
+
+
+先把 `BIRDLOCK_DATA` 指向临时目录，避免改到平时的设置和缓存。项目与主体回归没有设置这个目录时会拒绝运行。
+
+| 命令 | 检查内容 |
+|---|---|
+| `BirdLock.exe --selftest` | 算法、模型、音效和赞赏资源 |
+| `BirdLock.exe --smoketest` | 离屏启动 |
+| `BirdLock.exe --gui-regression <照片目录> <报告目录> --export` | 窗口布局和编码导出 |
+| `BirdLock.exe --project-regression <照片目录> <报告目录>` | 分组、排序、编辑、缓存、特写、音轨等，至少 12 张照片 |
+| `BirdLock.exe --subject-regression <鸟类目录> <飞机目录> <报告目录>` | 主体切换、取消、独立设置和飞机导出 |
+
+测试只读照片，分组时间在内存里构造。结束后记得关闭测试程序及它留下的控制台，避免虚拟机一直占用资源。
+
+1.4 本地 Windows 62 项测试和成品回归已通过，详细结果见[测试记录](../docs/整批功能验收清单.md)。Qt 源码也可以在 Mac 上用于开发，发布的 Mac 版则使用 SwiftUI / Core ML。
 
 ## 自动构建
 
-统一入口为[release.yml](../.github/workflows/release.yml)，复用[windows.yml](../.github/workflows/windows.yml)。手动运行产生构建产物；经批准推送与VERSION匹配的`v*`标签后，汇总macOS DMG、Windows ZIP、同提交源码和SHA256SUMS，创建同一个Release草稿，仍需审核后发布。windows.yml单独手动运行只构建Windows产物，不直接发布Release。
 
-## 回归与数据隔离
 
-普通用户无需运行内部回归。开发测试前把`BIRDLOCK_DATA`指向一次性目录，避免修改正常用户偏好与缓存。
+[统一 workflow](../.github/workflows/release.yml)复用 [Windows workflow](../.github/workflows/windows.yml)，配置为双平台、源码和校验值汇总到一个 Release 草稿。单独运行 Windows workflow 只产生 Windows 产物。
 
-- `BirdLock.exe --selftest`：算法、模型、音效与赞赏资源自检。
-- `BirdLock.exe --smoketest`：离屏启动检查。
-- `BirdLock.exe --gui-regression <照片目录> <报告目录> --export`：真实窗口、布局与编码回归。
-- `BirdLock.exe --project-regression <照片目录> <报告目录>`：多组照片、排序、编辑/缓存、特写单拍声、相机菜单、赞赏页、短音频延迟与静音回归，至少12张照片。
-- `BirdLock.exe --subject-regression <鸟类目录> <飞机目录> <报告目录>`：主体切换、取消恢复、独立设置/缓存和飞机导出。
-
-项目与主体回归入口未指定隔离目录会拒绝运行。照片只读，分组时间仅在内存构造。测试结束应关闭测试程序，回收测试产生的孤立控制台；不要按进程名无差别终止用户程序。
-
-1.4本地Windows62项与成品回归已通过，具体范围见[验收清单](../docs/整批功能验收清单.md)。macOS上可运行Qt源码做开发回归，正式macOS版本使用独立SwiftUI/Core ML实现。
+自动构建还有兼容问题：本次 Windows 构建因隔离子进程的中文输出编码失败；本地受测包已另外发布。当前状态和 Mac 问题见[构建说明](../docs/构建与发布.md)。
