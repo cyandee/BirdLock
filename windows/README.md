@@ -49,7 +49,7 @@ windows/.venv/Scripts/python windows/build_windows.py
 
 [统一 workflow](../.github/workflows/release.yml)复用 [Windows workflow](../.github/workflows/windows.yml)，配置为双平台、源码和校验值汇总到一个 Release 草稿。单独运行 Windows workflow 只产生 Windows 产物。
 
-1.4.0 云端构建曾因隔离子进程的中文输出编码失败；当前脚本已显式使用 UTF-8，本地构建通过，云端仍需再验证。当前状态和 Mac 问题见[构建说明](../docs/构建与发布.md)。
+1.4.0 云端构建曾因隔离子进程的中文输出编码失败，当前脚本已显式使用 UTF-8。1.4.3 云端运行已越过该步骤，但在飞机许可文件校验处停止；本地受测安装包已单独发布。当前状态和 Mac 问题见[构建说明](../docs/构建与发布.md)。
 
 ## 1.4.2 本地测试
 
