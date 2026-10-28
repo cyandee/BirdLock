@@ -19,7 +19,7 @@ windows/.venv/Scripts/python -m birdlock.cli selftest
 windows/.venv/Scripts/python windows/build_windows.py
 ```
 
-版本读取根目录的 [VERSION](../VERSION)，当前为 1.4.3，显式传入的 `--version` 必须相同。打包输出为 `windows/dist/BirdLock/` 和 `windows/dist/BirdLock-1.4.3-Windows-x64.zip`。首次构建会下载依赖、FFmpeg 和固定飞机权重，成品运行时不用下载模型。
+版本读取根目录的 [VERSION](../VERSION)，当前本地源码为 1.4.4，显式传入的 `--version` 必须相同。打包输出为 `windows/dist/BirdLock/` 和 `windows/dist/BirdLock-1.4.4-Windows-x64.zip`。公开安装包仍为 1.4.3，本次修复仅涉及 Mac 光流。首次构建会下载依赖、FFmpeg 和固定飞机权重，成品运行时不用下载模型。
 
 ## 显卡加速
 

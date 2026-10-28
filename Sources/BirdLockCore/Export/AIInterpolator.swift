@@ -80,6 +80,9 @@ public final class AIInterpolator {
         }
         sem.wait()
         guard ok else { return nil }
-        return CIImage(cvPixelBuffer: pd)
+        // Read back in the same explicit space used to render the source buffers.
+        // Inferring it from the 709 attachments applies a different transfer curve
+        // and lifts interpolated frames relative to the original frames.
+        return CIImage(cvPixelBuffer: pd, options: [.colorSpace: cs])
     }
 }
