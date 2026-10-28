@@ -4,9 +4,9 @@
 
 - [macOS 使用说明](使用说明.md)
 - [Windows 使用说明](windows/使用说明.md)
-- [下载 1.4.0 测试版](https://github.com/cyandee/BirdLock/releases/tag/v1.4.0-beta.1)
+- [下载 1.4.3 测试版](https://github.com/cyandee/BirdLock/releases/tag/v1.4.3-beta.1)
 
-源码当前为 1.4.3；GitHub 安装包仍是 1.4.0，不包含最新导出修复。变化见[更新记录](迭代记录.md)。
+源码与双平台安装包均为 1.4.3。变化见[更新记录](迭代记录.md)。
 
 其他内容放在这里，方便查找。
 

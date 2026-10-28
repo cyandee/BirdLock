@@ -2,7 +2,7 @@
 
 Windows 版使用 Python 3.12 x64、Qt/PySide6 和 ONNX Runtime。日常使用请看[使用说明](../docs/windows/使用说明.md)，这里放开发和打包的方法。
 
-[下载 1.4.0 测试版](https://github.com/cyandee/BirdLock/releases/tag/v1.4.0-beta.1) · 联系我：cyanodee@gmail.com
+[下载 1.4.3 测试版](https://github.com/cyandee/BirdLock/releases/tag/v1.4.3-beta.1) · 联系我：cyanodee@gmail.com
 
 ## 从源码运行
 
@@ -53,6 +53,6 @@ windows/.venv/Scripts/python windows/build_windows.py
 
 ## 1.4.2 本地测试
 
-修复 Qt 下拉框将字符串枚举转成普通字符串，导致切换编码或质量后不能导出的问题。色彩增益改用小查表，减少高分辨率的临时数组。帮助菜单新增导出诊断日志。公开下载仍是 1.4.0，新测试包保留独立目录。
+修复 Qt 下拉框将字符串枚举转成普通字符串，导致切换编码或质量后不能导出的问题。色彩增益改用小查表，减少高分辨率的临时数组。帮助菜单新增导出诊断日志。这些修复已包含在公开的 1.4.3 测试包中。
 
 1.4.3 与 Mac 同步版本号，Windows 功能沿用 1.4.2 的修复；新增的长序列光流进程回收在 Mac 版。

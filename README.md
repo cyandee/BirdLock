@@ -6,11 +6,11 @@ BirdLock 是一个把飞鸟连拍照片做成视频的小工具。导入照片�
 
 ## 下载
 
-源码已更新到 **1.4.3**，包含下方的导出修复、光流内存优化和诊断日志。GitHub 安装包目前仍是 **1.4.0 测试版**，以下下载尚不包含这些修复。
+当前下载为 **1.4.3 测试版**，包含下方的导出修复、光流内存优化和诊断日志。Mac、Windows、对应源码和校验文件都在同一个下载页，旧版本也保留着。
 
-- [macOS 通用版](https://github.com/cyandee/BirdLock/releases/download/v1.4.0-beta.1/BirdLock-1.4.0.dmg)：macOS 14 及以上，支持 Apple 芯片和 Intel。
-- [Windows 便携版](https://github.com/cyandee/BirdLock/releases/download/v1.4.0-beta.1/BirdLock-1.4.0-Windows-x64.zip)：Windows 10 / 11 x64，完整解压后运行。
-- [更新说明、源码和校验文件](https://github.com/cyandee/BirdLock/releases/tag/v1.4.0-beta.1) · [历史版本](https://github.com/cyandee/BirdLock/releases)
+- [macOS 通用版](https://github.com/cyandee/BirdLock/releases/download/v1.4.3-beta.1/BirdLock-1.4.3.dmg)：macOS 14 及以上，支持 Apple 芯片和 Intel。
+- [Windows 便携版](https://github.com/cyandee/BirdLock/releases/download/v1.4.3-beta.1/BirdLock-1.4.3-Windows-x64.zip)：Windows 10 / 11 x64，完整解压后运行。
+- [更新说明、源码和校验文件](https://github.com/cyandee/BirdLock/releases/tag/v1.4.3-beta.1) · [历史版本](https://github.com/cyandee/BirdLock/releases)
 
 Mac 版还没有做 Apple 公证，首次打开可能被系统拦截，安装方法见[使用说明](docs/使用说明.md)。如果遇到打不开的情况，请把报错提示、系统版本和芯片型号发给我。
 
