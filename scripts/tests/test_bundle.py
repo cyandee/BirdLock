@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.verify_bundle import verify,verify_aircraft
+from scripts.verify_bundle import verify,verify_aircraft,verify_updater
 
 
 class BundleTests(unittest.TestCase):
@@ -64,3 +64,17 @@ class BundleTests(unittest.TestCase):
                 "CFBundleShortVersionString": "1.0"}))
             with self.assertRaisesRegex(ValueError, "版本"):
                 verify(app, "1.1.0")
+
+    def test_update_bundle_requires_matching_version_framework_and_signatures(self):
+        import base64
+        with tempfile.TemporaryDirectory() as folder:
+            app=Path(folder);info={'CFBundleVersion':'1.5.0'}
+            with self.assertRaisesRegex(ValueError,'框架'):verify_updater(app,'1.5.0',info)
+            binary=app/'Contents/Frameworks/Sparkle.framework/Sparkle';binary.parent.mkdir(parents=True);binary.write_bytes(b'fixture')
+            license=app/'Contents/Resources/Sparkle-LICENSE.txt';license.parent.mkdir();license.write_text('fixture')
+            verify_updater(app,'1.5.0',info)
+            info.update(SUFeedURL='https://example.test/mac.xml',SUPublicEDKey=base64.b64encode(bytes(32)).decode())
+            with self.assertRaisesRegex(ValueError,'签名'):verify_updater(app,'1.5.0',info)
+            info.update(SURequireSignedFeed=True,SUVerifyUpdateBeforeExtraction=True);verify_updater(app,'1.5.0',info)
+            info['CFBundleVersion']='999'
+            with self.assertRaisesRegex(ValueError,'版本号'):verify_updater(app,'1.5.0',info)

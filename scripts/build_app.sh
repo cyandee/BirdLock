@@ -38,13 +38,13 @@ cp Models/*.json "$APP/Contents/Resources/Models/" 2>/dev/null || true
 # Bundled documents: agreement, licenses, manual (HTML + PDF)
 DOCS="$APP/Contents/Resources/Docs"
 mkdir -p "$DOCS"
-cp docs/用户协议.md docs/第三方许可.md docs/使用说明.md LICENSE "$DOCS/"
+cp docs/用户协议.md docs/第三方许可.md docs/使用说明.md docs/自动更新.md LICENSE "$DOCS/"
 python3 -I scripts/md2html.py docs/使用说明.md "$DOCS/使用说明.html"
 HTML2PDF="$ROOT/.build/html2pdf"
 [ "$HTML2PDF" -nt scripts/html2pdf.swift ] || swiftc -O scripts/html2pdf.swift -o "$HTML2PDF"
 "$HTML2PDF" "$DOCS/使用说明.html" "$DOCS/使用说明.pdf" >/dev/null
 
-BUILD="$(date +%Y%m%d%H%M)"
+BUILD="$VERSION"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -82,6 +82,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+UPDATER_ARGS=()
+[ -n "${BIRDLOCK_UPDATE_CONFIG:-}" ] && UPDATER_ARGS=(--config "$BIRDLOCK_UPDATE_CONFIG")
+python3 -I scripts/stage_updater.py "$APP" "${UPDATER_ARGS[@]}"
 codesign --force --deep --sign - "$APP" >/dev/null
 VERIFY_ARGS=()
 [ "${UNIVERSAL:-0}" = "1" ] && VERIFY_ARGS=(--universal)

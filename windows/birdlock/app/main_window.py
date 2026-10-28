@@ -491,6 +491,17 @@ class MainWindow(QMainWindow):
         self.support_btn.clicked.connect(self.support)
         tb.addWidget(self.support_btn)
 
+    def check_updates(self, background=False):
+        from .updates import UpdateDialog
+        previous = getattr(self, '_update_dialog', None)
+        if previous:
+            if not background:
+                previous.background=False;previous.show();previous.raise_()
+            if not previous.installing:previous.check()
+            return
+        self._update_dialog = UpdateDialog(self.state, self, background=background)
+        if not background: self._update_dialog.show()
+
     def _build_menus(self):
         mb = self.menuBar()
         st = self.state
@@ -531,6 +542,7 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         act(m, "原图放大 / 全图", self._toggle_zoom, "Z")
         m = mb.addMenu("帮助")
+        act(m, "检查更新…", self.check_updates)
         act(m, "BirdLock 使用说明", self.open_manual, "F1")
         act(m, "反馈与交流（邮箱）", self.contact)
         act(m, "导出诊断日志…", self.export_diagnostics)

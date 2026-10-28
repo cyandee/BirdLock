@@ -4,6 +4,7 @@
 2. renders the manual to HTML
 3. runs PyInstaller (one-folder, no installer) and zips dist/BirdLock → dist/BirdLock-<ver>-Windows-x64.zip
 """
+from pathlib import Path
 import argparse
 import io
 import os
@@ -91,6 +92,8 @@ def main():
                            os.path.join(REPO, "docs", "windows", "使用说明.md"),
                            os.path.join(REPO, "docs", "windows", "使用说明.html")])
     version_file(a.version)
+    update_config=os.environ.get("BIRDLOCK_UPDATE_CONFIG",os.path.join(REPO,"SharedResources","Updates","config.json"))
+    subprocess.check_call([sys.executable,os.path.join(HERE,"updater","build.py"),"--config",update_config])
     subprocess.check_call([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", os.path.join(HERE, "BirdLock.spec")],
                           cwd=HERE)
     dist = os.path.join(HERE, "dist", "BirdLock")
@@ -99,6 +102,11 @@ def main():
     with open(os.path.join(dist, "源代码.txt"), "w", encoding="utf-8") as f:
         f.write("BirdLock 鸟眼锁定依据 GNU AGPL-3.0 开源。\n完整源代码：https://github.com/cyandee/BirdLock\n"
                 "（每个版本在 Releases 页面也附有源代码压缩包）\n")
+    shutil.copyfile(update_config,Path(dist)/"_internal"/"updates"/"config.json")
+    catalog = Path(dist)/"_internal"/"updates"/"managed-files.json"
+    managed = sorted(p.relative_to(dist).as_posix() for p in Path(dist).rglob("*") if p.is_file() and p.relative_to(dist).parts[0].lower() != "data")
+    managed = sorted(set(managed + [catalog.relative_to(dist).as_posix()]))
+    catalog.write_text(__import__('json').dumps(managed), encoding="utf-8")
     os.makedirs(os.path.join(dist, "data"), exist_ok=True)   # portable: settings & cache live here
     zip_path = os.path.join(HERE, "dist", f"BirdLock-{a.version}-Windows-x64.zip")
     if os.path.exists(zip_path):

@@ -7,6 +7,7 @@ struct BirdLockApp: App {
     init() { Diagnostics.start() }
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @State private var state = AppState()
+    @StateObject private var updater = AppUpdater()
 
     var body: some Scene {
         // A single window: opening folders from Finder imports into it instead of spawning windows that share state
@@ -14,11 +15,20 @@ struct BirdLockApp: App {
             ContentView()
                 .environment(state)
                 .frame(minWidth: 1100, minHeight: 720)
+                .onAppear {
+                    updater.isBusy = { state.exportState.running || state.phase == .importing || { if case .analyzing = state.phase { return true }; return false }() }
+                    updater.start()
+                }
         }
         .windowToolbarStyle(.unified(showsTitle: true))
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button("关于 BirdLock 鸟眼锁定") { AppDocs.showAbout() }
+                Button("检查更新…") { updater.check() }
+                    .disabled(updater.configured && !updater.canCheck)
+                Toggle("自动检查更新", isOn: Binding(get: { updater.automatic }, set: { updater.automatic = $0 }))
+                    .disabled(!updater.configured)
+                Toggle("接收测试版更新", isOn: Binding(get: { updater.includeBeta }, set: { updater.includeBeta = $0 }))
                 Divider()
                 Button("用户协议…") { LegalWindow.show(.agreement) }
                 Button("许可与第三方组件…") { LegalWindow.show(.notices) }

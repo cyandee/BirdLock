@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "BirdLockAircraftRuntime", targets: ["BirdLockAircraftRuntime"]),
     ],
     dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.10.1"),
         .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager.git",
                  revision: "b7fb7f7dea8a2469e6335d95a61b8f36d0dc83b2"),
     ],
@@ -26,8 +27,9 @@ let package = Package(
         ]),
         .executableTarget(
             name: "BirdLockApp",
-            dependencies: ["BirdLockCore", "BirdLockAircraftRuntime"],
-            path: "Sources/BirdLockApp"
+            dependencies: ["BirdLockCore", "BirdLockAircraftRuntime", .product(name: "Sparkle", package: "Sparkle")],
+            path: "Sources/BirdLockApp",
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
         .executableTarget(
             name: "BirdLockCLI",

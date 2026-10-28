@@ -45,6 +45,17 @@ def export_bundle(destination):
                     stream.seek(max(0, path.stat().st_size-(4<<20)))
                     content = stream.read().decode('utf-8', 'replace')
                 bundle.writestr(path.name, redact(content))
+            # Only three recent update sessions and explicit log/status files. No archives or keys.
+            update_root=Path(os.environ.get('LOCALAPPDATA',Path.home()))/'BirdLock'/'updates'
+            if update_root.is_dir() and not update_root.is_symlink():
+                sessions=[p for p in update_root.iterdir() if re.fullmatch('[0-9a-f]{32}',p.name) and p.is_dir() and not p.is_symlink()]
+                for session in sorted(sessions,key=lambda p:p.stat().st_mtime,reverse=True)[:3]:
+                    for name in ('state.json','error.log','events.log'):
+                        path=session/name
+                        if path.is_file() and not path.is_symlink():
+                            with path.open('rb') as stream:
+                                stream.seek(max(0,path.stat().st_size-262144));text=stream.read().decode('utf-8','replace')
+                            bundle.writestr('updates/'+session.name+'/'+name,redact(text))
             bundle.writestr('说明.txt', '包括运行/崩溃日志和系统信息，默认隐藏用户目录；不包含原照片、音频、二维码或设置文件。发送前仍可自行检查。\n')
         os.replace(temporary, output)
     finally:

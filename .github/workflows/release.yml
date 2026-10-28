@@ -52,6 +52,7 @@ jobs:
       - name: Core and bundle validation tests
         run: |
           swift test
+          python3 -m pip install -r scripts/requirements-updates.txt
           python3 -m unittest discover -s scripts/tests
       - name: Build universal app and DMG
         run: zsh scripts/make_dmg.sh

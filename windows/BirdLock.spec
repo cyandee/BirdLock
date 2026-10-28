@@ -7,6 +7,8 @@ here = os.path.abspath(SPECPATH)
 repo = os.path.dirname(here)
 
 datas = [
+    (os.path.join(repo, "SharedResources", "Updates"), "updates"),
+    (os.path.join(here, "updater", "dist", "BirdLockUpdater.exe"), "updater"),
     (os.path.join(repo, "VERSION"), "."),
     (os.path.join(repo, "SharedResources", "Audio"), "audio"),
     (os.path.join(repo, "SharedResources", "Support"), "support"),
@@ -16,6 +18,7 @@ datas = [
     (os.path.join(here, "ffmpeg"), "ffmpeg"),
     (os.path.join(repo, "docs", "windows"), os.path.join("docs", "windows")),
     (os.path.join(repo, "docs", "用户协议.md"), "docs"),
+    (os.path.join(repo, "docs", "自动更新.md"), "docs"),
     (os.path.join(repo, "docs", "第三方许可.md"), "docs"),
     (os.path.join(repo, "LICENSE"), "docs"),
 ]

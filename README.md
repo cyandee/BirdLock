@@ -8,7 +8,9 @@ BirdLock 是一个把飞鸟连拍照片做成视频的小工具。导入照片�
 
 当前下载为 **1.4.3 测试版**，包含下方的导出修复、光流内存优化和诊断日志。Mac、Windows、对应源码和校验文件都在同一个下载页，旧版本也保留着。
 
-**Mac 光流闪烁修复正在本地测试（1.4.4）**：1.4.3 在开启 AI 光流时可能出现明暗交替，遇到时请先改用「重复帧」。新的安装包尚未公开，详情见[更新记录](docs/迭代记录.md)。
+**本地正在测试 1.5.0**：加入[自动更新](docs/自动更新.md)，同时保留 1.4.4 的 Mac 光流闪烁修复。自动更新源尚未开放。
+
+**Mac 光流闪烁修复**：1.4.3 在开启 AI 光流时可能出现明暗交替，遇到时请先改用「重复帧」。新的安装包尚未公开，详情见[更新记录](docs/迭代记录.md)。
 
 - [macOS 通用版](https://github.com/cyandee/BirdLock/releases/download/v1.4.3-beta.1/BirdLock-1.4.3.dmg)：macOS 14 及以上，支持 Apple 芯片和 Intel。
 - [Windows 便携版](https://github.com/cyandee/BirdLock/releases/download/v1.4.3-beta.1/BirdLock-1.4.3-Windows-x64.zip)：Windows 10 / 11 x64，完整解压后运行。

@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "macos": {
+    "feed_url": "https://raw.githubusercontent.com/cyandee/BirdLock/main/updates/macos.xml",
+    "ed25519_public_key": "K+zj3cFMlWmDFL2PLEnxMIelvGTNyv1JDlRg+gssauM="
+  },
+  "windows": {
+    "feed_url": "https://raw.githubusercontent.com/cyandee/BirdLock/main/updates/windows.json",
+    "rsa_modulus": "vfwC8HbdwKmXhgtU0zws63ZPlhYSTRlVYk6vk9D8tjyFutGWU6mUV9BUpXb6lQ8UR9OJSAwjaReD1jlDmSB0zabgt3DuAlur+gR3Wokv77I9ZdjyE9ZUGrJhNHSBeZ6FUyozBf2m1aNaBdYGmX0o3C73mRP8H7r0bzo61+HfkRe11ljkh3z/ZVeZPA/iwauPDWKWhNNkmIht1gL/qu8FyXKwq2SMSihlaUBGSC6oSYQyeGoby/uoKJmgAA7yxFXf2IgvmCPYmEJxXKsIrkG9IThyC4q4FEG96+S17ZlSKeOPpNRYD0wcicwOgP40+Qp/2929w9lEtLr0Ufhqkx7mShZFXymQNfNniefvH/436Tf0c3hmrWwNDXxz2+su76/3eiCLP364UChXk1Pssv2GaryAWSJsDbhmtX4/6EdV8EsyE4dP/qBgo5cg418fPdIyczGyXsv1W1uq8w5FAOE69a3wfAi/CikkUdzvBg4f2yVLJ2WoMwno7ZsSkWURPb1F",
+    "rsa_exponent": "AQAB",
+    "stable_feed_url": "https://raw.githubusercontent.com/cyandee/BirdLock/main/updates/windows-stable.json"
+  },
+  "mirror_base_url": null,
+  "enabled": true
+}

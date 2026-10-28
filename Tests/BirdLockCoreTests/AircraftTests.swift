@@ -93,8 +93,8 @@ final class AircraftTests: XCTestCase {
         let body = BoxD(x: 50,y: 40,w: 100,h: 50,score: 0.9)
         let zero = try XCTUnwrap(AircraftInputGeometry(imageWidth: 200, imageHeight: 150, body: body, rotation: 0))
         let quarter = try XCTUnwrap(AircraftInputGeometry(imageWidth: 200, imageHeight: 150, body: body, rotation: 90))
-        let a = try XCTUnwrap(zero.candidate(box: [46.5/144,0.5,0.05,0.05], score: 0.7))
-        let b = try XCTUnwrap(quarter.candidate(box: [0.5,97.5/144,0.05,0.05], score: 0.7))
+        let a = try XCTUnwrap(zero.candidate(box: [Float(46.5)/144,0.5,0.05,0.05], score: 0.7))
+        let b = try XCTUnwrap(quarter.candidate(box: [0.5,Float(97.5)/144,0.05,0.05], score: 0.7))
         for c in [a,b] { XCTAssertEqual(c.x,70,accuracy: 1e-4); XCTAssertEqual(c.y,65,accuracy: 1e-4) }
         XCTAssertNil(zero.candidate(box: [0.5,0.5,0.85,0.85], score: 1))
         XCTAssertNil(zero.candidate(box: [.nan,0.5,0.05,0.05], score: 1))

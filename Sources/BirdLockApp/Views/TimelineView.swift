@@ -311,7 +311,7 @@ struct AudioLane: View {
                         let i0 = Int(t0 * ov.binsPerSecond), i1 = max(i0 + 1, Int(t1 * ov.binsPerSecond))
                         guard i0 < ov.peaks.count else { break }
                         let peak = Double(ov.peaks[i0..<min(i1, ov.peaks.count)].max() ?? 0)
-                        let h = max(1, pow(peak, 0.7) * (H / 2 - 7))
+                        let h = max(1, pow(peak, 0.7) * (Double(H) / 2.0 - 7.0))
                         let inside = t0 >= off - 1e-6 && t1 <= off + videoDur + 1e-6
                         ctx.fill(Path(CGRect(x: pad + Double(b) * 2, y: mid - h, width: 1.2, height: 2 * h)),
                                  with: .color(inside ? Theme.music : Color.white.opacity(0.22)))

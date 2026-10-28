@@ -24,3 +24,17 @@ class DiagnosticBundleTests(unittest.TestCase):
     def test_windows_paths_are_hidden(self):
         text=redact('Traceback\nC:\\Users\\person\\Pictures\\photo.jpg\nencoder=libx265')
         self.assertNotIn('person',text);self.assertIn('encoder=libx265',text)
+
+    def test_update_diagnostics_include_whitelisted_logs_only(self):
+        import uuid
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);session=root/'BirdLock/updates'/uuid.uuid4().hex;session.mkdir(parents=True)
+            (session/'error.log').write_text('failure token=sensitive')
+            (session/'private.pem').write_text('must never include')
+            (session/'archive.zip').write_bytes(b'archive')
+            destination=root/'report.zip'
+            with patch.dict('os.environ',{'LOCALAPPDATA':str(root)}),patch('birdlock.core.diagnostics.data_dir',return_value=root),patch('birdlock.core.gpu.list_adapters',return_value=[]):export_bundle(destination)
+            with zipfile.ZipFile(destination) as z:
+                entries=[n for n in z.namelist() if n.startswith('updates/')]
+                self.assertEqual(entries,['updates/'+session.name+'/error.log'])
+                self.assertNotIn('sensitive',z.read(entries[0]).decode())

@@ -21,7 +21,8 @@ ln -s /Applications "$STAGE/应用程序"
 cp "$APP/Contents/Resources/Docs/使用说明.pdf" "$STAGE/"
 cp "$APP/Contents/Resources/Docs/LICENSE" "$STAGE/LICENSE.txt"
 
-DMG="$ROOT/dist/BirdLock-$VERSION.dmg"
+DMG="${DMG_OUTPUT:-$ROOT/dist/BirdLock-$VERSION.dmg}"
+mkdir -p "${DMG:h}"
 rm -f "$DMG"
 hdiutil create -volname "BirdLock 鸟眼锁定 $VERSION" -srcfolder "$STAGE" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$DMG" >/dev/null
 rm -rf "$STAGE"

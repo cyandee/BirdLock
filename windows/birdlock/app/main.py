@@ -107,6 +107,18 @@ def main():
     state = AppState()
     win = MainWindow(state)
     win.show()
+    from .updates import startup_health, preferences
+    startup_health()
+    import time
+    def scheduled_update_check():
+        prefs = preferences()
+        if prefs.get('automatic') and time.time()-prefs.get('last_check',0)>86400:
+            win.check_updates(background=True)
+    update_timer = QTimer(win)
+    update_timer.timeout.connect(scheduled_update_check)
+    update_timer.start(3600000)
+    QTimer.singleShot(10000, scheduled_update_check)
+
 
     paths = [p for p in sys.argv[1:] if not p.startswith("-") and os.path.exists(p)]
 

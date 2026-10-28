@@ -5,6 +5,8 @@ import os
 import plistlib
 import struct
 import hashlib
+import base64
+from urllib.parse import urlsplit
 from pathlib import Path
 
 
@@ -31,6 +33,21 @@ def verify_aircraft(directory: Path):
         content = file.read_bytes();entry = checksums.get(license,{})
         if len(content) != entry.get("bytes") or hashlib.sha256(content).hexdigest() != entry.get("sha256"):
             raise ValueError("飞机许可文件不完整："+license)
+
+
+def verify_updater(app: Path, version: str, info: dict):
+    if tuple(map(int,version.split('.'))) < (1,5,0):return
+    if info.get('CFBundleVersion')!=version:raise ValueError('更新版本号必须与 VERSION 一致')
+    framework=app/'Contents/Frameworks/Sparkle.framework'
+    if not (framework/'Sparkle').is_file() or not (app/'Contents/Resources/Sparkle-LICENSE.txt').is_file():
+        raise ValueError('缺少 Sparkle 更新框架或许可')
+    if 'SUFeedURL' in info:
+        u=urlsplit(info['SUFeedURL'])
+        if u.scheme!='https' or not u.hostname or u.username or u.password:raise ValueError('更新清单必须使用 HTTPS')
+        try:valid=len(base64.b64decode(info.get('SUPublicEDKey',''),validate=True))==32
+        except ValueError:valid=False
+        if not valid or info.get('SURequireSignedFeed') is not True or info.get('SUVerifyUpdateBeforeExtraction') is not True:
+            raise ValueError('必须验证更新清单和更新包签名')
 
 
 def verify(app: Path, version: str, universal: bool = False):
@@ -65,6 +82,7 @@ def verify(app: Path, version: str, universal: bool = False):
         arches = {struct.unpack_from(">I", data, 8 + 20 * i)[0] for i in range(count)}
         if not {0x01000007, 0x0100000C}.issubset(arches):
             raise ValueError("通用程序缺少 Intel 或 Apple 芯片架构")
+    verify_updater(app,version,info)
     resources = app / "Contents/Resources"
     verify_aircraft(resources / "AircraftModels")
     audio = resources / "Audio"
