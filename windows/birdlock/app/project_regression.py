@@ -182,7 +182,7 @@ def main(argv=None):
     track_picker.recording.setCurrentIndex(track_picker.recording.findData('sony-a7m5-15'));settle()
     assert state.audio.tracks[-1].assetID=='sony-a7m5-15'
     state.audio.tracks=[];state.audio_settings_changed();settle()
-    # Donation stays opt-in: open only via the menu, verify image, then close automatically in QA.
+    # Open the visible, voluntary toolbar entry and verify its image.
     def inspect_support():
         dialog=QApplication.activeModalWidget()
         assert isinstance(dialog,QDialog)
@@ -190,7 +190,16 @@ def main(argv=None):
         assert any(l.pixmap() is not None and not l.pixmap().isNull() for l in labels)
         assert any('全部功能' in l.text() or '所有功能' in l.text() for l in labels)
         dialog.grab().save(str(out/'coffee-support.png'));dialog.accept()
-    QTimer.singleShot(150,inspect_support);window.support();settle()
+    assert window.support_btn.isVisible()
+    QTimer.singleShot(150,inspect_support);window.support_btn.click();settle()
+    assert any('赞赏' in action.text() for action in window.menuBar().actions())
+    logs=out/'diagnostics.zip'
+    with patch('birdlock.app.main_window.QFileDialog.getSaveFileName',return_value=(str(logs),'ZIP')),patch('birdlock.app.main_window.QMessageBox.information'):
+        window.export_diagnostics()
+    import zipfile
+    with zipfile.ZipFile(logs) as z:
+        assert 'system.json' in z.namelist() and 'birdlock.log' in z.namelist()
+        assert not any(n.endswith(('.jpg','.onnx','settings.json')) for n in z.namelist())
     from .. import CONTACT_EMAIL
     assert CONTACT_EMAIL=='cyanodee@gmail.com'
     audio_eof=check_short_audio(job,out)
@@ -198,6 +207,9 @@ def main(argv=None):
     assert len(state.analysis.closeups)==0
     state.select_segment(-1);wait(lambda:state.phase=='ready' and state.analysis.count==12 and len(state.analysis.closeups)==1 and len(state.job.output_frames)==34)
     state.toggle_play();settle(.6);state.stop();settle()
-    result=dict(group_order_buttons_preserve_edits=True,camera_variant_menus=True,single_shutter_aac=True,coffee_dialog_image=True,contact_email=True,photos=12,clips=2,closeups=1,frames=34,duration=job.duration,restore_after_group_switch=True,legacy_group_cache_preserves_edits=True,music_alignment_resolves_closeup_and_rejects_trimmed=True,layout_checks=2,short_audio_eof=audio_eof)
+    from .export_regression import check_export_recovery
+    export_recovery=check_export_recovery(state,window,wait,settle,out)
+    result=dict(group_order_buttons_preserve_edits=True,camera_variant_menus=True,single_shutter_aac=True,coffee_dialog_image=True,contact_email=True,photos=12,clips=2,closeups=1,frames=34,duration=job.duration,restore_after_group_switch=True,legacy_group_cache_preserves_edits=True,music_alignment_resolves_closeup_and_rejects_trimmed=True,layout_checks=2,short_audio_eof=audio_eof,export_recovery=export_recovery)
+    result['diagnostic_bundle']=True;result['visible_support_entry']=True
     (out/'project-regression.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result),flush=True)
     window.close();app.processEvents()

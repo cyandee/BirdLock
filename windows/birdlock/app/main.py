@@ -8,11 +8,16 @@ import sys
 def _redirect_output(name: str):
     """Windowed builds have no console: send prints to a log file in the data folder."""
     from ..core.paths import data_dir
-    log = open(data_dir() / name, "w", encoding="utf-8", buffering=1)
+    path = data_dir()/name
+    if name == 'app.log' and path.exists():
+        path.replace(path.with_suffix('.log.1'))
+    log = open(path, "w", encoding="utf-8", buffering=1)
     sys.stdout = sys.stderr = log
 
 
 def main():
+    from ..core import log as _log
+    _log.setup()
     if len(sys.argv) > 1 and sys.argv[1] == "--subject-regression":
         if not os.environ.get("BIRDLOCK_DATA"):
             raise SystemExit("Subject regression requires a disposable BIRDLOCK_DATA directory")

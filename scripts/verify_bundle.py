@@ -50,6 +50,14 @@ def verify(app: Path, version: str, universal: bool = False):
     fat = data[:4] == b"\xca\xfe\xba\xbe"
     if not fat and data[:4] not in thin:
         raise ValueError("启动文件不是 Mach-O 可执行文件（可能为传输后的链接占位文件）")
+    helper = app / "Contents/MacOS/BirdLockInterpolation"
+    if not helper.is_file() or not os.access(helper, os.X_OK):
+        raise ValueError("缺少可执行的光流辅助进程")
+    header = helper.read_bytes()[:8]
+    if header[:4] not in thin and header[:4] != b"\xca\xfe\xba\xbe":
+        raise ValueError("光流辅助进程不是有效的 Mach-O 文件")
+    if universal and header[:4] != b"\xca\xfe\xba\xbe":
+        raise ValueError("光流辅助进程缺少通用架构")
     if universal:
         if not fat:
             raise ValueError("分发包必须同时包含 Intel 和 Apple 芯片架构")

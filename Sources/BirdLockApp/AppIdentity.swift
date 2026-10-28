@@ -1,7 +1,15 @@
 import AppKit
 import SwiftUI
+import BirdLockCore
 
 enum AppIdentity {
+    @MainActor static func exportDiagnostics() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "BirdLock-诊断日志.zip"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try Diagnostics.export(to: url); NSWorkspace.shared.activateFileViewerSelecting([url]) }
+        catch { let alert = NSAlert(error: error); alert.runModal() }
+    }
     static let email = "cyanodee@gmail.com"
     static let contact = "邮箱：\(email)"
     @MainActor static var supportWindow: NSWindow?

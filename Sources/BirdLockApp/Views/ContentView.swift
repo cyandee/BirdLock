@@ -177,6 +177,8 @@ struct MainToolbar: ToolbarContent {
             }
         }
         ToolbarItemGroup(placement: .primaryAction) {
+            Button { AppIdentity.showSupport() } label: { Label("赞赏", systemImage: "cup.and.saucer") }
+                .help("请作者喝杯咖啡 · 完全自愿，所有功能免费")
             if state.analysis != nil {
                 Button { state.showExportSheet = true } label: { Label("导出", systemImage: "square.and.arrow.up") }
                     .help("导出视频 / 图片序列 / GIF（⌘E）")

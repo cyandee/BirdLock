@@ -329,6 +329,12 @@ class ExportDialog(QDialog):
         st.export_message, st.export_progress = "", 0.0
         self.accept()
 
+    def reject(self):
+        # The title-bar close button must not leave an invisible encoder running.
+        if self.state.export_running:
+            self.state.cancel_export()
+        super().reject()
+
     def refresh(self):
         st = self.state
         job = st.job
@@ -367,11 +373,14 @@ class ExportDialog(QDialog):
         self.bar.setVisible(show)
         self.bar.setValue(int(st.export_progress * 1000))
         self.msg.setVisible(show)
-        self.msg.setText(f"正在导出… {st.export_progress * 100:.0f}%" if running else st.export_message)
+        stopping = running and st._export_cancel.cancelled
+        self.msg.setText("正在取消导出…" if stopping else
+                         (f"正在导出… {st.export_progress * 100:.0f}%" if running else st.export_message))
         done = not running and st.export_progress >= 1 and bool(st.export_path)
         self.reveal_btn.setVisible(done)
         self.open_btn.setVisible(done and self.kind != "images")
         self.cancel_btn.setVisible(running)
+        self.cancel_btn.setEnabled(not stopping)
         self.close_btn.setVisible(not running)
         self.go_btn.setVisible(not running)
 
@@ -478,6 +487,9 @@ class MainWindow(QMainWindow):
         self.export_btn.setToolTip("导出视频 / 图片序列 / GIF  Ctrl+E")
         self.export_btn.clicked.connect(self.show_export)
         self.export_action = tb.addWidget(self.export_btn)
+        self.support_btn = QPushButton("☕ 请作者喝杯咖啡")
+        self.support_btn.clicked.connect(self.support)
+        tb.addWidget(self.support_btn)
 
     def _build_menus(self):
         mb = self.menuBar()
@@ -521,11 +533,23 @@ class MainWindow(QMainWindow):
         m = mb.addMenu("帮助")
         act(m, "BirdLock 使用说明", self.open_manual, "F1")
         act(m, "反馈与交流（邮箱）", self.contact)
-        act(m, "请作者喝杯咖啡…", self.support)
+        act(m, "导出诊断日志…", self.export_diagnostics)
         m.addSeparator()
         act(m, "用户协议…", lambda: DocDialog("用户协议", agreement_text(), self).exec())
         act(m, "许可与第三方组件…", lambda: show_licenses(self))
         act(m, f"关于 {APP_NAME}", self.about)
+        act(mb, "☕ 赞赏", self.support)
+
+    def export_diagnostics(self):
+        from ..core.diagnostics import export_bundle
+        path, _ = QFileDialog.getSaveFileName(self, "导出诊断日志", "BirdLock-诊断日志.zip", "ZIP (*.zip)")
+        if not path:
+            return
+        try:
+            export_bundle(path if path.lower().endswith('.zip') else path+'.zip')
+            QMessageBox.information(self, "诊断日志", "日志已保存，可直接发给作者。发送前也可以解压检查内容。")
+        except Exception as error:
+            QMessageBox.warning(self, "保存失败", str(error))
 
     def _changed(self, topic):
         st = self.state

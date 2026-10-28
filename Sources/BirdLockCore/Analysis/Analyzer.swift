@@ -49,6 +49,7 @@ public final class Analyzer: @unchecked Sendable {
     }
 
     private func parallel(_ n: Int, _ body: @escaping (Int) -> Void, progress: ((Double) -> Void)?, isCancelled: @escaping () -> Bool) {
+        let started = Date()
         let q = DispatchQueue(label: "birdlock.analyze", attributes: .concurrent)
         let group = DispatchGroup()
         let sem = DispatchSemaphore(value: options.concurrency)
@@ -67,6 +68,7 @@ public final class Analyzer: @unchecked Sendable {
             }
         }
         group.wait()
+        Diagnostics.record("analysis parallel photos=\(n) workers=\(options.concurrency) seconds=\(Date().timeIntervalSince(started))")
     }
 
     public func analyze(frames: [SourceFrame], fps: Double, targetHint: (frame: Int, point: V2)? = nil,

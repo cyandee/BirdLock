@@ -218,6 +218,8 @@ final class AppState {
         let keep: (eyes: [Int: V2], excluded: Set<Int>)? = (hint == nil && analysis?.fingerprint == fpNow)
             ? (analysis!.manualEye, analysis!.excluded) : nil
         analysisTask = Task.detached(priority: .userInitiated) { [weak self] in
+            Diagnostics.record("analysis start subject=\(kind.rawValue) photos=\(fr.count) fps=\(fps)")
+            let started = Date()
             let fp = fpNow
             var edits = keep
             var shots = keptShots
@@ -235,6 +237,9 @@ final class AppState {
                 let progress: AnalysisProgress = { stage, p in
                     Task { @MainActor in
                         guard !flag.isCancelled else { return }
+                        if case .analyzing(let old, _) = self?.phase, old != stage.rawValue {
+                            Diagnostics.record("analysis stage=\(stage.rawValue)")
+                        }
                         if case .analyzing = self?.phase { self?.phase = .analyzing(stage: stage.rawValue, progress: p) }
                     }
                 }
@@ -260,9 +265,12 @@ final class AppState {
                 a.closeups = shots
                 if !a.manualEye.isEmpty || !clips.isEmpty { a.track = TrackBuilder.build(a) }
                 ProxyCache.shared.saveAnalysis(a)
+                Diagnostics.record("analysis complete seconds=\(Date().timeIntervalSince(started)) photos=\(a.count)")
                 await self?.finishAnalysis(a, flag: flag)
             } catch is CancellationError {
+                Diagnostics.record("analysis cancelled")
             } catch {
+                Diagnostics.record("analysis failed: \(error)")
                 await MainActor.run {
                     guard !flag.isCancelled else { return }
                     self?.phase = .failed(error.localizedDescription)
@@ -779,7 +787,7 @@ final class AppState {
     }
 
     func export(kind: ExportKind, to url: URL) {
-        guard let a = analysis else { return }
+        guard let a = analysis, !exportState.running else { return }
         stop()
         // a fresh job with the latest settings plus the watermark (the preview job draws it separately)
         let job = RenderJob(analysis: a, composition: composition, look: look, export: exportSettings,
@@ -798,12 +806,14 @@ final class AppState {
                 case .gif: try ex.exportGIF(job: job, to: url, progress: prog, isCancelled: { flag.isCancelled })
                 }
                 let dt = Date().timeIntervalSince(t0)
+                Diagnostics.record("export \(kind.rawValue) complete seconds=\(dt)")
                 await MainActor.run {
                     self?.exportState.running = false
                     self?.exportState.progress = 1
-                    self?.exportState.message = String(format: "导出完成（%.0f 秒）", dt)
+                    self?.exportState.message = String(format: "导出完成（%.0f 秒）", dt) + (ex.warning.map { " · " + $0 } ?? "")
                 }
             } catch {
+                Diagnostics.record("export \(kind.rawValue) failed: \(error)")
                 await MainActor.run {
                     self?.exportState.running = false
                     self?.exportState.message = error.localizedDescription

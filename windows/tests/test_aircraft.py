@@ -131,3 +131,19 @@ class AircraftTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class AircraftThreadBudgetTests(unittest.TestCase):
+    def test_larger_cpus_use_eight_threads_and_small_cpus_keep_their_budget(self):
+        from unittest.mock import patch
+        from birdlock.core.aircraft import aircraft_threads
+        import os
+        with patch.dict(os.environ,{},clear=True):
+            for cores,expected in [(None,1),(1,1),(4,4),(8,4),(16,8),(24,8),(128,8)]:
+                with patch('birdlock.core.aircraft.os.cpu_count',return_value=cores):
+                    self.assertEqual(aircraft_threads(),expected)
+        with patch('birdlock.core.aircraft.os.cpu_count',return_value=24),patch.dict(os.environ,{'BIRDLOCK_AIRCRAFT_THREADS':'4'}):
+            self.assertEqual(aircraft_threads(),4)
+
+
+if __name__ == '__main__':
+    unittest.main()

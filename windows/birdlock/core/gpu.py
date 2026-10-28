@@ -11,9 +11,12 @@ video memory, i.e. the discrete GPU.
 from __future__ import annotations
 
 import ctypes
+import collections
 import functools
 import os
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 
 from .paths import IS_MAC, IS_WINDOWS, ffmpeg_path
@@ -189,40 +192,100 @@ def _hidden_startupinfo():
     return {}
 
 
-@functools.lru_cache(maxsize=64)
-def encoder_works(name: str, w: int = 256, h: int = 256) -> bool:
+class EncoderProbeCancelled(Exception):
+    pass
+
+
+_encoder_cache = collections.OrderedDict()
+_encoder_cache_lock = threading.Lock()
+_encoder_probe_lock = threading.Lock()
+
+
+def encoder_works(name: str, w: int = 256, h: int = 256, cancelled=lambda: False) -> bool:
     """Actually encodes a few frames at the requested size: a listed encoder may still lack a
     driver / GPU, or reject large / portrait resolutions (seen with some QSV driver builds)."""
+    if cancelled():
+        raise EncoderProbeCancelled()
+    key = (name, w, h)
+    with _encoder_cache_lock:
+        if key in _encoder_cache:
+            _encoder_cache.move_to_end(key)
+            return _encoder_cache[key]
     ff = ffmpeg_path()
     if not ff:
         return False
     cmd = [ff, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
            "-i", f"color=black:s={w}x{h}:r=30:d=0.3", "-c:v", name, "-pix_fmt", "yuv420p", "-f", "null", "-"]
+    # Inspector refreshes and exports can request the same probe concurrently. One
+    # child at a time avoids exhausting hardware encoding sessions and console hosts.
+    while not _encoder_probe_lock.acquire(timeout=.05):
+        if cancelled():
+            raise EncoderProbeCancelled()
+    proc = None
     try:
-        return subprocess.run(cmd, capture_output=True, timeout=30, **_hidden_startupinfo()).returncode == 0
-    except Exception:
+        if cancelled():
+            raise EncoderProbeCancelled()
+        with _encoder_cache_lock:
+            if key in _encoder_cache:
+                return _encoder_cache[key]
+        result = False
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **_hidden_startupinfo())
+        deadline = time.monotonic()+30
+        while True:
+            if cancelled():
+                raise EncoderProbeCancelled()
+            try:
+                proc.communicate(timeout=.1)
+                result = proc.returncode == 0
+                break
+            except subprocess.TimeoutExpired:
+                if time.monotonic() >= deadline:
+                    break
+        with _encoder_cache_lock:
+            _encoder_cache[key] = result
+            while len(_encoder_cache) > 64:
+                _encoder_cache.popitem(last=False)
+        return result
+    except EncoderProbeCancelled:
+        raise
+    except (OSError, subprocess.SubprocessError):
         return False
+    finally:
+        if proc is not None:
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            proc.communicate()
+            proc.stderr.close()
+        _encoder_probe_lock.release()
 
 
-def available_encoder_families(w: int = 256, h: int = 256) -> list[str]:
+def available_encoder_families(w: int = 256, h: int = 256, cancelled=lambda: False) -> list[str]:
     fams = []
     order = ["nvenc", "amf", "qsv"] if IS_WINDOWS else ["videotoolbox"] if IS_MAC else ["nvenc", "amf", "qsv"]
     for f in order:
-        if encoder_works(ENCODERS[f]["h264"], w, h):
-            fams.append(f)
+        try:
+            if encoder_works(ENCODERS[f]["h264"], w, h, cancelled):
+                fams.append(f)
+        except EncoderProbeCancelled:
+            break
     fams.append("software")
     return fams
 
 
-def pick_encoder(codec: str, preference: str = "auto", w: int = 256, h: int = 256) -> str:
+def pick_encoder(codec: str, preference: str = "auto", w: int = 256, h: int = 256,
+                 cancelled=lambda: False) -> str:
     """ffmpeg encoder name for codec 'h264' / 'hevc', validated at the real output size."""
     if preference not in ("auto", "software") and preference in ENCODERS:
         enc = ENCODERS[preference][codec]
-        if encoder_works(enc, w, h):
+        if encoder_works(enc, w, h, cancelled):
             return enc
     if preference == "auto":
-        for fam in available_encoder_families(w, h):
+        order = ["nvenc", "amf", "qsv"] if IS_WINDOWS else ["videotoolbox"] if IS_MAC else ["nvenc", "amf", "qsv"]
+        for fam in order:
             enc = ENCODERS[fam][codec]
-            if fam == "software" or encoder_works(enc, w, h):
+            if encoder_works(enc, w, h, cancelled):
                 return enc
     return ENCODERS["software"][codec]

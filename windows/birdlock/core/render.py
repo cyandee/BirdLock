@@ -146,15 +146,27 @@ _SRGB2LIN = np.array([c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.
                      dtype=np.float32)
 _LIN2SRGB = np.clip(np.round(np.array([12.92 * v if v <= 0.0031308 else 1.055 * v ** (1 / 2.4) - 0.055
                                        for v in np.arange(4096) / 4095.0]) * 255), 0, 255).astype(np.uint8)
+_SRGB2LIN.flags.writeable = False
+_LIN2SRGB.flags.writeable = False
 
 
 def apply_gains(img: np.ndarray, gains_rgb) -> np.ndarray:
     g = np.asarray(gains_rgb, dtype=np.float32)
+    if g.shape != (3,):
+        raise ValueError("色彩增益必须包含 RGB 三个值")
+    if not np.all(np.isfinite(g)):
+        from .log import log
+        log.warning("non-finite color gains sanitized")
+        g = np.nan_to_num(g, nan=1.0, posinf=16.0, neginf=0.0)
     if np.all(np.abs(g - 1) < 1e-4):
         return img
-    lin = _SRGB2LIN[img] * g[::-1]              # BGR
-    idx = np.clip(lin * 4095 + 0.5, 0, 4095).astype(np.int32)
-    return _LIN2SRGB[idx]
+    # Build a tiny BGR lookup once per frame instead of allocating float images
+    # and a full-resolution int32 index image in every rendering worker.
+    with np.errstate(over='ignore'):
+        linear = _SRGB2LIN[:, None] * g[::-1][None, :]
+        idx = np.clip(linear * 4095 + 0.5, 0, 4095).astype(np.intp)
+    table = _LIN2SRGB[idx].reshape(1, 256, 3)
+    return cv2.LUT(img, table)
 
 
 # ---------------------------------------------------------------------------------------------- resampling helpers

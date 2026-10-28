@@ -118,5 +118,26 @@ class AircraftSequenceTests(unittest.TestCase):
             factory.assert_not_called()
 
 
+
+class AircraftThroughputTests(unittest.TestCase):
+    def test_failed_retry_frames_do_not_decode_unneeded_proxies(self):
+        reads=[]
+        class Model:
+            def detect(self,*a,**kw):return None
+        bodies=[Detection(10,10,20,20,.9 if i==0 else .8) for i in range(12)]
+        result=analyze_aircraft_noses(bodies,lambda i:(reads.append(i) or np.zeros((40,40,3),np.uint8)),model=Model())
+        self.assertEqual(reads,[0,5,10]);self.assertTrue(all(r.nose is None for r in result))
+
+    def test_color_region_tracking_matches_full_gray_even_at_image_edges(self):
+        from birdlock.core.aircraft import NoseImageTracker
+        rng=np.random.default_rng(111)
+        image=rng.integers(0,256,(480,640,3),dtype=np.uint8)
+        gray=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
+        for origin in [(-30,-10),(5,20),(590,440),(200,100)]:
+            for factor in [1,2,4]:
+                np.testing.assert_array_equal(NoseImageTracker._patch(image,origin,factor),
+                                              NoseImageTracker._patch(gray,origin,factor))
+
+
 if __name__ == '__main__':
     unittest.main()

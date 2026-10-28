@@ -83,8 +83,8 @@ def main():
     a = ap.parse_args()
     if a.version != version:
         raise SystemExit("打包版本与 VERSION 不一致，请先统一更新 VERSION")
-    subprocess.check_call([sys.executable, "-I", os.path.join(REPO,"scripts","fetch_aircraft_model.py")])
-    subprocess.check_call([sys.executable,"-I",os.path.join(REPO,"scripts","verify_bundle.py"),
+    subprocess.check_call([sys.executable, "-I", "-X", "utf8", os.path.join(REPO,"scripts","fetch_aircraft_model.py")])
+    subprocess.check_call([sys.executable,"-I","-X","utf8",os.path.join(REPO,"scripts","verify_bundle.py"),
                            "--aircraft-resources",os.path.join(REPO,"SharedResources","AircraftModels")])
     fetch_ffmpeg()
     subprocess.check_call([sys.executable, os.path.join(REPO, "scripts", "md2html.py"),

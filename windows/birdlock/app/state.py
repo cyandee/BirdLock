@@ -230,6 +230,7 @@ class AppState(QObject):
         self._cancel = CancelFlag()
         self._import_gen = 0
         self._export_cancel = CancelFlag()
+        self._export_thread = None
         self._crop_edit = None
         self._job_gen = 0
         self._rebuild_timer = QTimer(singleShot=True, interval=60, timeout=self._rebuild_now)
@@ -263,6 +264,8 @@ class AppState(QObject):
         self.stop()
         self._cancel.cancel()
         self._export_cancel.cancel()
+        if self._export_thread is not None:
+            self._export_thread.join(timeout=2)
         self._import_gen += 1
         self._job_gen += 1
         for timer in (self._save_timer, self._rebuild_timer, self._analysis_save_timer, self._hires_timer, self._audio_rebuild_timer):
@@ -490,11 +493,24 @@ class AppState(QObject):
         keep = (dict(self.analysis.manualEye), set(self.analysis.excluded)) \
             if hint is None and self.analysis is not None and self.analysis.fingerprint == fp else None
 
+        progress_lock = threading.Lock()
+        progress_last = [None, 0.0]
+
         def progress(stage, p):
             if flag.cancelled:
                 return
-            self.stage, self.stage_progress = stage, p
-            self.on_main(lambda: self.changed.emit("progress"))
+            now = time.monotonic()
+            with progress_lock:
+                if stage == progress_last[0] and p < 1 and now-progress_last[1] < .05:
+                    return
+                progress_last[:] = [stage, now]
+            def update():
+                if flag is self._cancel and not flag.cancelled:
+                    self.stage, self.stage_progress = stage, p
+                    if subject == 'bird' and self._models is not None:
+                        self.device_text = self._models.device_description
+                    self.changed.emit("progress")
+            self.on_main(update)
 
         def work():
             try:
@@ -1135,12 +1151,20 @@ class AppState(QObject):
     # ------------------------------------------------------------------ export
 
     def export_to(self, kind: str, path: str):
+        if self.export_running or self._closing:
+            return
         a = self.analysis
         if a is None:
             return
         self.stop()
-        job = RenderJob(a.copy_edits(), self.composition.copy(), self.look.copy(), self.export.copy(), self.selection.copy(),
-                        self.watermark.copy(), self.cache)
+        try:
+            job = RenderJob(a.copy_edits(), self.composition.copy(), self.look.copy(), self.export.copy(), self.selection.copy(),
+                            self.watermark.copy(), self.cache)
+        except Exception as error:
+            log.exception("export job preparation failed")
+            self.export_message = "无法准备导出："+str(error)+"。可在帮助中导出诊断日志。"
+            self.changed.emit("export")
+            return
         music = self.audio.copy() if kind == "video" and self.audio.active else None
         self.export_running, self.export_progress, self.export_message, self.export_path = True, 0.0, "正在导出…", path
         flag = CancelFlag()
@@ -1148,13 +1172,19 @@ class AppState(QObject):
         self.changed.emit("export")
 
         def progress(p):
-            self.export_progress = p
-            self.on_main(lambda: self.changed.emit("export"))
+            def update():
+                if flag is self._export_cancel:
+                    self.export_progress = p
+                    self.changed.emit("export")
+            self.on_main(update)
 
         def work():
             ex = VideoExporter()
             t0 = time.time()
             try:
+                log.info("export start kind=%s size=%s fps=%s codec=%r quality=%r encoder=%r interpolation=%r frames=%d workers=%d",
+                         kind,job.output_size,job.export.outputFPS,job.export.codec,job.export.quality,
+                         job.export.encoder,job.export.interpolation,len(job.output_frames),ex.workers)
                 if kind == "video":
                     ex.export_video(job, path, music, progress, lambda: flag.cancelled)
                 elif kind == "images":
@@ -1168,16 +1198,23 @@ class AppState(QObject):
                 msg, prog = "已取消", 0.0
             except Exception as e:
                 log.exception("export %s failed", kind)
-                msg, prog = str(e), 0.0
+                msg, prog = str(e)+"。可在帮助中导出诊断日志。", 0.0
 
             def done():
+                if flag is not self._export_cancel:
+                    return
                 self.export_running, self.export_message, self.export_progress = False, msg, prog
+                self._export_thread = None
                 self.changed.emit("export")
             self.on_main(done)
-        threading.Thread(target=work, daemon=True).start()
+        self._export_thread = threading.Thread(target=work, daemon=True, name="BirdLock-export")
+        self._export_thread.start()
 
     def cancel_export(self):
         self._export_cancel.cancel()
+        if self.export_running:
+            self.export_message = "正在取消导出…"
+            self.changed.emit("export")
 
     # ------------------------------------------------------------------ persistence
 

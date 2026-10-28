@@ -1,4 +1,4 @@
-"""Bounded aircraft nose analysis prototype; not enabled by the application yet.
+"""Bounded aircraft nose analysis used by the experimental aircraft mode.
 
 All boxes and returned observations use the pixel coordinates of load_image's proxies. Each
 burst starts from its own body detection; only measured image motion can propagate a nose.
@@ -127,12 +127,11 @@ def analyze_aircraft_noses(bodies: list, load_image: Callable[[int], np.ndarray 
                     check_cancelled()
                     image, nose = None, None
                     retry_after = max(0, retry_after-1)
-                    if _valid_body(bodies[index]):
+                    if _valid_body(bodies[index]) and (previous_nose is not None or retry_after == 0):
                         image = read(index)
                         if image is not None:
                             if previous_nose is not None and since_detection+1 < refresh_interval:
-                                tracked = tracker.step(cv2.cvtColor(previous_image, cv2.COLOR_BGR2GRAY),
-                                                       cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), previous_nose,
+                                tracked = tracker.step(previous_image, image, previous_nose,
                                                        bodies[previous_index], bodies[index])
                                 if tracked is not None:
                                     nose = tracked.nose

@@ -20,6 +20,17 @@ import numpy as np
 
 from .paths import resource_dir
 from .phasecorr import PhaseCorrelator, extract_exact
+from .log import log
+
+
+def aircraft_threads() -> int:
+    logical = os.cpu_count() or 1
+    default = 8 if logical >= 16 else min(4, logical)
+    try:
+        requested = int(os.environ.get("BIRDLOCK_AIRCRAFT_THREADS", str(default)))
+    except ValueError:
+        requested = default
+    return max(1, min(8, logical, requested if requested > 0 else default))
 
 
 class AircraftCancelled(Exception):
@@ -92,6 +103,19 @@ class NoseImageTracker:
         self._correlator = PhaseCorrelator(128)
         self._correlator.set_gaussian_window(20)
 
+    @staticmethod
+    def _patch(image, origin, factor):
+        if image.ndim == 2:
+            return extract_exact(image, *origin, 128, factor)
+        # Convert only the sampled region, with identical uint8 BGR->gray rounding.
+        x, y = map(int, origin)
+        h, w = image.shape[:2]
+        x0, y0, x1, y1 = max(0, x), max(0, y), min(w, x+128*factor), min(h, y+128*factor)
+        if x1 <= x0 or y1 <= y0:
+            return np.full((128, 128), .5, np.float32)
+        gray = cv2.cvtColor(image[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+        return extract_exact(gray, x-x0, y-y0, 128, factor)
+
     def step(self, previous: np.ndarray, current: np.ndarray, nose: NoseObservation,
              previous_body, current_body) -> NoseTrackStep | None:
         fields = [nose.x, nose.y, nose.w, nose.h,
@@ -100,7 +124,10 @@ class NoseImageTracker:
         if not all(math.isfinite(v) for v in fields) or min(nose.w, nose.h, previous_body.w,
                                                            previous_body.h, current_body.w, current_body.h) <= 0:
             return None
-        if previous.ndim != 2 or current.ndim != 2 or min(*previous.shape, *current.shape) <= 0:
+        if (previous.ndim not in (2, 3) or current.ndim not in (2, 3)
+                or (previous.ndim == 3 and previous.shape[2] != 3)
+                or (current.ndim == 3 and current.shape[2] != 3)
+                or min(*previous.shape[:2], *current.shape[:2]) <= 0):
             return None
         a_body = np.array([previous_body.x+previous_body.w/2, previous_body.y+previous_body.h/2])
         b_body = np.array([current_body.x+current_body.w/2, current_body.y+current_body.h/2])
@@ -108,12 +135,12 @@ class NoseImageTracker:
         prediction = b_body + (nose.center-a_body)*ratio
         factor = max(1, min(8, round(max(nose.w, nose.h)*3/128)))
         side = 128*factor
-        a_height, a_width = previous.shape
-        height, width = current.shape
+        a_height, a_width = previous.shape[:2]
+        height, width = current.shape[:2]
         if not (0 <= nose.center[0] < a_width and 0 <= nose.center[1] < a_height):
             return None
         origin_a = np.round(nose.center-side/2).astype(int)
-        patch_a = extract_exact(previous, *origin_a, 128, factor)
+        patch_a = self._patch(previous, origin_a, factor)
         if float(patch_a.var()) < 1e-6:
             return None
         # COCO body boxes can jump between an entire airframe and its wings. Compare a local
@@ -126,7 +153,7 @@ class NoseImageTracker:
             if not (-side <= hint[0] <= width+side and -side <= hint[1] <= height+side):
                 continue
             origin_b = np.round(hint-side/2).astype(int)
-            patch_b = extract_exact(current, *origin_b, 128, factor)
+            patch_b = self._patch(current, origin_b, factor)
             if float(patch_b.var()) < 1e-6:
                 continue
             result = self._correlator.correlate(patch_a, patch_b)
@@ -206,11 +233,12 @@ class AircraftPartsModel:
         # Import only after validation and only when aircraft inference is actually requested.
         import onnxruntime as ort
         options = ort.SessionOptions()
-        options.intra_op_num_threads = max(1, min(4, os.cpu_count() or 1))
+        options.intra_op_num_threads = aircraft_threads()
         options.log_severity_level = 3
         session = ort.InferenceSession(str(directory / meta["file"]), sess_options=options,
                                        providers=["CPUExecutionProvider"])
         self._meta, self._session = meta, session
+        log.info("aircraft nose provider=CPU cpu_threads=%d", options.intra_op_num_threads)
 
     def close(self):
         """Drop the runtime arena after analysis; previews and bird mode must not retain it."""

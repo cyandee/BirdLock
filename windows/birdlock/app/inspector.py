@@ -151,13 +151,18 @@ class Tab(QScrollArea):
         c.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         c.setMinimumContentsLength(4)
         dynamic_items = items if callable(items) else None
-        for title, value in (items() if dynamic_items else items):
+        bound_items = list(items() if dynamic_items else items)
+        for title, value in bound_items:
             c.addItem(title, value)
         if tip:
             c.setToolTip(tip)
 
         def changed(k):
-            set_(c.itemData(k))
+            if not 0 <= k < len(bound_items):
+                return
+            # QVariant converts str-derived Enum values to plain str. Keep the
+            # Python value so codec.ext / quality.bpp remain available until restart.
+            set_(bound_items[k][1])
             if topic == "audio":
                 self.state.audio_settings_changed()
             elif topic == "watermark":
@@ -168,12 +173,14 @@ class Tab(QScrollArea):
         c.currentIndexChanged.connect(changed)
 
         def refresh():
+            nonlocal bound_items
             if dynamic_items:
-                values = dynamic_items()
+                values = list(dynamic_items())
                 if [(c.itemText(k),c.itemData(k)) for k in range(c.count())] != values:
                     c.blockSignals(True);c.clear()
                     for title,value in values:c.addItem(title,value)
                     c.blockSignals(False)
+                bound_items = values
             v = get()
             for k in range(c.count()):
                 if c.itemData(k) == v:
@@ -706,7 +713,7 @@ class OutputTab(Tab):
 
         def detect():
             W, H = st.export.output_size
-            fams = gpu.available_encoder_families(W, H)
+            fams = gpu.available_encoder_families(W, H, cancelled=lambda: st._closing)
 
             def done():
                 for f in fams:

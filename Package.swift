@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "BirdLock", targets: ["BirdLockApp"]),
+        .executable(name: "BirdLockInterpolation", targets: ["BirdLockInterpolation"]),
         .executable(name: "birdlock-cli", targets: ["BirdLockCLI"]),
         .library(name: "BirdLockCore", targets: ["BirdLockCore"]),
         .library(name: "BirdLockAircraftRuntime", targets: ["BirdLockAircraftRuntime"]),
@@ -15,6 +16,7 @@ let package = Package(
                  revision: "b7fb7f7dea8a2469e6335d95a61b8f36d0dc83b2"),
     ],
     targets: [
+        .executableTarget(name: "BirdLockInterpolation", dependencies: ["BirdLockCore"]),
         .target(
             name: "BirdLockCore",
             path: "Sources/BirdLockCore"

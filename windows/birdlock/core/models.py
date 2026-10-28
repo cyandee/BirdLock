@@ -5,7 +5,9 @@ Raw Ultralytics output without NMS: [1, 4 + nc + nk*3, anchors], boxes as cx, cy
 from __future__ import annotations
 
 import json
+import os
 import threading
+import time
 from dataclasses import dataclass, field
 
 import cv2
@@ -13,6 +15,19 @@ import numpy as np
 
 from . import gpu
 from .paths import models_dir
+from .log import log
+
+
+def inference_threads() -> int:
+    # Keep runtime defaults unless an explicit diagnostic override was requested.
+    # A fixed four-thread limit did not improve complete bird analysis in benchmarks.
+    try:
+        requested = int(os.environ.get("BIRDLOCK_CPU_THREADS", "0"))
+    except ValueError:
+        requested = 0
+    if requested == 0:
+        return 0
+    return max(1, min(32, os.cpu_count() or 1, requested))
 
 
 @dataclass
@@ -58,6 +73,7 @@ class YOLOModel:
         import onnxruntime as ort
         so = ort.SessionOptions()
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        so.intra_op_num_threads = inference_threads()
         providers = gpu.onnx_providers(device)
         if any((p[0] if isinstance(p, tuple) else p) == "DmlExecutionProvider" for p in providers):
             so.enable_mem_pattern = False
@@ -65,6 +81,7 @@ class YOLOModel:
         try:
             self.session = ort.InferenceSession(path, sess_options=so, providers=providers)
         except Exception:
+            log.exception("preferred inference provider failed; falling back to CPU")
             self.session = ort.InferenceSession(path, sess_options=so, providers=["CPUExecutionProvider"])
         inp = self.session.get_inputs()[0]
         self.input_name = inp.name
@@ -81,7 +98,15 @@ class YOLOModel:
         self.num_keypoints = nk
         self.num_classes = len(self.class_names) or 1
         self.providers = self.session.get_providers()
+        log.info("model %s providers=%s cpu_threads=%s", os.path.basename(path), self.providers,
+                 so.intra_op_num_threads or "auto")
         self._lock = threading.Lock()
+        self._timing = dict(calls=0, preprocess=0.0, queue=0.0, inference=0.0)
+
+    def timing_snapshot(self) -> dict:
+        """Cumulative worker seconds; queue time overlaps other workers' inference."""
+        with self._lock:
+            return dict(self._timing)
 
     @property
     def bird_class(self) -> int:
@@ -126,10 +151,24 @@ class YOLOModel:
                iou_threshold=0.5, max_results=20) -> list[Detection]:
         """Detections in `img` pixel coordinates (top-left origin)."""
         region = crop or (0.0, 0.0, float(img.shape[1]), float(img.shape[0]))
+        started = time.perf_counter()
         blob, (x0, y0, px, py, rx, ry) = self._letterbox(img, region)
+        ready = time.perf_counter()
         # DirectML does not support concurrent Run() calls on one session (crashes): serialize inference.
         with self._lock:
-            out = self.session.run([self.output_name], {self.input_name: blob})[0]
+            running = time.perf_counter()
+            try:
+                out = self.session.run([self.output_name], {self.input_name: blob})[0]
+            finally:
+                self._timing['calls'] += 1
+                self._timing['preprocess'] += ready - started
+                self._timing['queue'] += running - ready
+                self._timing['inference'] += time.perf_counter() - running
+                # ORT can change providers on its first Run(), after construction.
+                providers = self.session.get_providers()
+                if providers != self.providers:
+                    log.warning("model runtime providers changed: %s -> %s", self.providers, providers)
+                    self.providers = providers
         a = out[0].astype(np.float32)          # [C, N]
         C = a.shape[0]
         nc = C - 4 - self.num_keypoints * 3
@@ -174,4 +213,13 @@ class BirdModels:
 
     @property
     def device_description(self) -> str:
-        return gpu.describe_device(self.detector.providers, self.device)
+        detector = gpu.describe_device(self.detector.providers, self.device)
+        pose = gpu.describe_device(self.pose.providers, self.device)
+        return detector if detector == pose else f"识鸟：{detector} · 鸟头：{pose}"
+
+    def device_for_stage(self, stage: str) -> str:
+        if stage == "定位鸟头/鸟眼":
+            return gpu.describe_device(self.pose.providers, self.device)
+        if stage == "识别鸟":
+            return gpu.describe_device(self.detector.providers, self.device)
+        return "CPU"

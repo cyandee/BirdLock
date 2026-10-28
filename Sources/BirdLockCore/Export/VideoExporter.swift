@@ -68,11 +68,13 @@ final class SourcePrefetcher: @unchecked Sendable {
 }
 
 public final class VideoExporter {
+    public private(set) var warning: String?
     public init() {}
 
     /// Encodes the video; with `audio` the music is muxed in afterwards (the video stream is copied, not re-encoded).
     public func export(job: RenderJob, to url: URL, audio: AudioSettings? = nil, progress: @escaping (Double) -> Void,
                        isCancelled: @escaping () -> Bool) throws {
+        warning = nil
         let audio = job.mixedAudio(audio)
         guard audio.isActive else {
             try exportVideo(job: job, to: url, progress: progress, isCancelled: isCancelled)
@@ -93,8 +95,10 @@ public final class VideoExporter {
         guard !frames.isEmpty else { throw ExportError.noFrames }
         let (W, H) = job.outputSize
         let s = job.export
+        Diagnostics.record("video export size=\(W)x\(H) frames=\(frames.count) fps=\(s.outputFPS) codec=\(s.codec.rawValue) interpolation=\(s.interpolation.rawValue) full_resolution=\(s.useFullResolution)")
         try? FileManager.default.removeItem(at: url)
         let writer = try AVAssetWriter(outputURL: url, fileType: s.codec.fileType)
+        defer { if writer.status == .writing { writer.cancelWriting() } }
         var settings: [String: Any] = [
             AVVideoCodecKey: s.codec.avCodec,
             AVVideoWidthKey: W,
@@ -131,21 +135,40 @@ public final class VideoExporter {
         guard writer.startWriting() else { throw ExportError.writer(writer.error?.localizedDescription ?? "start") }
         writer.startSession(atSourceTime: .zero)
 
-        let pre = SourcePrefetcher(job: job, proxy: !s.useFullResolution, scale: job.exportDecodeScale)
-        let lookahead = 8
+        let pre = SourcePrefetcher(job: job, proxy: !s.useFullResolution, scale: job.exportDecodeScale, limit: 4)
+        let lookahead = 4
         let timescale: CMTimeScale = 60000
         let frameDur = CMTime(value: CMTimeValue((Double(timescale) / s.outputFPS).rounded()), timescale: timescale)
         let cs709 = CGColorSpace(name: CGColorSpace.itur_709)!
         var lastKey: OutputFrame? = nil
         var lastBuffer: CVPixelBuffer? = nil
         var interp: ((CIImage, CIImage, Double) -> CIImage?)? = nil
-        var aiBox: AnyObject? = nil
-        if s.interpolation == .ai, #available(macOS 15.4, *), AIInterpolator.isSupported,
-           let ai = AIInterpolator(width: W, height: H, context: job.renderer.context) {
-            aiBox = ai
-            interp = { a, b, t in ai.interpolate(a, b, phase: t) }
+        var aiBox: IsolatedInterpolator?
+        var flowBudget = OpticalFlowWorkBudget(width: W, height: H)
+        if s.interpolation == .ai && frames.contains(where: { $0.t > 0.001 && $0.a != $0.b }) {
+            aiBox = IsolatedInterpolator(width: W, height: H, context: job.renderer.context, cancelled: isCancelled)
+            if aiBox != nil {
+                Diagnostics.record("optical flow worker request_limit=\(flowBudget.requestLimit)")
+                interp = { a,b,t in
+                    guard self.warning == nil, !isCancelled() else { return nil }
+                    if flowBudget.beginRequest() {
+                        aiBox?.stop(); aiBox = nil
+                        job.renderer.context.clearCaches()
+                        Diagnostics.record("optical flow recycling worker after processed-pixel budget")
+                        aiBox = IsolatedInterpolator(width: W, height: H, context: job.renderer.context, cancelled: isCancelled)
+                    }
+                    guard let ai = aiBox else {
+                        self.warning = "光流补帧不可用，已使用帧混合；详见诊断日志"
+                        return nil
+                    }
+                    let result = ai.interpolate(a,b,phase: t)
+                    if ai.failed { self.warning = "光流补帧异常，已使用帧混合；详见诊断日志" }
+                    return result
+                }
+            }
+            else { warning = "光流补帧不可用，已使用帧混合；详见诊断日志" }
         }
-        defer { _ = aiBox }
+        defer { aiBox?.stop() }
 
         for (k, of) in frames.enumerated() {
             let cacheKey = of.renderKey(focus: s.focusMark, closeups: job.analysis.closeups ?? [])
@@ -155,25 +178,34 @@ public final class VideoExporter {
             for j in k..<min(frames.count, k + lookahead) { ahead.append(frames[j].a); if frames[j].t > 0 { ahead.append(frames[j].b) } }
             pre.prefetch(ahead)
 
+            let waitStarted = Date()
             while !input.isReadyForMoreMediaData {
                 if isCancelled() { writer.cancelWriting(); throw ExportError.cancelled }
+                if writer.status == .failed || writer.status == .cancelled || Date().timeIntervalSince(waitStarted) > 60 {
+                    throw ExportError.writer(writer.error?.localizedDescription ?? "编码器长时间未响应")
+                }
                 Thread.sleep(forTimeInterval: 0.002)
             }
             var pbOut: CVPixelBuffer? = nil
             if let lk = lastKey, lk == cacheKey, let lb = lastBuffer {
                 pbOut = lb   // identical frame (slow-motion hold) – reuse
             } else {
+                pbOut = try autoreleasepool {
                 guard let pool = adaptor.pixelBufferPool else { throw ExportError.writer("no pixel buffer pool") }
                 var pb: CVPixelBuffer?
                 CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pb)
                 guard let pb else { throw ExportError.writer("pixel buffer") }
-                guard let img = job.renderOutput(of, fetch: { pre.get($0) }, interpolate: interp) else { continue }
+                guard let img = job.renderOutput(of, fetch: { pre.get($0) }, interpolate: interp) else {
+                    throw ExportError.writer("无法读取第 \(of.a+1) 张照片")
+                }
                 job.renderer.context.render(img, to: pb, bounds: CGRect(x: 0, y: 0, width: W, height: H), colorSpace: cs709)
                 CVBufferSetAttachment(pb, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
                 CVBufferSetAttachment(pb, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, .shouldPropagate)
                 CVBufferSetAttachment(pb, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
-                pbOut = pb
+                return pb
+                }
             }
+            if aiBox?.failed == true { warning = "光流补帧异常，已使用帧混合；详见诊断日志" }
             let t = CMTimeMultiply(frameDur, multiplier: Int32(k))
             if !adaptor.append(pbOut!, withPresentationTime: t) {
                 throw ExportError.writer(writer.error?.localizedDescription ?? "append")
@@ -181,6 +213,7 @@ public final class VideoExporter {
             lastKey = cacheKey; lastBuffer = pbOut
             pre.evict(keeping: Set(ahead))
             progress(Double(k + 1) / Double(frames.count))
+            if k == 0 || k % max(1,frames.count/20) == 0 { Diagnostics.record("video rendered \(k+1)/\(frames.count)") }
         }
         input.markAsFinished()
         let sem = DispatchSemaphore(value: 0)
@@ -188,6 +221,7 @@ public final class VideoExporter {
         writer.finishWriting { sem.signal() }
         sem.wait()
         if writer.status != .completed { throw ExportError.writer(writer.error?.localizedDescription ?? "finish") }
+        Diagnostics.record("video export complete warning=\(warning ?? "none")")
     }
 
     /// Export aligned frames as an image sequence (PNG / JPEG / HEIC) – one per used source frame.

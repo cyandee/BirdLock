@@ -17,12 +17,15 @@ python3 -I scripts/verify_bundle.py --aircraft-resources SharedResources/Aircraf
 ARCH_ARGS=()
 [ "${UNIVERSAL:-0}" = "1" ] && ARCH_ARGS=(--arch arm64 --arch x86_64)
 swift build -c release --product BirdLock "${ARCH_ARGS[@]}"
+swift build -c release --product BirdLockInterpolation "${ARCH_ARGS[@]}"
 BIN="$(swift build -c release "${ARCH_ARGS[@]}" --show-bin-path)/BirdLock"
 
 APP="${APP_OUTPUT:-$ROOT/dist/BirdLock.app}"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Models"
 cp "$BIN" "$APP/Contents/MacOS/BirdLock"
+cp "${BIN:h}/BirdLockInterpolation" "$APP/Contents/MacOS/BirdLockInterpolation"
+chmod 755 "$APP/Contents/MacOS/BirdLockInterpolation"
 chmod 755 "$APP/Contents/MacOS/BirdLock"
 cp VERSION "$APP/Contents/Resources/"
 cp -R SharedResources/Audio "$APP/Contents/Resources/Audio"

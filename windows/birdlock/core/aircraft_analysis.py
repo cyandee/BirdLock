@@ -11,6 +11,8 @@ import math
 from pathlib import Path
 from contextlib import contextmanager
 import threading
+import os
+import time
 
 import cv2
 import numpy as np
@@ -23,6 +25,7 @@ from .analysis import (Analyzer, Box, Cancelled, FrameAnalysis, ProxyCache, Sequ
 from .models import PoseSchema
 from .phasecorr import extract_exact, sharpness
 from .util import fill_gaps, gaussian, running_median, unwrap_angles
+from .log import log
 
 _work_slot = threading.Lock()
 
@@ -106,7 +109,8 @@ class AircraftAnalyzer:
         self.parts_directory = parts_directory or model_directory()
         self.identity = analysis_identity(self.parts_directory)
         self.parts = parts_model if parts_model is not None else AircraftPartsModel(self.parts_directory)
-        self.base = Analyzer(None, cache=self.cache, proxy_long_side=max(1,min(4096, proxy_long_side)), workers=2)
+        self.base = Analyzer(None, cache=self.cache, proxy_long_side=max(1,min(4096, proxy_long_side)),
+                             workers=min(4, os.cpu_count() or 1))
 
     def analyze(self, frames, fps, hint=None, progress=None, cancelled=lambda: False, clips=None):
         entered = False
@@ -161,8 +165,12 @@ class AircraftAnalyzer:
             bodies = [None if p.target_box is None else replace(p.target_box, x=p.target_box.x/scales[i],y=p.target_box.y/scales[i],
                        w=p.target_box.w/scales[i],h=p.target_box.h/scales[i]) for i,p in enumerate(per)]
             if progress:progress("定位/跟踪机头", 0)
+            started = time.monotonic()
             observations = analyze_aircraft_noses(bodies,read,clips=clips,model=self.parts,cancelled=cancelled,
                 progress=(lambda p: progress("定位/跟踪机头",p)) if progress else None)
+            log.info("aircraft nose seconds=%.3f detected=%d tracked=%d missing=%d",time.monotonic()-started,
+                     sum(o.source=="detected" for o in observations),sum(o.source=="tracked" for o in observations),
+                     sum(o.nose is None for o in observations))
             for i, raw in enumerate(observations):
                 nose = raw.nose
                 if nose is not None:

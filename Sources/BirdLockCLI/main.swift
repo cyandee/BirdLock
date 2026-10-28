@@ -468,6 +468,7 @@ func extractFrames(video: String, out: String, maxFrames: Int, start: Double) {
 // MARK: - main
 
 let cmd = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "help"
+if ProcessInfo.processInfo.environment["BIRDLOCK_LOG_DIR"] != nil { Diagnostics.start(role: "cli") }
 switch cmd {
 case "selftest":
     selftest()

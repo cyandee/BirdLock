@@ -9,6 +9,7 @@ import json
 import math
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -25,6 +26,7 @@ from .paths import cache_dir
 from .phasecorr import PhaseCorrelator, extract_exact, sharpness
 from .util import clamp, fill_gaps, gaussian, median, running_median, unwrap_angles
 from .aircraft_sequence import AircraftFrameObservation
+from .log import log
 
 ANALYSIS_VERSION = 3
 
@@ -181,8 +183,8 @@ class ProxyCache:
         return self.directory(fp) / f"p{i:05d}.jpg"
 
     def load_proxy(self, fp: str, i: int) -> np.ndarray | None:
-        p = self.proxy_path(fp, i)
-        return F.read_file_image(str(p)) if p.exists() else None
+        # Reading must not mkdir/stat the same cache directory for every frame.
+        return F.read_file_image(str(self.root / fp / f"p{i:05d}.jpg"))
 
     def save_analysis(self, a: SequenceAnalysis):
         p = self.directory(a.fingerprint) / "analysis.json"
@@ -201,7 +203,14 @@ class ProxyCache:
             a = SequenceAnalysis.from_dict(d)
         except Exception:
             return None
-        if any(not self.proxy_path(fp, i).exists() for i in range(a.count)):
+        try:
+            # On Windows/network disks, thousands of mkdir+exists round trips can
+            # dominate reopening an otherwise complete cached burst.
+            with os.scandir(p.parent) as entries:
+                available = {e.name for e in entries if e.is_file()}
+            if any(f"p{i:05d}.jpg" not in available for i in range(a.count)):
+                return None
+        except OSError:
             return None
         return a
 
@@ -472,6 +481,9 @@ class Analyzer:
         done = 0
         lock = threading.Lock()
         results = [None] * n
+        import time
+        from .log import log
+        started = time.monotonic()
 
         def run(i):
             nonlocal done
@@ -486,6 +498,8 @@ class Analyzer:
 
         with ThreadPoolExecutor(max_workers=self.workers) as ex:
             list(ex.map(run, range(n)))
+        log.info("analysis stage=%s photos=%d workers=%d seconds=%.3f", stage, n,
+                 self.workers, time.monotonic()-started)
         if cancelled():
             raise Cancelled()
         return results
@@ -498,6 +512,18 @@ class Analyzer:
         cdir = self.cache.directory(fp)
         det, pose, schema = self.models.detector, self.models.pose, self.models.schema
         per = [FrameAnalysis(i) for i in range(n)]
+
+        def snapshot(model):
+            return model.timing_snapshot() if hasattr(model, 'timing_snapshot') else None
+
+        def report_model(stage, model, before):
+            if before is None:
+                return
+            after = model.timing_snapshot()
+            delta = {key: after[key] - before[key] for key in before}
+            log.info("analysis model stage=%s providers=%s calls=%d worker_seconds "
+                     "preprocess=%.3f queue=%.3f inference=%.3f (queue overlaps other workers)",
+                     stage, model.providers, delta['calls'], delta['preprocess'], delta['queue'], delta['inference'])
 
         # ---- Pass 1: proxies + detection
         def pass1(i):
@@ -515,16 +541,31 @@ class Analyzer:
 
         if progress:
             progress(STAGES[0], 0.0)
+        det_before = snapshot(det)
         self._map(pass1, list(range(n)), progress, STAGES[0], cancelled)
+        report_model(STAGES[0], det, det_before)
 
         targets = track_targets([p.birds for p in per], hint, clips)
         for i in range(n):
             per[i].target = targets[i]
 
         # ---- Pass 1b: keypoints on the tracked bird + background statistics
+        io_lock = threading.Lock()
+        io_times = dict(proxy_read=0.0, high_resolution_decode=0.0, high_resolution_count=0, pose_errors=0)
+
+        def timed_read(key, fn, *args):
+            started = time.perf_counter()
+            try:
+                return fn(*args)
+            finally:
+                with io_lock:
+                    io_times[key] += time.perf_counter() - started
+                    if key == 'high_resolution_decode':
+                        io_times['high_resolution_count'] += 1
+
         def pass1b(i):
             f = frames[i]
-            proxy = F.read_file_image(str(cdir / f"p{i:05d}.jpg"))
+            proxy = timed_read('proxy_read', F.read_file_image, str(cdir / f"p{i:05d}.jpg"))
             if proxy is None:
                 return
             k = f.pixelWidth / proxy.shape[1]
@@ -542,13 +583,15 @@ class Analyzer:
                 img, kk = proxy, k
                 if need_long > max(proxy.shape[:2]) * 1.05:
                     target = int(min(long_side, need_long))
-                    hi = F.load_max_side(f, target)
+                    hi = timed_read('high_resolution_decode', F.load_max_side, f, target)
                     if hi is not None:
                         img, kk = hi, f.pixelWidth / hi.shape[1]
                 c = (crop[0] / kk, crop[1] / kk, crop[2] / kk, crop[3] / kk)
                 try:
                     ds = pose.detect(img, crop=c, class_index=0, score_threshold=0.1)
                 except Exception:
+                    with io_lock:
+                        io_times['pose_errors'] += 1
                     ds = []
                 if ds:
                     from .models import Detection
@@ -560,7 +603,12 @@ class Analyzer:
             per[i].poseScore = ps
             per[i].head = HeadObservation.from_keypoints(kps, schema, self.keypoint_min_conf)
 
+        pose_before = snapshot(pose)
         self._map(pass1b, list(range(n)), progress, STAGES[1], cancelled)
+        report_model(STAGES[1], pose, pose_before)
+        log.info("analysis bird pose IO worker_seconds proxy_read=%.3f high_resolution_decode=%.3f "
+                 "high_resolution_count=%d pose_errors=%d", io_times['proxy_read'],
+                 io_times['high_resolution_decode'], io_times['high_resolution_count'], io_times['pose_errors'])
 
         a = SequenceAnalysis(fp, frames, fps, self.proxy_long_side, per, schema)
         a.clips = clips

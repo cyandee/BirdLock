@@ -735,8 +735,12 @@ class StatusCard(QFrame):
             else:
                 txt = f"{overall * 100:.0f}%"
             if st.device_text:
-                txt += f" · {st.device_text}"
+                device = "机头定位：CPU" if st.is_aircraft and st.stage == "定位/跟踪机头" else st.device_text
+                if not st.is_aircraft and st._models is not None and st.stage in STAGES:
+                    device = st._models.device_for_stage(st.stage)
+                txt += f" · {device}"
             self.status.setText(txt)
+            self.status.setToolTip(st.device_text)
         self.adjustSize()
 
 

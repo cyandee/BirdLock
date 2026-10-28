@@ -14,6 +14,7 @@ public final class AIInterpolator {
     private var srcPool: CVPixelBufferPool?
     private var dstPool: CVPixelBufferPool?
     private let context: CIContext
+    private var sequence: Int64 = 0
 
     public init?(width: Int, height: Int, context: CIContext) {
         self.width = width
@@ -37,7 +38,15 @@ public final class AIInterpolator {
         CVBufferSetAttachment(p, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
     }
 
-    public static var isSupported: Bool { VTFrameRateConversionConfiguration.isSupported }
+    public static var isSupported: Bool {
+        // Keep older Xcode SDKs usable (the property was renamed in Xcode 26).
+        #if compiler(>=6.2)
+        if #available(macOS 26, *) { return VTFrameRateConversionConfiguration.isSupported }
+        return VTFrameRateConversionConfiguration.processorSupported
+        #else
+        return VTFrameRateConversionConfiguration.processorSupported
+        #endif
+    }
 
     private func buffer(_ pool: CVPixelBufferPool?) -> CVPixelBuffer? {
         guard let pool else { return nil }
@@ -48,17 +57,19 @@ public final class AIInterpolator {
 
     /// Returns the frame at `phase` (0…1) between `a` and `b` (both already composed at output size).
     public func interpolate(_ a: CIImage, _ b: CIImage, phase: Double) -> CIImage? {
+        guard phase.isFinite, phase > 0, phase < 1 else { return nil }
+        let base = sequence * 2000; sequence += 1
         guard let pa = buffer(srcPool), let pb = buffer(srcPool), let pd = buffer(dstPool) else { return nil }
         let r = CGRect(x: 0, y: 0, width: width, height: height)
         let cs = CGColorSpace(name: CGColorSpace.itur_709)!
         for p in [pa, pb, pd] { Self.tag709(p) }
         context.render(a, to: pa, bounds: r, colorSpace: cs)
         context.render(b, to: pb, bounds: r, colorSpace: cs)
-        guard let fa = VTFrameProcessorFrame(buffer: pa, presentationTimeStamp: CMTime(value: 0, timescale: 1000)),
-              let fb = VTFrameProcessorFrame(buffer: pb, presentationTimeStamp: CMTime(value: 1000, timescale: 1000)),
-              let fd = VTFrameProcessorFrame(buffer: pd, presentationTimeStamp: CMTime(value: CMTimeValue(phase * 1000), timescale: 1000)),
+        guard let fa = VTFrameProcessorFrame(buffer: pa, presentationTimeStamp: CMTime(value: base, timescale: 1000)),
+              let fb = VTFrameProcessorFrame(buffer: pb, presentationTimeStamp: CMTime(value: base+1000, timescale: 1000)),
+              let fd = VTFrameProcessorFrame(buffer: pd, presentationTimeStamp: CMTime(value: base+CMTimeValue(phase * 1000), timescale: 1000)),
               let params = VTFrameRateConversionParameters(sourceFrame: fa, nextFrame: fb, opticalFlow: nil,
-                                                           interpolationPhase: [Float(phase)], submissionMode: .sequential,
+                                                           interpolationPhase: [Float(phase)], submissionMode: .random,
                                                            destinationFrames: [fd]) else { return nil }
         let sem = DispatchSemaphore(value: 0)
         var ok = false

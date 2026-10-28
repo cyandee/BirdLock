@@ -4,6 +4,7 @@ import BirdLockCore
 
 @main
 struct BirdLockApp: App {
+    init() { Diagnostics.start() }
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @State private var state = AppState()
 
@@ -25,6 +26,10 @@ struct BirdLockApp: App {
             CommandGroup(replacing: .help) {
                 Button("BirdLock 使用说明") { AppDocs.openManual() }
                 Button("反馈与交流（邮箱）") { AppIdentity.showContact() }
+                Button("打开日志文件夹…") { NSWorkspace.shared.open(Diagnostics.directory) }
+                Button("导出诊断日志…") { AppIdentity.exportDiagnostics() }
+            }
+            CommandMenu("赞赏") {
                 Button("请作者喝杯咖啡…") { AppIdentity.showSupport() }
             }
             CommandGroup(replacing: .newItem) {
@@ -80,6 +85,7 @@ func openImportPanel(_ state: AppState) {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillTerminate(_ notification: Notification) { Diagnostics.finish() }
     /// Set by the UI: imports folders / photos opened from Finder ("Open With", Dock icon drop, `open -a`).
     @MainActor static var openHandler: (([URL]) -> Void)?
     @MainActor private static var pendingOpen: [URL] = []
