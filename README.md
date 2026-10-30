@@ -6,15 +6,13 @@ BirdLock 是一个把飞鸟连拍照片做成视频的小工具。导入照片�
 
 ## 下载
 
-当前下载为 **1.4.3 测试版**，包含下方的导出修复、光流内存优化和诊断日志。Mac、Windows、对应源码和校验文件都在同一个下载页，旧版本也保留着。
+当前下载为 **1.5.0 测试版**，Mac 与 Windows 版本一致。安装包、对应源码、更新文件和校验文件都在同一个下载页，旧版本保留。
 
-**源码已更新到 1.5.0，两端版本一致**：加入[自动更新](docs/自动更新.md)，同时保留 1.4.4 的 Mac 光流闪烁修复。自动更新源尚未开放。
+这一版加入[软件内更新](docs/自动更新.md)，也修复了 Mac 开启 AI 光流时的明暗闪烁。**旧版需要先手动安装一次 1.5.0**，之后才能接收后续版本。在线更新源已开放；已装 1.5.0 时显示暂无更新是正常的。
 
-**Mac 光流闪烁修复**：1.4.3 在开启 AI 光流时可能出现明暗交替，遇到时请先改用「重复帧」。新的安装包尚未公开，详情见[更新记录](docs/迭代记录.md)。
-
-- [macOS 通用版](https://github.com/cyandee/BirdLock/releases/download/v1.4.3-beta.1/BirdLock-1.4.3.dmg)：macOS 14 及以上，支持 Apple 芯片和 Intel。
-- [Windows 便携版](https://github.com/cyandee/BirdLock/releases/download/v1.4.3-beta.1/BirdLock-1.4.3-Windows-x64.zip)：Windows 10 / 11 x64，完整解压后运行。
-- [更新说明、源码和校验文件](https://github.com/cyandee/BirdLock/releases/tag/v1.4.3-beta.1) · [历史版本](https://github.com/cyandee/BirdLock/releases)
+- [macOS 通用版](https://github.com/cyandee/BirdLock/releases/download/v1.5.0-beta.1/BirdLock-1.5.0.dmg)：macOS 14 及以上，支持 Apple 芯片和 Intel。
+- [Windows 便携版](https://github.com/cyandee/BirdLock/releases/download/v1.5.0-beta.1/BirdLock-1.5.0-Windows-x64.zip)：Windows 10 / 11 x64，完整解压后运行。
+- [更新说明、源码和校验文件](https://github.com/cyandee/BirdLock/releases/tag/v1.5.0-beta.1) · [历史版本](https://github.com/cyandee/BirdLock/releases)
 
 Mac 版还没有做 Apple 公证，首次打开可能被系统拦截，安装方法见[使用说明](docs/使用说明.md)。如果遇到打不开的情况，请把报错提示、系统版本和芯片型号发给我。
 
@@ -31,7 +29,12 @@ Mac 版还没有做 Apple 公证，首次打开可能被系统拦截，安装方
 
 ## 这次更新了什么
 
-1.4.3 主要处理大家反馈的导出问题，也包含此前 1.4.1、1.4.2 本地测试的修复：
+1.5.0 新增：
+
+- **软件内更新**：Mac 使用 Sparkle，Windows 使用独立更新器，更新文件都做签名校验。可选择自动检查和接收测试版，分析或导出时暂缓更新。
+- **Mac 光流明暗闪烁修复**：补帧结果与输入使用一致的显式色彩空间，解决原始帧与补帧交替变亮的问题。
+
+也保留此前的导出修复：
 
 - **Windows 导出恢复**：修复切换编码或画质后不能导出、取消后无法再次导出的问题；改善编码进程退出和临时文件清理。
 - **Mac 光流保护**：光流补帧改由独立辅助进程处理，异常或长时间无响应时提示并回退到帧混合。长序列按处理量回收进程和渲染缓存，降低内存累积，可能增加导出时间。

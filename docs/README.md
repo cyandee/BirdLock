@@ -4,9 +4,9 @@
 
 - [macOS 使用说明](使用说明.md)
 - [Windows 使用说明](windows/使用说明.md)
-- [下载 1.4.3 测试版](https://github.com/cyandee/BirdLock/releases/tag/v1.4.3-beta.1)
+- [下载 1.5.0 测试版](https://github.com/cyandee/BirdLock/releases/tag/v1.5.0-beta.1)
 
-当前源码的 Mac 与 Windows 均为 1.5.0；已发布安装包仍为 1.4.3，1.5.0 安装包和自动更新源尚未发布。变化见[更新记录](迭代记录.md)。
+Mac 与 Windows 安装包、源码均为 1.5.0，在线更新源已开放。旧版需要先手动安装一次。变化见[更新记录](迭代记录.md)。
 
 其他内容放在这里，方便查找。
 

@@ -2,7 +2,7 @@
 
 Windows 版使用 Python 3.12 x64、Qt/PySide6 和 ONNX Runtime。日常使用请看[使用说明](../docs/windows/使用说明.md)，这里放开发和打包的方法。
 
-[下载 1.4.3 测试版](https://github.com/cyandee/BirdLock/releases/tag/v1.4.3-beta.1) · 联系我：cyanodee@gmail.com
+[下载 1.5.0 测试版](https://github.com/cyandee/BirdLock/releases/tag/v1.5.0-beta.1) · 联系我：cyanodee@gmail.com
 
 ## 从源码运行
 
@@ -19,7 +19,7 @@ windows/.venv/Scripts/python -m birdlock.cli selftest
 windows/.venv/Scripts/python windows/build_windows.py
 ```
 
-版本读取根目录的 [VERSION](../VERSION)，当前 Mac 与 Windows 源码版本均为 1.5.0，显式传入的 `--version` 必须相同。打包输出为 `windows/dist/BirdLock/` 和 `windows/dist/BirdLock-1.5.0-Windows-x64.zip`。已发布安装包仍为 1.4.3。本次源码包含独立更新器，并与 Mac 统一版本；1.5.0 安装包和在线更新清单尚未发布，说明见[自动更新](../docs/自动更新.md)。首次构建会下载依赖、FFmpeg 和固定飞机权重，成品运行时不用下载模型。
+版本读取根目录的 [VERSION](../VERSION)，当前 Mac 与 Windows 源码版本均为 1.5.0，显式传入的 `--version` 必须相同。打包输出为 `windows/dist/BirdLock/` 和 `windows/dist/BirdLock-1.5.0-Windows-x64.zip`。已发布安装包与 Mac 均为 1.5.0。本次包含独立更新器，在线更新源已开放；旧版需要先手动安装一次。说明见[自动更新](../docs/自动更新.md)。首次构建会下载依赖、FFmpeg 和固定飞机权重，成品运行时不用下载模型。
 
 ## 显卡加速
 
