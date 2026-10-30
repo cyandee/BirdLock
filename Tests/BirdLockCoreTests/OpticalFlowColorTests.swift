@@ -53,12 +53,24 @@ final class OpticalFlowColorTests: XCTestCase {
         }
     }
 
+    @available(macOS 15.4, *)
+    private func requireInterpolator(context: CIContext) throws -> AIInterpolator {
+        let candidate = AIInterpolator(width: width, height: height, context: context)
+        let environment = ProcessInfo.processInfo.environment
+        if case .none = candidate,
+           environment["GITHUB_ACTIONS"] == "true",
+           environment["BIRDLOCK_ALLOW_VIRTUALIZED_FLOW_SKIP"] == "1" {
+            throw XCTSkip("Hosted VM cannot initialize VideoToolbox hardware; color regression must run on a physical Mac")
+        }
+        return try XCTUnwrap(candidate, "VideoToolbox initialization failed on this validation device")
+    }
+
     func testStaticImageKeepsGrayRampAndColorsAtEveryPhase() throws {
         guard #available(macOS 15.4, *), AIInterpolator.isSupported else {
             throw XCTSkip("VideoToolbox optical flow is unavailable on this device")
         }
         let context = FrameRenderer().context
-        let ai = try XCTUnwrap(AIInterpolator(width: width, height: height, context: context))
+        let ai = try requireInterpolator(context: context)
         let source = fixture()
         for phase in [0.25, 0.5, 0.75] {
             let interpolated = try XCTUnwrap(ai.interpolate(source, source, phase: phase))
@@ -71,7 +83,7 @@ final class OpticalFlowColorTests: XCTestCase {
             throw XCTSkip("VideoToolbox optical flow is unavailable on this device")
         }
         let context = FrameRenderer().context
-        let ai = try XCTUnwrap(AIInterpolator(width: width, height: height, context: context))
+        let ai = try requireInterpolator(context: context)
         let first = fixture(moving: true)
         let second = CIImage(color: .white).cropped(to: CGRect(x: 650, y: 290, width: 80, height: 80))
             .composited(over: fixture())

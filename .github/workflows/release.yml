@@ -50,6 +50,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Core and bundle validation tests
+        env:
+          # Hosted VMs may advertise support but lack the hardware session.
+          # Physical-Mac validation keeps both optical-flow color tests mandatory.
+          BIRDLOCK_ALLOW_VIRTUALIZED_FLOW_SKIP: "1"
         run: |
           swift test
           python3 -m pip install -r scripts/requirements-updates.txt
