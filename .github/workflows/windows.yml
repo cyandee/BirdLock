@@ -64,14 +64,15 @@ jobs:
       - name: Independent updater verification
         run: |
           $csc = "$env:WINDIR/Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+          $updater = Join-Path $PWD "windows\updater"
           $refs = @('/reference:System.Web.Extensions.dll', '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll')
-          & $csc /nologo /codepage:65001 /optimize+ /target:exe /platform:x64 /out:windows/updater/dist/UpdaterTests.exe @refs windows/updater/Updater.cs windows/updater/Tests.cs
+          & $csc /nologo /codepage:65001 /optimize+ /target:exe /platform:x64 "/out:$updater\dist\UpdaterTests.exe" @refs "$updater\Updater.cs" "$updater\Tests.cs"
           if ($LASTEXITCODE -ne 0) { throw 'Updater tests did not compile' }
-          & windows/updater/dist/UpdaterTests.exe
+          & "$updater\dist\UpdaterTests.exe"
           if ($LASTEXITCODE -ne 0) { throw 'Updater tests failed' }
-          & $csc /nologo /codepage:65001 /optimize+ /target:exe /platform:x64 /main:IntegrationTests /out:windows/updater/dist/IntegrationTests.exe @refs windows/updater/Updater.cs windows/updater/fixtures/IntegrationTests.cs
+          & $csc /nologo /codepage:65001 /optimize+ /target:exe /platform:x64 /main:IntegrationTests "/out:$updater\dist\IntegrationTests.exe" @refs "$updater\Updater.cs" "$updater\fixtures\IntegrationTests.cs"
           if ($LASTEXITCODE -ne 0) { throw 'Updater integration tests did not compile' }
-          & windows/updater/dist/IntegrationTests.exe "$PWD/windows/updater"
+          & "$updater\dist\IntegrationTests.exe" "$updater"
           if ($LASTEXITCODE -ne 0) { throw 'Updater integration tests failed' }
 
       - name: Self-test from source (CPU / DirectML, FFmpeg)

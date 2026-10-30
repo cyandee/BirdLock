@@ -1,0 +1,19 @@
+<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>BirdLock</title>
+        <item>
+            <title>1.5.0</title>
+            <pubDate>Fri, 30 Oct 2026 12:46:13 +0800</pubDate>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>1.5.0</sparkle:version>
+            <sparkle:shortVersionString>1.5.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/cyandee/BirdLock/releases/download/v1.5.0-beta.1/BirdLock-1.5.0-macOS-update.zip" length="239088636" type="application/octet-stream" sparkle:edSignature="UW0MzjOUEXdekQxqXFMJtj7l5FSWnkPbENR+4aBbZ3HAUYyWWPZ+BDt79IUvWSw21/sW34dccMUOpIZidgE7Bg=="></enclosure>
+        </item>
+    </channel>
+</rss><!-- sparkle-signatures:
+edSignature: dS5H5qbuaRnKpNxKj7Q3nA6s60EG9E00zm6cjLFW8YNymValuMR0h0EfBKqfXHkeaYVQzbsOqSXSwuPMm6hRBA==
+length: 1118
+-->

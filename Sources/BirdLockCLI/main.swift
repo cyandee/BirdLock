@@ -84,7 +84,12 @@ func selftest() {
     let errs = (0..<200).map { (sol.positions[$0] - truth[$0]).length }
     let rawErr = (0..<200).map { (meas[$0].value! - truth[$0]).length }
     // jitter = frame-to-frame error change
-    let jit = (1..<200).map { ((sol.positions[$0] - truth[$0]) - (sol.positions[$0 - 1] - truth[$0 - 1])).length }
+    var jit: [Double] = []
+    for index in 1..<200 {
+        let currentError: V2 = sol.positions[index] - truth[index]
+        let previousError: V2 = sol.positions[index - 1] - truth[index - 1]
+        jit.append((currentError - previousError).length)
+    }
     print(String(format: "  raw err mean %.2f  fused err mean %.2f max %.2f  frame-to-frame jitter mean %.3f",
                  rawErr.reduce(0, +) / 200, errs.reduce(0, +) / 200, errs.max()!, jit.reduce(0, +) / 199))
     print(jit.reduce(0, +) / 199 < 0.3 ? "  PASS" : "  FAIL")
