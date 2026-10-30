@@ -10,7 +10,7 @@ Windows 版使用 Python 3.12 x64、Qt/PySide6 和 ONNX Runtime。日常使用�
 
 ```powershell
 py -3.12 -m venv windows/.venv
-windows/.venv/Scripts/python -m pip install -r windows/requirements.txt pyinstaller
+windows/.venv/Scripts/python -m pip install -r windows/requirements.txt -c windows/constraints-release.txt pyinstaller
 windows/.venv/Scripts/python windows/BirdLock.pyw
 $env:PYTHONPATH = "windows"
 windows/.venv/Scripts/python -c "from build_windows import fetch_ffmpeg; fetch_ffmpeg()"
@@ -19,7 +19,7 @@ windows/.venv/Scripts/python -m birdlock.cli selftest
 windows/.venv/Scripts/python windows/build_windows.py
 ```
 
-版本读取根目录的 [VERSION](../VERSION)，当前本地源码为 1.4.4，显式传入的 `--version` 必须相同。打包输出为 `windows/dist/BirdLock/` 和 `windows/dist/BirdLock-1.4.4-Windows-x64.zip`。公开安装包仍为 1.4.3，本次修复仅涉及 Mac 光流。首次构建会下载依赖、FFmpeg 和固定飞机权重，成品运行时不用下载模型。
+版本读取根目录的 [VERSION](../VERSION)，当前 Mac 与 Windows 源码版本均为 1.5.0，显式传入的 `--version` 必须相同。打包输出为 `windows/dist/BirdLock/` 和 `windows/dist/BirdLock-1.5.0-Windows-x64.zip`。已发布安装包仍为 1.4.3。本次源码包含独立更新器，并与 Mac 统一版本；1.5.0 安装包和在线更新清单尚未发布，说明见[自动更新](../docs/自动更新.md)。首次构建会下载依赖、FFmpeg 和固定飞机权重，成品运行时不用下载模型。
 
 ## 显卡加速
 
