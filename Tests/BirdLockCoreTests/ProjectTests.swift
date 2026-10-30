@@ -14,12 +14,14 @@ final class ProjectTests: XCTestCase {
     }
 
     func testImportedGroupsKeepTheirOwnCaptureRate() {
-        let times = (0..<6).map { Double($0)/10 } + (0..<6).map { 4 + Double($0)/20 }
-        let frames = times.enumerated().map { i, time in
+        let firstTimes: [Double] = (0..<6).map { Double($0) / 10.0 }
+        let secondTimes: [Double] = (0..<6).map { 4.0 + Double($0) / 20.0 }
+        let times: [Double] = firstTimes + secondTimes
+        let frames: [SourceFrame] = times.enumerated().map { i, time in
             SourceFrame(id: i, url: URL(fileURLWithPath: "/test-\(i).jpg"), pixelWidth: 640,
                         pixelHeight: 480, captureTime: time, fileSize: 1, modified: 0, exif: ExifInfo())
         }
-        let groups = FrameImporter.segments(frames)
+        let groups: [BurstSegment] = FrameImporter.segments(frames)
         XCTAssertEqual(groups.map(\.range), [0..<6, 6..<12])
         XCTAssertEqual(groups.map(\.fps), [10, 20])
     }
