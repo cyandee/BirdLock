@@ -49,6 +49,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install Rust targets for universal telemetry
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - name: Core and bundle validation tests
         env:
           # Hosted VMs may advertise support but lack the hardware session.
