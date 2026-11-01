@@ -51,7 +51,7 @@ class LensCatalogTests(unittest.TestCase):
             w, h = 1024, round(1024*entry.height/entry.width)
             x, y = lens.maps(w,h)
             self.assertTrue(np.isfinite(x).all() and np.isfinite(y).all())
-        self.assertIn('CC0 1.0 Universal', (directory()/'CC0-1.0.txt').read_text())
+        self.assertIn('CC0 1.0 Universal', (directory()/'CC0-1.0.txt').read_text(encoding="utf-8"))
 
     def test_sony_xml_reads_supplied_camera_without_faking_calibration(self):
         actual = os.environ.get('BIRDLOCK_TEST_SONY_XML')
@@ -118,6 +118,6 @@ class LensCatalogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
             shutil.copytree(directory(),root,dirs_exist_ok=True)
-            first=json.loads((root/'manifest.json').read_text())['profiles'][0]['file']
+            first=json.loads((root/'manifest.json').read_text(encoding="utf-8"))['profiles'][0]['file']
             (root/first).write_text('{}')
             with self.assertRaisesRegex(ValueError,'校验失败'):entries(root)

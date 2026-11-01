@@ -64,7 +64,7 @@ class WorkspaceTests(unittest.TestCase):
         with self.assertRaises(ValueError):workspace.save(d,self.cache/'project.birdlock',self.cache)
     def test_schema_and_invalid_edits_are_rejected(self):
         d=example(self.root/'media');file=self.root/'bad.birdlock';workspace.save(d,file,self.cache)
-        raw=json.loads(file.read_text());raw['schema']=999;file.write_text(json.dumps(raw))
+        raw=json.loads(file.read_text(encoding="utf-8"));raw['schema']=999;file.write_text(json.dumps(raw))
         with self.assertRaises(ValueError):workspace.read(file)
         raw['schema']=1;raw['analyses'][0]['manualEye']={'999':dict(x=1,y=2)};file.write_text(json.dumps(raw))
         with self.assertRaises(ValueError):workspace.read(file)
@@ -106,8 +106,8 @@ class WorkspaceTests(unittest.TestCase):
         doc=self.root/'project.birdlock';doc.write_text('keep')
         report=cache_policy.clean(self.cache,cache_policy.total_size(self.cache)-900,{str(current)})
         self.assertFalse((old/'video-000000.jpg').exists());self.assertTrue((current/'video-000000.jpg').exists())
-        self.assertEqual((old/'motion.json').read_text(),'{"keep":"gyro"}');self.assertTrue((old/'.evicted.json').is_file())
-        self.assertEqual(source.read_bytes(),b'original');self.assertEqual(doc.read_text(),'keep');self.assertGreater(report['removed'],0)
+        self.assertEqual((old/'motion.json').read_text(encoding="utf-8"),'{"keep":"gyro"}');self.assertTrue((old/'.evicted.json').is_file())
+        self.assertEqual(source.read_bytes(),b'original');self.assertEqual(doc.read_text(encoding="utf-8"),'keep');self.assertGreater(report['removed'],0)
     def test_busy_lease_and_dynamic_active_protection_override_old_cleanup_snapshot(self):
         current,_=self.group('e'*32,1000,1)
         with cache_policy.operation(self.cache):
