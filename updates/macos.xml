@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
 IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
---><rss xmlns:ns0="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>BirdLock</title>
         <item>
             <title>1.9.0</title>
             <pubDate>Sun, 01 Nov 2026 19:35:15 +0800</pubDate>
-            <ns0:version>1.9.0</ns0:version>
-            <ns0:shortVersionString>1.9.0</ns0:shortVersionString>
-            <ns0:minimumSystemVersion>14.0</ns0:minimumSystemVersion>
-            <enclosure url="https://github.com/cyandee/BirdLock/releases/download/v1.9.0/BirdLock-1.9.0-macOS-update.zip" length="246407752" type="application/octet-stream" ns0:edSignature="YsbRhYB8qTdDhGdzSu89FFwIf7GDX0jgsstzp9S7SH07PkdnRjI21da8LH1fNx0/ydRM8O4JYGLmHtJVH3/zAg=="></enclosure>
-            <ns0:releaseNotesLink ns0:edSignature="Yb6BAiXU6GmhTZGV568o+113Wyz4iFldKlcQQRZV+FVE92wKcuSI9l+mdHCwrdLYzXHKatY7DIG5gzAJZox7CQ==" ns0:length="8306">https://github.com/cyandee/BirdLock/releases/download/v1.9.0/BirdLock-1.9.0-notes.html</ns0:releaseNotesLink></item>
+            <sparkle:version>1.9.0</sparkle:version>
+            <sparkle:shortVersionString>1.9.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/cyandee/BirdLock/releases/download/v1.9.0/BirdLock-1.9.0-macOS-update.zip" length="246407752" type="application/octet-stream" sparkle:edSignature="YsbRhYB8qTdDhGdzSu89FFwIf7GDX0jgsstzp9S7SH07PkdnRjI21da8LH1fNx0/ydRM8O4JYGLmHtJVH3/zAg=="></enclosure>
+            <sparkle:releaseNotesLink sparkle:edSignature="Yb6BAiXU6GmhTZGV568o+113Wyz4iFldKlcQQRZV+FVE92wKcuSI9l+mdHCwrdLYzXHKatY7DIG5gzAJZox7CQ==" sparkle:length="8306">https://github.com/cyandee/BirdLock/releases/download/v1.9.0/BirdLock-1.9.0-notes.html</sparkle:releaseNotesLink></item>
     </channel>
 </rss><!-- sparkle-signatures:
-edSignature: PDpp0awhttkYlbR4rhHtEmEqzOkm18fDCZR56NZwzpZc6xk6F//Rq+yt3ceAcmb3yDaFdPmNJI04tuUAlQ3zBg==
-length: 1304
+edSignature: 7FsnOtfq4GHWfWaMONK84T2Oz7PNSrBfAB8Bhzqg4+nDcvQ2p/+X8Y75PcTLUL/H+/PReZg1lqM1MGn1Qvf5BA==
+length: 1352
 -->
