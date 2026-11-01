@@ -11,6 +11,12 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class TelemetryPackageTests(unittest.TestCase):
+    def test_inventory_excludes_unreachable_cross_platform_metadata(self):
+        from scripts.build_telemetry_helper import target_packages
+        packages=[dict(id=n,name=n) for n in ("app","parser","windows","android-jni")]
+        graph=dict(root="app",nodes=[dict(id="app",deps=[dict(pkg="parser")]),dict(id="parser",deps=[dict(pkg="windows")]),dict(id="windows",deps=[]),dict(id="android-jni",deps=[])])
+        self.assertEqual({p["name"] for p in target_packages(dict(packages=packages,resolve=graph))},{"app","parser","windows"})
+
     def component(self, folder, *, windows=False, universal=False):
         folder = Path(folder)
         if windows:

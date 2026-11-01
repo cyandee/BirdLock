@@ -15,6 +15,17 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / 'tools/telemetry/Cargo.toml'
 
 
+def target_packages(metadata):
+    nodes = {n['id']:n for n in metadata['resolve']['nodes']}
+    reachable = set();pending = [metadata['resolve']['root']]
+    while pending:
+        package_id = pending.pop()
+        if package_id in reachable: continue
+        reachable.add(package_id)
+        pending.extend(d['pkg'] for d in nodes[package_id].get('deps',[]))
+    return [p for p in metadata['packages'] if p['id'] in reachable]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--cargo', default=shutil.which('cargo'))
@@ -51,10 +62,16 @@ def main():
         shutil.copy2(MANIFEST.parent / 'licenses' / name, licenses / name)
     if args.target and 'windows-gnu' in args.target:
         shutil.copytree(MANIFEST.parent / 'licenses/MinGW', licenses / 'MinGW', dirs_exist_ok=True)
-    target = args.target or ('aarch64-apple-darwin' if args.universal else None)
+    rustc_host = env.get('RUSTC') or shutil.which('rustc')
+    if not rustc_host: raise SystemExit('Rust compiler is required to identify the native target')
+    host = next(line.split(': ',1)[1] for line in subprocess.check_output([rustc_host,'-vV'],env=env,text=True).splitlines() if line.startswith('host: '))
+    target = args.target or ('aarch64-apple-darwin' if args.universal else host)
     metadata_command = [args.cargo, 'metadata', '--locked', '--format-version', '1', '--manifest-path', str(MANIFEST)]
     if target: metadata_command += ['--filter-platform', target]
     metadata = json.loads(subprocess.check_output(metadata_command, cwd=ROOT, env=env))
+    # Cargo retains package metadata beyond the filtered resolve graph. Only reachable
+    # packages belong to this target; Android JNI must not enter a Windows inventory.
+    metadata['packages'] = target_packages(metadata)
     packages = sorted((dict(name=p['name'], version=p['version'], license=p.get('license'), source=p.get('source')) for p in metadata['packages']), key=lambda p:(p['name'],p['version']))
     (licenses / 'dependencies.json').write_text(json.dumps(packages, indent=2)+'\n', encoding='utf-8')
     for package in metadata['packages']:

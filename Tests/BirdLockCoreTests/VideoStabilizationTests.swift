@@ -64,7 +64,15 @@ final class VideoStabilizationTests: XCTestCase {
     }
     private func jitter(_ points: [V2]) -> Double {
         guard points.count > 2 else { return 0 }
-        return (1..<(points.count-1)).reduce(0) { $0 + (points[$1+1]-points[$1]*2+points[$1-1]).length } / Double(points.count-2)
+        var total: Double = 0
+        for i in 1..<(points.count-1) {
+            let before: V2 = points[i-1]
+            let middle: V2 = points[i]*2
+            let after: V2 = points[i+1]
+            let acceleration: V2 = after-middle+before
+            total += acceleration.length
+        }
+        return total / Double(points.count-2)
     }
     func testPhysicalSensorIntrinsicsRequireFixedCompleteCompatibleMetadata() throws {
         func frame(sensorWidth: Double = 31.948, sensorHeight: Double = 17.971, focal: Double = 600) -> TelemetryJSON {
