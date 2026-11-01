@@ -10,9 +10,9 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
             <ns0:shortVersionString>1.9.0</ns0:shortVersionString>
             <ns0:minimumSystemVersion>14.0</ns0:minimumSystemVersion>
             <enclosure url="https://github.com/cyandee/BirdLock/releases/download/v1.9.0/BirdLock-1.9.0-macOS-update.zip" length="246407752" type="application/octet-stream" ns0:edSignature="YsbRhYB8qTdDhGdzSu89FFwIf7GDX0jgsstzp9S7SH07PkdnRjI21da8LH1fNx0/ydRM8O4JYGLmHtJVH3/zAg=="></enclosure>
-            <ns0:releaseNotesLink>https://github.com/cyandee/BirdLock/releases/download/v1.9.0/BirdLock-1.9.0-notes.html</ns0:releaseNotesLink></item>
+            <ns0:releaseNotesLink ns0:edSignature="Yb6BAiXU6GmhTZGV568o+113Wyz4iFldKlcQQRZV+FVE92wKcuSI9l+mdHCwrdLYzXHKatY7DIG5gzAJZox7CQ==" length="8306">https://github.com/cyandee/BirdLock/releases/download/v1.9.0/BirdLock-1.9.0-notes.html</ns0:releaseNotesLink></item>
     </channel>
 </rss><!-- sparkle-signatures:
-edSignature: CHLVyRyhtQDfRsQYLZ1Tzb2RxJrYEVagLyQjpT5SELe+HDK37/ScjxqE0/YijfO3dun+f2DTGQUbpbPZZTCmCg==
-length: 1179
+edSignature: VX0cFgbfedq8nvW1fBxYtILMn5Zs51E88kflu970T9eV01lMeDg54ggKZNjJSSzyAuSAp1uaExAWwqv6uRRKBQ==
+length: 1300
 -->
