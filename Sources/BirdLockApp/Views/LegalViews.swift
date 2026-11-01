@@ -42,7 +42,7 @@ enum AppDocs {
         credits.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: credits.length))
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "BirdLock 鸟眼锁定",
-            .applicationVersion: "\(appVersion) 测试版",
+            .applicationVersion: "\(appVersion)",
             .credits: credits,
         ])
         NSApp.activate(ignoringOtherApps: true)

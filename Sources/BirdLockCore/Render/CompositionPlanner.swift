@@ -9,13 +9,22 @@ public struct FrameXform: Codable, Sendable {
     public var z: Double   // output px per source px
     public var psi: Double // rotation (radians, image coords)
     public var valid: Bool
+    /// Original source -> stabilized source, before the framing affine (row-major 3x3).
+    public var prewarp: [Double]? = nil
 
-    public init(a: V2, p: V2, z: Double, psi: Double, valid: Bool) {
-        self.a = a; self.p = p; self.z = z; self.psi = psi; self.valid = valid
+    public init(a: V2, p: V2, z: Double, psi: Double, valid: Bool, prewarp: [Double]? = nil) {
+        self.a = a; self.p = p; self.z = z; self.psi = psi; self.valid = valid; self.prewarp = prewarp
     }
 
-    public func map(_ q: V2) -> V2 { p + z * (q - a).rotated(psi) }
-    public func unmap(_ o: V2) -> V2 { a + ((o - p) / z).rotated(-psi) }
+    public func map(_ q: V2) -> V2 {
+        let stabilized = prewarp.map { Mat3($0).apply(q) } ?? q
+        return p + z * (stabilized - a).rotated(psi)
+    }
+    public func unmap(_ o: V2) -> V2 {
+        let stabilized = a + ((o - p) / z).rotated(-psi)
+        guard let prewarp else { return stabilized }
+        return Mat3(prewarp).inverse?.apply(stabilized) ?? V2(.nan, .nan)
+    }
 
     /// CGAffineTransform in top-left pixel coordinates
     public var affine: CGAffineTransform {

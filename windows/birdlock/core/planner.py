@@ -20,8 +20,12 @@ class FrameXform:
     z: float         # output px per source px
     psi: float       # rotation (radians, image coords)
     valid: bool
+    prewarp: np.ndarray | None = None
 
     def map(self, q) -> np.ndarray:
+        if self.prewarp is not None:
+            v = self.prewarp @ np.array([*q, 1.], dtype=np.float64)
+            q = v[:2] / v[2]
         d = np.asarray(q, dtype=np.float64) - self.a
         c, s = math.cos(self.psi), math.sin(self.psi)
         return self.p + self.z * np.array([c * d[0] - s * d[1], s * d[0] + c * d[1]])
@@ -29,7 +33,11 @@ class FrameXform:
     def unmap(self, o) -> np.ndarray:
         d = (np.asarray(o, dtype=np.float64) - self.p) / self.z
         c, s = math.cos(-self.psi), math.sin(-self.psi)
-        return self.a + np.array([c * d[0] - s * d[1], s * d[0] + c * d[1]])
+        q = self.a + np.array([c * d[0] - s * d[1], s * d[0] + c * d[1]])
+        if self.prewarp is not None:
+            v = np.linalg.inv(self.prewarp) @ np.array([*q, 1.])
+            q = v[:2] / v[2]
+        return q
 
     def matrix(self) -> np.ndarray:
         """2×3 affine (continuous top-left coordinates): o = M · [q, 1]."""
@@ -42,7 +50,7 @@ class FrameXform:
         return [self.unmap(v) for v in ((0, 0), (out_w, 0), (out_w, out_h), (0, out_h))]
 
     def scaled(self, k: float) -> "FrameXform":
-        return FrameXform(self.a, self.p * k, self.z * k, self.psi, self.valid)
+        return FrameXform(self.a, self.p * k, self.z * k, self.psi, self.valid, self.prewarp)
 
 
 @dataclass

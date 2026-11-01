@@ -72,6 +72,8 @@ class UpdateDialog(QDialog):
     def begin(self):
         if self.busy():self.message.setText('正在分析或导出，请稍后更新。');return
         if not FROZEN or not self.version:return
+        parent=self.parent()
+        if parent is not None and hasattr(parent,"can_leave_project") and not parent.can_leave_project():return
         self.install.setEnabled(False);self.auto.setEnabled(False);self.beta.setEnabled(False)
         self.error_log=None
         try:
@@ -88,7 +90,7 @@ class UpdateDialog(QDialog):
         try:
             result=json.loads((self.session/'state.json').read_text(encoding='utf-8-sig'));self.message.setText(result['message']);self.bar.setValue(result['percent'])
             if result['status']=='ready':
-                self.committing=True;self.state._save_settings_now();QApplication.instance().quit()
+                self.committing=True;self.state._update_exit_approved=True;self.state._save_settings_now();QApplication.instance().quit()
             elif result['status']=='error':
                 self.installing=False;self.timer.stop();self.error_log.close();self.auto.setEnabled(True);self.beta.setEnabled(True)
                 log.error('update failed: %s',result['message'])

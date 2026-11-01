@@ -7,7 +7,7 @@ import threading
 
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDoubleValidator, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QGridLayout,
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout,
                                QHBoxLayout, QLabel, QLayout, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QSlider,
                                QSpinBox, QStackedWidget, QTabBar, QVBoxLayout, QWidget)
 
@@ -468,6 +468,62 @@ class LookTab(Tab):
         st = state
         L = lambda: st.look          # noqa: E731
         S = lambda: st.selection     # noqa: E731
+
+        V = lambda: L().stabilization
+        card = Card("视频防抖", "◉")
+        self.check(card, "启用防抖", lambda: V().enabled, lambda v: setattr(V(), "enabled", v))
+        method = self.combo(None, "", [("自动融合", "auto"), ("图像防抖", "visual"), ("陀螺仪", "gyro")], lambda: V().method, lambda v: setattr(V(), "method", v))
+        descriptions = ["有陀螺仪时融合姿态与图像残差；没有时使用图像防抖。兼顾旋转与位移，但计算更多，运动前景仍可能干扰估计。", "根据画面特征抑制平移、旋转和缩放抖动，无需陀螺仪。运动前景、弱纹理和遮挡可能干扰估计，不能修复运动模糊。", "用陀螺仪平滑旋转，不易受主体运动影响。需要有效采样、准确同步和镜头内参；对平移、视差及机内防抖残差有限。无采样时回退图像防抖。"]
+        for i, text in enumerate(descriptions): method.setItemData(i,text,Qt.ToolTipRole)
+        question = QLabel("ⓘ");question.setToolTip(descriptions[0])
+        method.currentIndexChanged.connect(lambda i: question.setToolTip(descriptions[max(0,i)]))
+        row=QHBoxLayout();row.addWidget(QLabel("方法"));row.addWidget(method,1);row.addWidget(question);card.add(row)
+        self.combo(card, "取景", [("主体锁定", "subject"), ("平滑相机运动", "camera")], lambda: V().framing, lambda v: setattr(V(), "framing", v))
+        self.slider(card, "防抖强度", lambda: V().strength, lambda v: setattr(V(), "strength", v), 0, 1, lambda v: f"{v:.0%}")
+        self.slider(card, "平滑时间", lambda: V().smoothness, lambda v: setattr(V(), "smoothness", v), .05, 10, lambda v: f"{v:.2f} 秒", step=.05)
+        self.check(card, "自动裁切边缘", lambda: V().autoZoom, lambda v: setattr(V(), "autoZoom", v))
+        self.slider(card, "最大附加裁切", lambda: V().maxZoom, lambda v: setattr(V(), "maxZoom", v), 1, 8, lambda v: f"{v:.2f}×", step=.05)
+        size_locked = lambda: V().framing=="subject" and st.composition.sizeMode==SizeMode.LOCK_SIZE and st.job is not None and bool(st.job.track.has_data.any())
+        fixed = self.check(card, "固定裁切倍率，减少大小呼吸", lambda: size_locked() or V().fixedZoom, lambda v: setattr(V(), "fixedZoom", v), tip="整段使用同一附加裁切。锁定主体大小时自动采用固定倍率。")
+        self.b.add(lambda: fixed.setEnabled(not size_locked() and V().autoZoom and V().enabled))
+        strong=QPushButton("强力防抖预设")
+        def apply_strong():
+            V().enabled=V().autoZoom=V().fixedZoom=True;V().maxZoom=6;V().smoothness=1.5;V().strength=1;st.settings_changed()
+        strong.clicked.connect(apply_strong);card.add(strong)
+        auto_sync = self.check(card, "自动同步陀螺仪", lambda: V().autoSync, lambda v: setattr(V(), "autoSync", v))
+        row = QHBoxLayout(); row.addWidget(QLabel("手动微调"))
+        offset = QDoubleSpinBox(); offset.setRange(-10000,10000); offset.setDecimals(1); offset.setSuffix(" ms"); offset.setKeyboardTracking(False)
+        offset.valueChanged.connect(lambda value: (setattr(V(), 'gyroOffset', value/1000), st.settings_changed()))
+        row.addWidget(offset); card.add(row)
+        def refresh_offset():
+            offset.blockSignals(True); offset.setValue(V().gyroOffset*1000); offset.blockSignals(False)
+        self.b.add(refresh_offset)
+        def motion_status():
+            status = getattr(st.job, 'stabilization_status', None)
+            if not status: return None
+            text = status['method']
+            if status['gyroSamples'] == 0: text += ' · 无陀螺仪记录'
+            elif status['sync']['valid']: text += f" · 已同步 {status['sync']['offset']*1000:+.1f} ms"
+            elif V().autoSync: text += ' · 请检查时间偏移'
+            if status.get('limited'): text += ' · 已限制幅度以保留边缘'
+            return text, 'caption'
+        self.status(card, motion_status)
+        row = QHBoxLayout()
+        gyro = QPushButton("导入陀螺仪…")
+        def choose_gyro():
+            path, _ = QFileDialog.getOpenFileName(self, '选择陀螺仪记录或相机原片', '', '陀螺仪/视频 (*.gcsv *.csv *.gyroflow *.mp4 *.MP4 *.mov *.MOV *.bin *.bbl *.json);;所有文件 (*)')
+            if path: st.import_video_gyro(path)
+        gyro.clicked.connect(choose_gyro); row.addWidget(gyro)
+        sync = QPushButton("重新同步"); sync.clicked.connect(lambda: (setattr(V(), 'autoSync', True), st.settings_changed()))
+        row.addWidget(sync); card.add(row)
+        def refresh_gyro():
+            available=bool((getattr(st.job,"stabilization_status",None) or {}).get("gyroSamples",0)) and V().method!="visual"
+            for control in (auto_sync,offset,sync):control.setEnabled(available)
+            sync.setToolTip("需要可用陀螺仪记录；图像防抖无需同步。")
+        self.b.add(refresh_gyro)
+        from ..core.video_stabilization import cache_file
+        self.visible_when(card, lambda: cache_file(st.current_frames) is not None)
+        self.v.addWidget(card)
 
         card = Card("亮度一致性", "☀")
         self.check(card, "去闪烁（统一相邻帧的曝光和白平衡）", lambda: L().deflicker, lambda v: setattr(L(), "deflicker", v))

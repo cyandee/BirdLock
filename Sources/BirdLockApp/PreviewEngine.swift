@@ -52,6 +52,10 @@ final class PreviewEngine: @unchecked Sendable {
 
     private func key(_ job: RenderJob, _ i: Int) -> String { "\(job.analysis.fingerprint)#\(i)" }
 
+    func clear() {
+        lock.lock();proxies.removeAll();order.removeAll();originals.removeAll();originalOrder.removeAll();lock.unlock()
+    }
+
     func proxy(job: RenderJob, index i: Int) -> CGImage? {
         guard i >= 0, i < job.analysis.count else { return nil }
         let k = key(job, i)

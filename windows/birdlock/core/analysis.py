@@ -173,6 +173,12 @@ def fingerprint(frames: list, subject="bird", model_identity: str | None = None)
 class ProxyCache:
     def __init__(self, root: Path | None = None):
         self.root = root or cache_dir()
+        self.records = {}
+        self._record_lock = threading.Lock()
+
+    def retain_records(self,frames):
+        allowed={f.path for f in frames}
+        with self._record_lock:self.records={k:a for k,a in self.records.items() if all(f.path in allowed for f in a.frames)}
 
     def directory(self, fp: str) -> Path:
         d = self.root / fp
@@ -184,9 +190,27 @@ class ProxyCache:
 
     def load_proxy(self, fp: str, i: int) -> np.ndarray | None:
         # Reading must not mkdir/stat the same cache directory for every frame.
-        return F.read_file_image(str(self.root / fp / f"p{i:05d}.jpg"))
+        path=self.root / fp / f"p{i:05d}.jpg"
+        if path.is_file():return F.read_file_image(str(path))
+        with self._record_lock:a=self.records.get(fp)
+        if a is None:a=self.load_analysis(fp)
+        if a is None or not 0<=i<a.count:return None
+        image=F.load_max_side(a.frames[i],a.proxyLongSide)
+        if image is not None:
+            path.parent.mkdir(parents=True,exist_ok=True)
+            ok,encoded=cv2.imencode('.jpg',image,[cv2.IMWRITE_JPEG_QUALITY,95])
+            if ok:
+                import tempfile
+                fd,tmp=tempfile.mkstemp(dir=path.parent,suffix='.jpg')
+                try:
+                    with os.fdopen(fd,'wb') as stream:stream.write(encoded.tobytes())
+                    os.replace(tmp,path)
+                finally:
+                    if os.path.exists(tmp):os.unlink(tmp)
+        return image
 
     def save_analysis(self, a: SequenceAnalysis):
+        with self._record_lock:self.records[a.fingerprint]=a.copy_edits()
         p = self.directory(a.fingerprint) / "analysis.json"
         tmp = p.with_suffix(".tmp")
         with open(tmp, "w", encoding="utf-8") as f:
@@ -204,14 +228,12 @@ class ProxyCache:
         except Exception:
             return None
         try:
-            # On Windows/network disks, thousands of mkdir+exists round trips can
-            # dominate reopening an otherwise complete cached burst.
-            with os.scandir(p.parent) as entries:
-                available = {e.name for e in entries if e.is_file()}
-            if any(f"p{i:05d}.jpg" not in available for i in range(a.count)):
-                return None
-        except OSError:
-            return None
+            with os.scandir(p.parent) as entries:available={e.name for e in entries if e.is_file()}
+            if any(f"p{i:05d}.jpg" not in available and not Path(a.frames[i].path).is_file() for i in range(a.count)):return None
+        except OSError:return None
+        with self._record_lock:self.records[a.fingerprint]=a.copy_edits()
+        try:os.utime(p,None)
+        except OSError:pass
         return a
 
     def total_size(self) -> int:
@@ -473,7 +495,8 @@ class Analyzer:
         self.keypoint_min_conf = keypoint_min_conf
         self.patch_size = patch_size
         self.patch_head_lengths = patch_head_lengths
-        self.workers = workers or max(2, min(12, (os.cpu_count() or 4) - 1))
+        from .resource_budget import workers as budget_workers
+        self.workers = workers or budget_workers()
 
     def _map(self, fn, items, progress, stage, cancelled):
         """Run fn over items on a thread pool (decoding and inference release the GIL), in order."""
@@ -496,7 +519,7 @@ class Analyzer:
             if progress:
                 progress(stage, d / n)
 
-        with ThreadPoolExecutor(max_workers=self.workers) as ex:
+        with ThreadPoolExecutor(max_workers=getattr(self,'_stage_workers',self.workers)) as ex:
             list(ex.map(run, range(n)))
         log.info("analysis stage=%s photos=%d workers=%d seconds=%.3f", stage, n,
                  self.workers, time.monotonic()-started)
@@ -508,6 +531,8 @@ class Analyzer:
                 cancelled: Callable[[], bool] = lambda: False, clips=None) -> SequenceAnalysis:
         n = len(frames)
         clips = clips or []
+        from .resource_budget import workers as budget_workers
+        self._stage_workers=min(self.workers,budget_workers(max(64<<20,max((f.pixelWidth*f.pixelHeight for f in frames),default=1)*8)))
         fp = fingerprint(frames)
         cdir = self.cache.directory(fp)
         det, pose, schema = self.models.detector, self.models.pose, self.models.schema

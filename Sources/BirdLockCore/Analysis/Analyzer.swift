@@ -8,7 +8,7 @@ public struct AnalyzerOptions: Sendable {
     public var keypointMinConf = 0.35
     public var patchSize = 128
     public var patchHeadLengths = 3.0          // patch side in head lengths
-    public var concurrency = max(2, ProcessInfo.processInfo.activeProcessorCount - 2)
+    public var concurrency = ResourceBudget.workers(bytesPerTask: 96 << 20)
     public init() {}
 }
 
@@ -30,6 +30,7 @@ public typealias AnalysisProgress = @Sendable (AnalysisStage, Double) -> Void
 public final class Analyzer: @unchecked Sendable {
     public let models: BirdModels
     public var options: AnalyzerOptions
+    private var taskBytes = 96 << 20
     public let cache: ProxyCache
 
     public init(models: BirdModels, options: AnalyzerOptions = AnalyzerOptions(), cache: ProxyCache = .shared) {
@@ -52,7 +53,8 @@ public final class Analyzer: @unchecked Sendable {
         let started = Date()
         let q = DispatchQueue(label: "birdlock.analyze", attributes: .concurrent)
         let group = DispatchGroup()
-        let sem = DispatchSemaphore(value: options.concurrency)
+        let concurrency = ResourceBudget.workers(bytesPerTask:taskBytes,maximum:options.concurrency)
+        let sem = DispatchSemaphore(value:concurrency)
         let lock = NSLock()
         var done = 0
         for i in 0..<n {
@@ -68,13 +70,15 @@ public final class Analyzer: @unchecked Sendable {
             }
         }
         group.wait()
-        Diagnostics.record("analysis parallel photos=\(n) workers=\(options.concurrency) seconds=\(Date().timeIntervalSince(started))")
+        Diagnostics.record("analysis parallel photos=\(n) workers=\(concurrency) seconds=\(Date().timeIntervalSince(started))")
     }
 
     public func analyze(frames: [SourceFrame], fps: Double, targetHint: (frame: Int, point: V2)? = nil,
                         progress: AnalysisProgress? = nil, isCancelled: @escaping @Sendable () -> Bool = { false },
                         clips: [BurstClip] = []) throws -> SequenceAnalysis {
         let n = frames.count
+        let pixels = frames.map { $0.pixelWidth * $0.pixelHeight }.max() ?? 1
+        taskBytes = max(64 << 20,pixels*8)
         let fp = Self.fingerprint(frames)
         var per = (0..<n).map { FrameAnalysis(index: $0) }
         let lock = NSLock()

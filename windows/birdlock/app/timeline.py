@@ -388,7 +388,7 @@ class ExtraAudioLanes(QWidget):
             p.setBrush(color)
             p.setPen(Qt.NoPen)
             p.drawRoundedRect(rect, 4, 4)
-            name = next((e["title"] for e in assets() if e["id"] == track.assetID), os.path.basename(track.path))
+            name = "视频原声" if track.videoOriginal else next((e["title"] for e in assets() if e["id"] == track.assetID), os.path.basename(track.path))
             p.setPen(theme.TEXT)
             p.drawText(rect.adjusted(5, 0, -3, 0), Qt.AlignVCenter, p.fontMetrics().elidedText(name, Qt.ElideRight, max(1, int(rect.width()) - 8)))
         if self.state.job:

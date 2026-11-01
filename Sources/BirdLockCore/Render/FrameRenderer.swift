@@ -8,6 +8,7 @@ public struct LookSettings: Codable, Hashable, Sendable {
     public var deflickerStrength: Double = 1.0
     public var deflickerWindow: Double = 8     // frames (gaussian sigma)
     public var exposureEV: Double = 0
+    public var stabilization = VideoStabilizationSettings()
     public init() {}
 
     public init(from decoder: Decoder) throws {
@@ -17,6 +18,7 @@ public struct LookSettings: Codable, Hashable, Sendable {
         deflickerStrength = c.value(.deflickerStrength, d.deflickerStrength)
         deflickerWindow = c.value(.deflickerWindow, d.deflickerWindow)
         exposureEV = c.value(.exposureEV, d.exposureEV)
+        stabilization = c.value(.stabilization, d.stabilization)
     }
 }
 
@@ -59,6 +61,13 @@ public struct OverlayItem: Sendable {
 public final class FrameRenderer: @unchecked Sendable {
     public let context: CIContext
     public static let shared = FrameRenderer()
+    private static let projectiveKernel = CIWarpKernel(source: """
+        kernel vec2 stabilizedSource(vec3 row0, vec3 row1, vec3 row2) {
+            vec3 p = vec3(destCoord(), 1.0);
+            vec3 q = vec3(dot(row0, p), dot(row1, p), dot(row2, p));
+            return q.xy / q.z;
+        }
+        """)
 
     public init() {
         let opts: [CIContextOption: Any] = [
@@ -129,14 +138,35 @@ public final class FrameRenderer: @unchecked Sendable {
         T = T.concatenating(CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: Double(outH)))
 
         let outRect = CGRect(x: 0, y: 0, width: outW, height: outH)
+        // Compose the projective camera correction and subject framing in one sampling pass.
+        // The inverse maps output CI pixels directly into the (possibly Lanczos reduced) source.
+        let inverseProjective: Mat3? = xform.prewarp.flatMap { values in
+            guard values.count == 9, values.allSatisfy(\.isFinite) else { return nil }
+            let affine = Mat3([Double(M.a),Double(M.c),Double(M.tx),Double(M.b),Double(M.d),Double(M.ty),0,0,1])
+            guard let inverse = (affine * Mat3(values)).inverse else { return nil }
+            let outputFlip = Mat3([1,0,0,0,-1,Double(outH),0,0,1])
+            let sourceCI = Mat3([sourceScale*preScale,0,0,0,-sourceScale*preScale,Hs*preScale,0,0,1])
+            return sourceCI * inverse * outputFlip
+        }
+        func transformed(_ input: CIImage) -> CIImage {
+            guard let inverseProjective, let kernel = Self.projectiveKernel else { return input.transformed(by: T, highQualityDownsample: false) }
+            let values = inverseProjective.v
+            let vectors = stride(from:0,to:9,by:3).map { CIVector(x:values[$0],y:values[$0+1],z:values[$0+2]) }
+            return kernel.apply(extent:outRect,roiCallback:{ _, rect in
+                let corners = [V2(rect.minX,rect.minY),V2(rect.maxX,rect.minY),V2(rect.maxX,rect.maxY),V2(rect.minX,rect.maxY)].map(inverseProjective.apply)
+                guard corners.allSatisfy({ $0.x.isFinite && $0.y.isFinite }) else { return work.extent }
+                let xs = corners.map(\.x), ys = corners.map(\.y)
+                return CGRect(x:xs.min()!-3,y:ys.min()!-3,width:xs.max()!-xs.min()!+6,height:ys.max()!-ys.min()!+6)
+            },image:input,arguments:vectors) ?? input.transformed(by:T,highQualityDownsample:false)
+        }
         var result: CIImage
         switch edgeFill {
         case .black, .autoZoom, .shift:
             let base = CIImage(color: .black).cropped(to: outRect)
-            result = work.transformed(by: T, highQualityDownsample: false).composited(over: base)
+            result = transformed(work).composited(over: base)
         case .blurExtend:
-            let bg = work.clampedToExtent().transformed(by: T).applyingGaussianBlur(sigma: Double(min(outW, outH)) * 0.02).cropped(to: outRect)
-            result = work.transformed(by: T).composited(over: bg)
+            let bg = transformed(work.clampedToExtent()).applyingGaussianBlur(sigma: Double(min(outW, outH)) * 0.02).cropped(to: outRect)
+            result = transformed(work).composited(over: bg)
         }
         for o in overlays {
             let oi = CIImage(cgImage: o.image)

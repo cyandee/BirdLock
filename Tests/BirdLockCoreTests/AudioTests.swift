@@ -3,6 +3,41 @@ import AVFoundation
 @testable import BirdLockCore
 
 final class AudioTests: XCTestCase {
+    func testCloseupMutesBurstAndResumesWithoutMutingMusicOrChangingSavedTracks() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let url = root.appendingPathComponent("ramp.wav"), rate = 48000
+        let format = AVAudioFormat(standardFormatWithSampleRate:Double(rate),channels:2)!
+        let buffer = AVAudioPCMBuffer(pcmFormat:format,frameCapacity:UInt32(rate*2))!
+        buffer.frameLength = UInt32(rate*2)
+        for i in 0..<(rate*2) { for c in 0..<2 { buffer.floatChannelData![c][i] = Float(0.1+Double(i)/Double(rate)*0.2) } }
+        try autoreleasepool { let file = try AVAudioFile(forWriting:url,settings:format.settings);try file.write(from:buffer) }
+        var camera = AudioTrack();camera.assetID = "sony-20";camera.volume = 1;camera.startOffset = 0.2;camera.timelineStart = 0.1;camera.duration = 0.9;camera.loop = false
+        var music = AudioTrack();music.url = url;music.volume = 0.2;music.loop = false
+        var settings = AudioSettings();settings.tracks = [camera,music]
+        let frames = (0..<12).map { i -> OutputFrame in var f = OutputFrame(a:i,b:i,t:0,fade:1,time:Double(i)/10);f.closeup = (3..<7).contains(i) ? 0 : -1;return f }
+        var mixed = CloseupAudio.muteBursts(settings,frames:frames,fps:10)
+        XCTAssertEqual(mixed,CloseupAudio.muteBursts(settings,frames:frames,fps:10))
+        XCTAssertTrue(settings.tracks[0].muteRanges.isEmpty);XCTAssertTrue(mixed.tracks[1].muteRanges.isEmpty)
+        mixed.tracks[0].assetID = nil;mixed.tracks[0].url = url
+        let (comp,mix) = try await AudioMixer.makeMix(mixed,duration:1.2)
+        let reader = try AVAssetReader(asset:comp)
+        let output = AVAssetReaderAudioMixOutput(audioTracks:comp.tracks(withMediaType:.audio),audioSettings:[AVFormatIDKey:kAudioFormatLinearPCM,AVSampleRateKey:rate,AVNumberOfChannelsKey:2,AVLinearPCMBitDepthKey:32,AVLinearPCMIsFloatKey:true,AVLinearPCMIsNonInterleaved:false])
+        output.audioMix = mix;reader.add(output);XCTAssertTrue(reader.startReading())
+        var samples: [Float] = []
+        while let sb = output.copyNextSampleBuffer() {
+            let bb = try XCTUnwrap(CMSampleBufferGetDataBuffer(sb)), size = CMBlockBufferGetDataLength(bb)
+            var part = [Float](repeating:0,count:size/4)
+            part.withUnsafeMutableBytes { _ = CMBlockBufferCopyDataBytes(bb,atOffset:0,dataLength:size,destination:$0.baseAddress!) }
+            samples += part
+        }
+        XCTAssertEqual(reader.status,.completed,String(describing:reader.error))
+        for time in [0.2,0.299,0.301,0.5,0.699,0.701,0.8,1.1] {
+            let burst = (time >= 0.1 && time < 1 && !(0.3..<0.7).contains(time)) ? 0.1+(time+0.1)*0.2 : 0
+            XCTAssertEqual(Double(samples[Int((time*Double(rate)).rounded())*2]),(burst+0.2*(0.1+time*0.2))/1.2,accuracy:0.002,"\(time)s")
+        }
+    }
     func testOldMusicSettingsAndIndependentTracksRoundTrip() throws {
         let old = try JSONDecoder().decode(AudioSettings.self, from: Data(#"{"volume":0.7,"loop":false}"#.utf8))
         XCTAssertTrue(old.tracks.isEmpty)

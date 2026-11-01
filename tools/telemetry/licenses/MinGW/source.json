@@ -1,0 +1,5 @@
+{
+  "repository": "https://github.com/mingw-w64/mingw-w64",
+  "revision": "c47c7b4d6875104ca001f8e7300a4e2d0f789556",
+  "purpose": "Notices for the optional Windows GNU runtime; the bundled reader may also be built with the native MSVC toolchain."
+}

@@ -50,12 +50,18 @@ public final class YOLOModel: @unchecked Sendable {
     public let numClasses: Int
     public let numKeypoints: Int
     public let classNames: [String]
-    private let lock = NSLock()
+    private let lock = NSCondition()
+    private var predictors: [MLModel] = []
 
-    public init(url: URL, keypointCount: Int? = nil) throws {
+    public init(url: URL, keypointCount: Int? = nil, predictionConcurrency: Int? = nil) throws {
         let cfg = MLModelConfiguration()
         cfg.computeUnits = .all
         model = try MLModel(contentsOf: url, configuration: cfg)
+        predictors = [model]
+        let highMemory = !ProcessInfo.processInfo.isLowPowerModeEnabled && ProcessInfo.processInfo.physicalMemory >= 24 * 1024 * 1024 * 1024 && ProcessInfo.processInfo.activeProcessorCount >= 8
+        let slots = min(2,max(1,predictionConcurrency ?? (highMemory ? 2 : 1)))
+        if slots > 1, let second = try? MLModel(contentsOf:url,configuration:cfg) { predictors.append(second) }
+        Diagnostics.record("model inference instances=\(predictors.count) name=\(url.lastPathComponent)")
         let desc = model.modelDescription
         guard let (iname, ifeat) = desc.inputDescriptionsByName.first(where: { $0.value.type == .image }) else {
             throw ModelError.badOutput("no image input")
@@ -112,8 +118,11 @@ public final class YOLOModel: @unchecked Sendable {
         let input = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: pb)])
         let out: MLFeatureProvider
         lock.lock()
-        do { out = try model.prediction(from: input) } catch { lock.unlock(); throw error }
-        lock.unlock()
+        while predictors.isEmpty { lock.wait() }
+        let predictor = predictors.removeLast(); lock.unlock()
+        do { out = try predictor.prediction(from: input) }
+        catch { lock.lock(); predictors.append(predictor); lock.signal(); lock.unlock(); throw error }
+        lock.lock(); predictors.append(predictor); lock.signal(); lock.unlock()
         guard let arr = out.featureValue(for: outputName)?.multiArrayValue else { throw ModelError.badOutput("missing output") }
         let cls = classIndex ?? birdClassIndex
         var dets = try parse(arr, classIndex: cls, scoreThreshold: scoreThreshold)

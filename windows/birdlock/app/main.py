@@ -18,6 +18,18 @@ def _redirect_output(name: str):
 def main():
     from ..core import log as _log
     _log.setup()
+    if len(sys.argv) > 1 and sys.argv[1] == "--video-regression":
+        if not os.environ.get("BIRDLOCK_DATA"):
+            raise SystemExit("Video regression requires a disposable BIRDLOCK_DATA directory")
+        _redirect_output("video-regression.log")
+        try:
+            from .video_regression import main as video_regression
+            video_regression(sys.argv[2:])
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise SystemExit(1)
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "--subject-regression":
         if not os.environ.get("BIRDLOCK_DATA"):
             raise SystemExit("Subject regression requires a disposable BIRDLOCK_DATA directory")
@@ -104,8 +116,13 @@ def main():
             _log.log.warning("Qt: %s", msg)
     from PySide6.QtCore import qInstallMessageHandler
     qInstallMessageHandler(qt_messages)
+    from ..core.release_notice import ReleaseNotice
+    from ..core.paths import data_dir
+    from .. import __version__
+    notice=ReleaseNotice(data_dir(),__version__)
     state = AppState()
     win = MainWindow(state)
+    win.release_notice=notice
     win.show()
     from .updates import startup_health, preferences
     startup_health()
@@ -140,6 +157,13 @@ def main():
                 return
             state.agreement_accepted = AGREEMENT_VERSION
             state._save_settings_now()
+        if notice.start():
+            def offer_notes():
+                if state._closing:notice_timer.stop();return
+                if state.export_running or state.phase in ("importing","analyzing") or QApplication.activeModalWidget():return
+                notice_timer.stop();win.show_release_notes()
+            notice_timer=QTimer(win);notice_timer.timeout.connect(offer_notes);notice_timer.start(500)
+            win._release_notice_timer=notice_timer
         if paths:
             win.open_paths(paths)
 

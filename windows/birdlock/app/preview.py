@@ -692,9 +692,9 @@ class StatusCard(QFrame):
             for w in (mark, lbl, pct):
                 w.setVisible(st.phase == "analyzing" and index < len(stages))
         self.bar.setVisible(st.phase == "analyzing")
-        self.cancel.setVisible(st.phase == "analyzing")
+        self.cancel.setVisible(st.phase in ("analyzing", "importing"))
         if importing:
-            self.title.setText("正在读取照片…")
+            self.title.setText(st.message or "正在读取照片…")
             self.sub.setText("")
             self.status.setText("")
         elif failed:
@@ -757,11 +757,11 @@ class DropZone(QFrame):
         icon.setStyleSheet(f"font-size: 48px; background: {theme.hexa(theme.ACCENT, 0.12)}; border-radius: 55px;")
         icon.setFixedSize(110, 110)
         lay.addWidget(icon, 0, Qt.AlignCenter)
-        t = QLabel("把连拍照片拖到这里")
+        t = QLabel("把连拍照片或视频拖到这里")
         t.setStyleSheet("font-size: 22px; font-weight: 600;")
         t.setAlignment(Qt.AlignCenter)
         lay.addWidget(t)
-        s = QLabel("支持 JPG / HEIF，整个文件夹或多选照片都可以。\n自动识别并锁定主体，一键生成连拍视频。")
+        s = QLabel("照片支持 JPG / HEIF，视频推荐 SDR MP4 / MOV。\n自动识别并锁定主体，一键生成连拍视频。")
         s.setObjectName("caption")
         s.setAlignment(Qt.AlignCenter)
         lay.addWidget(s)

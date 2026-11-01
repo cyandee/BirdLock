@@ -8,6 +8,12 @@ import hashlib
 import base64
 from urllib.parse import urlsplit
 from pathlib import Path
+if __package__:
+    from .package_checks import verify_telemetry
+else:
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from package_checks import verify_telemetry
 
 
 def verify_aircraft(directory: Path):
@@ -33,6 +39,39 @@ def verify_aircraft(directory: Path):
         content = file.read_bytes();entry = checksums.get(license,{})
         if len(content) != entry.get("bytes") or hashlib.sha256(content).hexdigest() != entry.get("sha256"):
             raise ValueError("飞机许可文件不完整："+license)
+
+
+def verify_lens_profiles(directory: Path):
+    meta = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    commit = meta.get("upstreamCommit", "")
+    if (meta.get("schema") != 1 or meta.get("license") != "CC0-1.0"
+            or meta.get("upstream") != "https://github.com/gyroflow/lens_profiles"
+            or len(commit) != 40 or any(c not in "0123456789abcdef" for c in commit)):
+        raise ValueError("镜头配置来源或许可清单无效")
+    license_name = meta.get("licenseFile")
+    if license_name != "CC0-1.0.txt":
+        raise ValueError("缺少镜头配置 CC0 许可")
+    license = directory / license_name
+    if not license.is_file() or hashlib.sha256(license.read_bytes()).hexdigest() != meta.get("licenseSHA256"):
+        raise ValueError("镜头配置 CC0 许可文件不完整")
+    if not (directory / "README.md").is_file():
+        raise ValueError("缺少镜头配置来源说明")
+    entries = meta.get("profiles")
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("内置镜头配置清单为空")
+    ids, names = set(), set()
+    source_prefix = f"https://github.com/gyroflow/lens_profiles/blob/{commit}/"
+    for entry in entries:
+        name, identifier = entry.get("file", ""), entry.get("id", "")
+        if (not name or Path(name).name != name or "\\" in name or ".." in name
+                or not identifier or identifier in ids or name in names):
+            raise ValueError("内置镜头配置文件名或标识无效")
+        ids.add(identifier); names.add(name)
+        if not entry.get("sourceURL", "").startswith(source_prefix):
+            raise ValueError("内置镜头配置未固定官方来源：" + name)
+        file = directory / name
+        if not file.is_file() or hashlib.sha256(file.read_bytes()).hexdigest() != entry.get("sha256"):
+            raise ValueError("内置镜头配置校验失败：" + name)
 
 
 def verify_updater(app: Path, version: str, info: dict):
@@ -84,7 +123,9 @@ def verify(app: Path, version: str, universal: bool = False):
             raise ValueError("通用程序缺少 Intel 或 Apple 芯片架构")
     verify_updater(app,version,info)
     resources = app / "Contents/Resources"
+    verify_telemetry(app / 'Contents/MacOS/BirdLockTelemetry', resources / 'Telemetry', universal=universal)
     verify_aircraft(resources / "AircraftModels")
+    verify_lens_profiles(resources / "LensProfiles")
     audio = resources / "Audio"
     entries = json.loads((audio / "library.json").read_text(encoding="utf-8"))
     if len(entries) != 12 or len({e["id"] for e in entries}) != 12 or "single-canon-rebel" not in {e["id"] for e in entries}:
@@ -119,11 +160,24 @@ if __name__ == "__main__":
     parser.add_argument("app", type=Path, nargs="?")
     parser.add_argument("--version")
     parser.add_argument("--aircraft-resources", type=Path)
+    parser.add_argument("--lens-resources", type=Path)
     parser.add_argument("--universal", action="store_true")
+    parser.add_argument("--telemetry-resources", type=Path)
+    parser.add_argument("--telemetry-binary", type=Path)
+    parser.add_argument("--telemetry-windows", action="store_true")
     args = parser.parse_args()
+    if args.telemetry_resources:
+        if not args.telemetry_binary: parser.error('需要 --telemetry-binary')
+        verify_telemetry(args.telemetry_binary, args.telemetry_resources, windows=args.telemetry_windows, universal=args.universal)
+        print('陀螺仪组件、架构与许可完整性检查通过')
+        raise SystemExit(0)
     if args.aircraft_resources:
         verify_aircraft(args.aircraft_resources)
         print("飞机权重与许可完整性检查通过")
+        raise SystemExit(0)
+    if args.lens_resources:
+        verify_lens_profiles(args.lens_resources)
+        print("内置镜头配置、固定来源与 CC0 许可完整性检查通过")
         raise SystemExit(0)
     if args.app is None or args.version is None:parser.error("需要应用路径和--version")
     verify(args.app, args.version, args.universal)

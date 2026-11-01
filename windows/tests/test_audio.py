@@ -14,6 +14,35 @@ from birdlock.core.sounds import assets, asset_path
 
 
 class AudioTests(unittest.TestCase):
+    @unittest.skipUnless(ffmpeg_path(), "FFmpeg required")
+    def test_closeup_mutes_burst_sample_accurately_and_resumes_source_clock(self):
+        from types import SimpleNamespace
+        from birdlock.core.closeup_audio import mute_bursts
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory)/'ramp.wav')
+            rate=48000
+            values=(.1+np.arange(rate*2)/rate*.2)
+            with wave.open(path,'wb') as w:
+                w.setparams((2,2,rate,0,'NONE','not compressed'))
+                w.writeframes(np.repeat((values*32767).astype('<i2'),2).tobytes())
+            camera=AudioTrack(assetID='sony-20',timelineStart=.1,duration=.9,startOffset=.2,loop=False,fadeIn=0,fadeOut=0)
+            music=AudioTrack(path=path,volume=.2,loop=False,fadeIn=0,fadeOut=0)
+            settings=AudioSettings(tracks=[camera,music])
+            frames=[SimpleNamespace(closeup=0 if 3<=i<7 else -1,time=i/10) for i in range(12)]
+            mixed=mute_bursts(settings,frames,10)
+            self.assertEqual(settings.tracks[0].muteRanges,[])
+            self.assertEqual(mute_bursts(settings,frames,10).to_dict(),mixed.to_dict())
+            self.assertEqual(mixed.tracks[1].muteRanges,[])
+            mixed.tracks[0].assetID='';mixed.tracks[0].path=path
+            result=render_audio_preview(mixed,1.2)
+            self.addCleanup(lambda:os.path.exists(result) and os.unlink(result))
+            with wave.open(result,'rb') as w:
+                pcm=np.frombuffer(w.readframes(w.getnframes()),'<i2').reshape(-1,2)/32768
+            for time in [.2,.299,.301,.5,.699,.701,.8,1.1]:
+                burst=(.1+(time+.1)*.2) if .1<=time<1 and not .3<=time<.7 else 0
+                expected=(burst+.2*(.1+time*.2))/1.2
+                self.assertAlmostEqual(pcm[round(time*rate),0],expected,delta=.002,msg=f'{time}s')
+
     def test_old_music_and_independent_tracks_round_trip(self):
         old = AudioSettings.from_dict({"path": "music.wav", "volume": 0.7})
         self.assertEqual(old.tracks, [])

@@ -65,11 +65,11 @@ public final class BirdModels: @unchecked Sendable {
     public let pose: YOLOModel
     public let schema: PoseSchema
 
-    public init(detectorURL: URL? = nil, poseURL: URL? = nil) throws {
+    public init(detectorURL: URL? = nil, poseURL: URL? = nil, predictionConcurrency: Int? = nil) throws {
         guard let d = detectorURL ?? ModelStore.locate(ModelStore.detectorName) else { throw ModelError.notFound(ModelStore.detectorName) }
         guard let p = poseURL ?? ModelStore.locate(ModelStore.poseName) else { throw ModelError.notFound(ModelStore.poseName) }
-        detector = try YOLOModel(url: d, keypointCount: 0)
+        detector = try YOLOModel(url: d, keypointCount: 0, predictionConcurrency: predictionConcurrency)
         schema = ModelStore.loadSchema(for: p)
-        pose = try YOLOModel(url: p, keypointCount: schema.keypoints.count)
+        pose = try YOLOModel(url: p, keypointCount: schema.keypoints.count, predictionConcurrency: predictionConcurrency)
     }
 }

@@ -42,3 +42,4 @@ SharedResources/Audio/originals/
 
 # Native updater build output (public source/config only in Git)
 windows/updater/dist/
+windows/telemetry/

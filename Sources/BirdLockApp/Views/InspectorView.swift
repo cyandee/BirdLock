@@ -302,6 +302,7 @@ struct LookSection: View {
 
     var body: some View {
         @Bindable var state = state
+        if state.isVideoProject { VideoStabilizationCard() }
         InspectorCard(title: "亮度一致性", icon: "sun.max") {
             Toggle("去闪烁（统一相邻帧的曝光和白平衡）", isOn: $state.look.deflicker)
             if state.look.deflicker {
@@ -357,6 +358,72 @@ struct LookSection: View {
                 Button("重新识别") { state.startAnalysis(fresh: true) }
             }
             .controlSize(.small)
+        }
+    }
+}
+
+private struct VideoStabilizationCard: View {
+    @Environment(AppState.self) private var state
+    private func methodHelp(_ method: String) -> String {
+        switch method {
+        case "visual": return "根据画面特征抑制平移、旋转和缩放抖动，无需陀螺仪。大面积运动主体、弱纹理或遮挡可能干扰估计；不能修复运动模糊。"
+        case "gyro": return "依据陀螺仪平滑相机旋转，不易受主体运动影响。需要有效采样、准确同步和镜头内参；对平移、视差或机内防抖残差的处理有限。无采样时回退图像防抖。"
+        default: return "有陀螺仪时融合姿态与图像残差，兼顾旋转和画面位移；没有时使用图像防抖。适用面较广，但计算更多，运动前景仍可能影响图像估计。"
+        }
+    }
+    private var sizeLocked: Bool {
+        state.look.stabilization.framing == "subject" && state.composition.sizeMode == .lockSize && state.job?.track.frames.contains(where: \.hasData) == true
+    }
+    private var gyroAvailable: Bool { (state.job?.stabilizationStatus?.gyroSamples ?? 0) > 0 && state.look.stabilization.method != "visual" }
+    var body: some View {
+        @Bindable var state = state
+        InspectorCard(title: "视频防抖", icon: "gyroscope") {
+            Toggle("启用防抖", isOn: $state.look.stabilization.enabled)
+            FormRow(label: "方法") {
+                Picker("", selection: $state.look.stabilization.method) {
+                    Text("自动融合").help(methodHelp("auto")).tag("auto"); Text("图像防抖").help(methodHelp("visual")).tag("visual"); Text("陀螺仪").help(methodHelp("gyro")).tag("gyro")
+                }.labelsHidden()
+                Image(systemName: "questionmark.circle").foregroundStyle(.secondary).help(methodHelp(state.look.stabilization.method))
+            }
+            FormRow(label: "取景") {
+                Picker("", selection: $state.look.stabilization.framing) {
+                    Text("主体锁定").tag("subject"); Text("平滑相机运动").tag("camera")
+                }.labelsHidden()
+            }
+            LabeledSlider(title: "防抖强度", value: $state.look.stabilization.strength, range: 0...1, format: { String(format: "%.0f%%", $0*100) })
+            LabeledSlider(title: "平滑时间", value: $state.look.stabilization.smoothness, range: 0.05...10, step: 0.05, format: { String(format: "%.2f 秒", $0) })
+            Toggle("自动裁切边缘", isOn: $state.look.stabilization.autoZoom)
+            LabeledSlider(title: "最大附加裁切", value: $state.look.stabilization.maxZoom, range: 1...8, step: 0.05, format: { String(format: "%.2f×", $0) }, help: "更大裁切可保留更强的防抖校正，但视野更窄、细节可能变软。")
+            Toggle("固定裁切倍率，减少大小呼吸", isOn: Binding(get: { sizeLocked || state.look.stabilization.fixedZoom }, set: { state.look.stabilization.fixedZoom = $0 }))
+                .disabled(sizeLocked || !state.look.stabilization.autoZoom || !state.look.stabilization.enabled)
+                .help(sizeLocked ? "锁定主体大小时自动固定裁切；切换构图的大小模式后可自行调整。" : "整段使用同一附加裁切倍率。")
+            Button("强力防抖预设") {
+                state.look.stabilization.enabled = true; state.look.stabilization.autoZoom = true
+                state.look.stabilization.maxZoom = 6; state.look.stabilization.smoothness = 1.5
+                state.look.stabilization.strength = 1; state.look.stabilization.fixedZoom = true
+            }.controlSize(.small)
+            Toggle("自动同步陀螺仪", isOn: $state.look.stabilization.autoSync).disabled(!gyroAvailable)
+            FormRow(label: "手动微调") {
+                TextField("毫秒", value: Binding(get: { state.look.stabilization.gyroOffset*1000 }, set: { value in
+                    if value.isFinite { state.look.stabilization.gyroOffset = min(10000,max(-10000,value))/1000 }
+                }), format: .number.precision(.fractionLength(1))).textFieldStyle(.roundedBorder).frame(width: 85)
+                Text("ms").font(.caption).foregroundStyle(.secondary)
+            }.disabled(!gyroAvailable)
+            if let status = state.job?.stabilizationStatus {
+                Text(status.method + (status.gyroSamples == 0 ? " · 无陀螺仪记录" : ""))
+                    .font(.caption).foregroundStyle(.secondary)
+                if status.sync.valid {
+                    Text(String(format: "已同步 %+.1f ms · 可信度 %.0f%%", status.sync.offset*1000, status.sync.score*100))
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if status.gyroSamples > 0, state.look.stabilization.autoSync {
+                    Text("请检查时间偏移").font(.caption).foregroundStyle(Theme.warn)
+                }
+                if status.limited { Text("已限制校正幅度以保留画面边缘").font(.caption).foregroundStyle(.secondary) }
+            }
+            HStack {
+                Button("导入陀螺仪…") { state.importVideoGyro() }
+                Button("重新同步") { state.look.stabilization.autoSync = true; state.rebuildJob(immediate: true) }.disabled(!gyroAvailable).help("需要可用陀螺仪记录；图像防抖无需同步。")
+            }.controlSize(.small)
         }
     }
 }

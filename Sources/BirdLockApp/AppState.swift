@@ -27,6 +27,7 @@ enum SourceTool: String, CaseIterable, Identifiable {
 
 struct ExportState: Equatable {
     var running = false
+    var cancelling = false
     var progress = 0.0
     var message = ""
     var outputURL: URL? = nil
@@ -42,6 +43,17 @@ struct SourceDetail {
 @MainActor
 @Observable
 final class AppState {
+    let cacheOwner=UUID().uuidString
+    var projectURL: URL?
+    var projectDirty = false
+    var projectCloseApproved = false
+    var showReleaseNotes = false
+    var releaseNotesPending = false
+    let releaseNotice: ReleaseNotice
+    var showCacheSheet = false
+    var cacheMessage = ""
+    var cacheLimitGB = 20 { didSet { defaults.set(cacheLimitGB,forKey:"cache.limitGB") } }
+    var askCleanupAfterExport = true { didSet { defaults.set(askCleanupAfterExport,forKey:"cache.askAfterExport") } }
     // Input
     var frames: [SourceFrame] = []
     var segments: [BurstSegment] = []
@@ -51,6 +63,8 @@ final class AppState {
     var analysis: SequenceAnalysis?
     var analysisStarted = Date()
     var timelineMessage: String?
+    var videoImportURL: URL?
+    var importMessage = "正在读取照片…"
     private var jobGeneration = 0
 
     // Settings (persisted)
@@ -117,35 +131,134 @@ final class AppState {
     private let defaults: UserDefaults
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        self.releaseNotice=ReleaseNotice(defaults:defaults,current:AppDocs.appVersion)
         loadSettings()
+        cacheLimitGB=defaults.object(forKey:"cache.limitGB") == nil ? 20 : max(0,min(4096,defaults.integer(forKey:"cache.limitGB")))
+        askCleanupAfterExport=defaults.object(forKey:"cache.askAfterExport") == nil ? true : defaults.bool(forKey:"cache.askAfterExport")
     }
 
     // MARK: - Import & analysis
 
     func importURLs(_ urls: [URL], merge: Bool = false) {
+        if urls.contains(where: { VideoImporter.extensions.contains($0.pathExtension.lowercased()) }) {
+            guard urls.count == 1 else { timelineMessage = "视频请每次单独导入一个文件"; return }
+            videoImportURL = urls[0]; return
+        }
         subjectRollback = nil
         stop()
         analysisTask?.cancel(); cancelFlag.cancel()
         importGeneration += 1
         let generation = importGeneration
         phase = .importing
+        importMessage = "正在读取照片…"
         analysis = nil; job = nil; previewImage = nil; sourceImage = nil; sourceDetail = nil
         Task.detached(priority: .userInitiated) {
+            let cacheOperation=CachePolicy.beginOperation(root:ProxyCache.shared.root)
+            defer { CachePolicy.endOperation(cacheOperation);Task { @MainActor [weak self] in self?.trimCache() } }
             let all = FrameImporter.importFrames(urls)
             let segs = FrameImporter.segments(all)
             await MainActor.run {
                 // a newer import started meanwhile
                 guard generation == self.importGeneration else { return }
                 self.segmentIndex = 0
+                self.projectURL=nil;self.projectDirty=true
                 self.frames = all
+                ProxyCache.shared.retainRecords(frames:all)
                 self.segments = segs
+                CachePolicy.protect(owner:self.cacheOwner,roots:self.protectedCache)
                 let saved = self.defaults.array(forKey: "groupOrder." + Analyzer.fingerprint(all)) as? [Int] ?? []
                 self.mergeGroupIndices = !saved.isEmpty && Set(saved).count == saved.count && saved.allSatisfy(segs.indices.contains) ? saved : Array(segs.indices)
                 self.currentFrame = 0
                 guard !all.isEmpty else { self.phase = .failed("没有找到 JPG / HEIF 图片"); return }
+                self.audio.tracks.removeAll { $0.videoOriginal }
                 // choose the longest burst by default
                 self.segmentIndex = merge && segs.count > 1 ? -1 : (segs.indices.max { segs[$0].range.count < segs[$1].range.count } ?? 0)
                 self.startAnalysis()
+            }
+        }
+    }
+
+    func importVideo(_ url: URL, options: VideoImportOptions) {
+        stop(); analysisTask?.cancel(); cancelFlag.cancel()
+        subjectRollback = nil
+        importGeneration += 1
+        let generation = importGeneration, flag = CancelFlag()
+        cancelFlag = flag
+        phase = .importing; importMessage = "正在读取视频帧… 0%"
+        analysisTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let cacheOperation=CachePolicy.beginOperation(root:ProxyCache.shared.root)
+            defer { CachePolicy.endOperation(cacheOperation);Task { @MainActor [weak self] in self?.trimCache() } }
+            do {
+                let result = try VideoImporter.extract(url, options: options, progress: { p in
+                    Task { @MainActor in
+                        guard let self, self.importGeneration == generation, !flag.isCancelled else { return }
+                        self.importMessage = "正在读取视频帧… \(Int(p*100))%"
+                    }
+                }, isCancelled: { flag.isCancelled })
+                _ = try VideoStabilization.prepare(frames: result.frames, video: url, start: options.start,
+                    fps: result.fps, profile: options.profile, isCancelled: { flag.isCancelled }, progress: { p in
+                        Task { @MainActor in
+                            guard let self, self.importGeneration == generation, !flag.isCancelled else { return }
+                            self.importMessage = "正在分析画面防抖… \(Int(p*100))%"
+                        }
+                    })
+                let original = try VideoSource.originalTrack(frames: result.frames)
+                await MainActor.run {
+                    guard let self, generation == self.importGeneration, !flag.isCancelled else { return }
+                    if let a = self.analysis { ProxyCache.shared.saveAnalysis(a) }
+                    self.projectURL=nil;self.projectDirty=true
+                    self.frames = result.frames
+                    ProxyCache.shared.retainRecords(frames:result.frames)
+                    self.segments = [BurstSegment(range: 0..<result.frames.count, fps: result.fps)]
+                    self.segmentIndex = 0; self.mergeGroupIndices = [0]; self.currentFrame = 0
+                    self.analysis = nil; self.job = nil; self.previewImage = nil; self.sourceImage = nil; self.sourceDetail = nil
+                    self.selection.dropUntracked = false
+                    self.audio.tracks.removeAll { $0.videoOriginal }
+                    if let original { self.audio.tracks.append(original) }
+                    self.timelineMessage = "视频已导入，可在「画面」调节防抖。" + (original == nil ? "" : "已导入视频原声。")
+                    CachePolicy.protect(owner:self.cacheOwner,roots:self.protectedCache)
+                    self.startAnalysis()
+                }
+            } catch is CancellationError {
+            } catch {
+                await MainActor.run {
+                    guard let self, generation == self.importGeneration, !flag.isCancelled else { return }
+                    if self.analysis != nil { self.phase = .ready; self.timelineMessage = error.localizedDescription }
+                    else { self.phase = .failed(error.localizedDescription) }
+                }
+            }
+        }
+    }
+
+    var isVideoProject: Bool {
+        guard let first = currentFrames.first else { return false }
+        return FileManager.default.fileExists(atPath: first.url.deletingLastPathComponent().appendingPathComponent("video-source.json").path)
+    }
+
+    func importVideoGyro() {
+        guard analysis != nil, isVideoProject else { return }
+        let panel = NSOpenPanel(); panel.allowsMultipleSelection = false
+        panel.message = "选择陀螺仪记录、Gyroflow 工程或含陀螺仪的相机原片"
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+        CachePolicy.protect(owner:cacheOwner,roots:protectedCache)
+        let fr = currentFrames, generation = importGeneration, flag = cancelFlag
+        timelineMessage = "正在读取陀螺仪记录…"
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                let sync = try VideoStabilization.importGyro(frames: fr, source: source, isCancelled: { flag.isCancelled })
+                await MainActor.run {
+                    guard let self, self.importGeneration == generation, !flag.isCancelled else { return }
+                    self.look.stabilization.autoSync = true
+                    self.timelineMessage = sync.valid
+                        ? String(format: "已同步：%+.1f ms，可信度 %.0f%%", sync.offset * 1000, sync.score * 100)
+                        : "已导入陀螺仪记录；自动同步未通过，请在「画面」调整时间偏移。"
+                    self.rebuildJob(immediate: true)
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self, self.importGeneration == generation, !flag.isCancelled else { return }
+                    self.timelineMessage = error.localizedDescription
+                }
             }
         }
     }
@@ -181,6 +294,7 @@ final class AppState {
 
     func rememberGroupOrder() {
         guard !frames.isEmpty else { return }
+        if !loading,analysis != nil { projectDirty=true;projectCloseApproved=false }
         defaults.set(mergeGroupIndices, forKey: "groupOrder." + Analyzer.fingerprint(frames))
     }
 
@@ -195,6 +309,7 @@ final class AppState {
         analysisTask?.cancel(); cancelFlag.cancel()
         stop()
         let flag = CancelFlag(); cancelFlag = flag
+        CachePolicy.protect(owner:cacheOwner,roots:protectedCache)
         let fr = currentFrames
         let clips = timelineClips
         guard !fr.isEmpty else { return }
@@ -218,6 +333,8 @@ final class AppState {
         let keep: (eyes: [Int: V2], excluded: Set<Int>)? = (hint == nil && analysis?.fingerprint == fpNow)
             ? (analysis!.manualEye, analysis!.excluded) : nil
         analysisTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let cacheOperation=CachePolicy.beginOperation(root:ProxyCache.shared.root)
+            defer { CachePolicy.endOperation(cacheOperation);Task { @MainActor [weak self] in self?.trimCache() } }
             Diagnostics.record("analysis start subject=\(kind.rawValue) photos=\(fr.count) fps=\(fps)")
             let started = Date()
             let fp = fpNow
@@ -285,14 +402,17 @@ final class AppState {
         sourceDetail = nil
         currentFrame = clamp(currentFrame, 0, max(0, a.count - 1))
         analysis = a
+        projectDirty=true;projectCloseApproved=false
         subjectRollback = nil
         phase = .ready
         selection.trimEnd = nil
         selection.trimStart = 0
         rebuildJob(immediate: true)
+        trimCache()
     }
 
     func cancelAnalysis() {
+        importGeneration += 1
         cancelFlag.cancel()
         analysisTask?.cancel()
         if subjectRollback != nil { restoreSubjectTransition();return }
@@ -351,6 +471,7 @@ final class AppState {
 
     private func settingsChanged() {
         guard !loading else { return }
+        if analysis != nil { projectDirty=true;projectCloseApproved=false }
         scheduleSettingsSave()
         rebuildJob(immediate: false)
     }
@@ -436,6 +557,7 @@ final class AppState {
     }
 
     func scheduleSave() {
+        if !loading,analysis != nil { projectDirty=true;projectCloseApproved=false }
         saveWork?.cancel()
         guard let a = analysis else { return }
         let w = DispatchWorkItem { ProxyCache.shared.saveAnalysis(a) }
@@ -666,6 +788,7 @@ final class AppState {
 
     private func audioChanged(from old: AudioSettings) {
         guard old != audio else { return }
+        if !loading,analysis != nil { projectDirty=true;projectCloseApproved=false }
         if let d = try? JSONEncoder().encode(audio) { defaults.set(d, forKey: "audio.v1") }
         if old.url != audio.url { loadAudioOverview() }
         rebuildAudioPlayer()
@@ -770,6 +893,7 @@ final class AppState {
 
     private func watermarkChanged(from old: WatermarkSettings) {
         guard old != watermark else { return }
+        if !loading,analysis != nil { projectDirty=true;projectCloseApproved=false }
         if let d = try? JSONEncoder().encode(watermark) { defaults.set(d, forKey: "watermark.v1") }
         if old.imagePath != watermark.imagePath { loadWatermarkImage() }
     }
@@ -796,6 +920,8 @@ final class AppState {
         exportState = ExportState(running: true, progress: 0, message: "正在导出…", outputURL: url)
         let flag = CancelFlag(); exportCancel = flag
         Task.detached(priority: .userInitiated) { [weak self] in
+            let cacheOperation=CachePolicy.beginOperation(root:ProxyCache.shared.root)
+            defer { CachePolicy.endOperation(cacheOperation);Task { @MainActor [weak self] in self?.trimCache() } }
             let ex = VideoExporter()
             let t0 = Date()
             do {
@@ -807,10 +933,12 @@ final class AppState {
                 }
                 let dt = Date().timeIntervalSince(t0)
                 Diagnostics.record("export \(kind.rawValue) complete seconds=\(dt)")
+                CachePolicy.endOperation(cacheOperation)
                 await MainActor.run {
                     self?.exportState.running = false
                     self?.exportState.progress = 1
                     self?.exportState.message = String(format: "导出完成（%.0f 秒）", dt) + (ex.warning.map { " · " + $0 } ?? "")
+                    if kind == .video { self?.offerExportCleanup() }
                 }
             } catch {
                 Diagnostics.record("export \(kind.rawValue) failed: \(error)")
@@ -823,7 +951,10 @@ final class AppState {
     }
 
     private var exportCancel = CancelFlag()
-    func cancelExport() { exportCancel.cancel() }
+    func cancelExport() {
+        guard exportState.running, !exportState.cancelling else { return }
+        exportState.cancelling = true; exportCancel.cancel()
+    }
 
     // MARK: - Persistence
 
@@ -894,4 +1025,137 @@ final class CancelFlag: @unchecked Sendable {
     private var v = false
     var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return v }
     func cancel() { lock.lock(); v = true; lock.unlock() }
+}
+
+
+extension AppState {
+    var workspaceBusy: Bool {
+        if exportState.running || phase == .importing { return true }
+        if case .analyzing = phase { return true };return false
+    }
+    func projectSnapshot() throws -> WorkspaceDocument {
+        guard let analysis,phase == .ready else { throw WorkspaceError.invalid("请先完成导入和分析，再保存工程。") }
+        saveWork?.cancel();ProxyCache.shared.saveAnalysis(analysis)
+        var profiles=subjectProfiles;profiles[subject.rawValue]=currentProfile
+        return try WorkspaceDocument(frames:frames,segments:segments,analysis:analysis,remembered:ProxyCache.shared.rememberedAnalyses,
+            subject:subject,profile:currentProfile,profiles:profiles,audio:audio,watermark:watermark,segmentIndex:segmentIndex,
+            mergeGroups:mergeGroupIndices,currentFrame:currentFrame,viewMode:viewMode.rawValue,sourceZoom:sourceZoom,previewAudio:previewAudio)
+    }
+    func saveProject(to url: URL) throws {
+        try projectSnapshot().save(to:url,cacheRoot:ProxyCache.shared.root)
+        projectURL=url;projectDirty=false;projectCloseApproved=false
+    }
+    @discardableResult func saveProjectPanel(asCopy: Bool = false) -> Bool {
+        guard analysis != nil,!workspaceBusy else { return false }
+        var file=asCopy ? nil : projectURL
+        if file == nil {
+            let panel=NSSavePanel();panel.allowedContentTypes=[UTType(filenameExtension:"birdlock") ?? .json]
+            let source=VideoSource.originalURL(frames:frames) ?? frames.first?.url
+            panel.nameFieldStringValue=(source?.deletingPathExtension().lastPathComponent ?? "BirdLock")+"_工程.birdlock"
+            panel.directoryURL=source?.deletingLastPathComponent()
+            guard panel.runModal() == .OK else { return false };file=panel.url
+        }
+        do { if let file { try saveProject(to:file);return true } }
+        catch { let alert=NSAlert();alert.messageText="工程未保存";alert.informativeText=error.localizedDescription;alert.runModal() }
+        return false
+    }
+    func confirmCanLeave() -> Bool {
+        if workspaceBusy { let alert=NSAlert();alert.messageText="任务进行中";alert.informativeText="请先完成或取消当前导入、分析或导出。";alert.runModal();return false }
+        guard projectDirty,analysis != nil else { return true }
+        let alert=NSAlert();alert.messageText="保存工程？";alert.informativeText="当前编辑尚未保存到工程文件。是否先保存？"
+        alert.addButton(withTitle:"保存");alert.addButton(withTitle:"取消");alert.addButton(withTitle:"不保存")
+        switch alert.runModal() { case .alertFirstButtonReturn:return saveProjectPanel();case .alertThirdButtonReturn:return true;default:return false }
+    }
+    func openProjectPanel(_ proposed: URL? = nil) {
+        var url=proposed
+        if url == nil {
+            let panel=NSOpenPanel();panel.allowedContentTypes=[UTType(filenameExtension:"birdlock") ?? .json];panel.allowsMultipleSelection=false
+            guard panel.runModal() == .OK else { return };url=panel.url
+        }
+        guard let url else { return }
+        do {
+            let document: WorkspaceDocument
+            do { document=try WorkspaceDocument.read(from:url) }
+            catch WorkspaceError.missing(let paths) {
+                let alert=NSAlert();alert.messageText="重新定位素材";alert.informativeText=paths.prefix(8).joined(separator:"\n")+"\n请选择原片所在的文件夹。";alert.runModal()
+                let panel=NSOpenPanel();panel.canChooseFiles=false;panel.canChooseDirectories=true
+                guard panel.runModal() == .OK,let folder=panel.url else { return }
+                document=try WorkspaceDocument.read(from:url,relocation:folder)
+            }
+            guard confirmCanLeave() else { return };openProject(url,document:document)
+        } catch { let alert=NSAlert();alert.messageText="无法打开工程";alert.informativeText=error.localizedDescription;alert.runModal() }
+    }
+    func openProject(_ url: URL, document: WorkspaceDocument) {
+        stop();analysisTask?.cancel();cancelFlag.cancel();importGeneration+=1
+        let generation=importGeneration,flag=CancelFlag();cancelFlag=flag
+        phase = .importing;importMessage="正在打开工程，按需恢复过程文件…"
+        analysisTask=Task.detached(priority:.userInitiated) { [weak self] in
+            let cacheOperation=CachePolicy.beginOperation(root:ProxyCache.shared.root)
+            defer { CachePolicy.endOperation(cacheOperation);Task { @MainActor [weak self] in self?.trimCache() } }
+            do {
+                let restored=try document.restoreMedia(cache:.shared,isCancelled:{flag.isCancelled},progress:{ progress in
+                    Task { @MainActor in
+                        guard let self,generation==self.importGeneration,!flag.isCancelled else { return }
+                        self.importMessage="正在恢复工程过程文件… \(Int(progress*100))%"
+                    }
+                })
+                await MainActor.run {
+                    guard let self,generation==self.importGeneration,!flag.isCancelled else { return }
+                    self.loading=true;self.jobGeneration+=1;self.rebuildWork?.cancel();self.saveWork?.cancel()
+                    self.job=nil;self.frames=restored.frames;ProxyCache.shared.retainRecords(frames:restored.frames);self.segments=restored.segments.map { BurstSegment(range:$0.start..<($0.start+$0.count),fps:$0.fps) }
+                    self.segmentIndex=restored.segmentIndex;self.mergeGroupIndices=restored.mergeGroups
+                    self.analysis=restored.analyses[0];self.subject=restored.subject;self.subjectProfiles=restored.profiles
+                    self.applyProfile(restored.profile,resetTrim:false);self.audio=restored.audio;self.watermark=restored.watermark
+                    self.currentFrame=clamp(restored.currentFrame,0,self.analysis!.count-1);self.viewMode=ViewMode(rawValue:restored.viewMode) ?? .output
+                    self.sourceZoom=restored.sourceZoom;self.previewAudio=restored.previewAudio;self.sourceTool = .none;self.subjectRollback=nil
+                    self.previewImage=nil;self.sourceImage=nil;self.sourceDetail=nil;self.engine.clear()
+                    self.phase = .ready;self.projectURL=url;self.projectDirty=false;self.projectCloseApproved=false
+                    self.timelineMessage="工程已恢复，可继续编辑。"+((restored.missingAssets ?? []).isEmpty ? "" : "部分音频或水印素材缺失，请重新选择。");self.loading=false
+                    self.scheduleSettingsSave();self.rebuildJob(immediate:true);self.trimCache()
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self,generation==self.importGeneration,!flag.isCancelled else { return }
+                    self.phase=self.analysis == nil ? .empty : .ready;self.timelineMessage=error.localizedDescription
+                }
+            }
+        }
+    }
+    func closeProject() {
+        stop();cancelAnalysis();analysisTask?.cancel();rebuildWork?.cancel();saveWork?.cancel();jobGeneration+=1
+        loading=true
+        frames=[];segments=[];mergeGroupIndices=[];analysis=nil;job=nil;previewImage=nil;sourceImage=nil;sourceDetail=nil
+        audio.tracks.removeAll { $0.videoOriginal };engine.clear();phase = .empty;projectURL=nil;projectDirty=false;subjectRollback=nil
+        loading=false;ProxyCache.shared.retainRecords(frames:[]);CachePolicy.protect(owner:cacheOwner,roots:[])
+    }
+    var protectedCache: Set<String> {
+        var roots=Set(frames.map { $0.url.deletingLastPathComponent().path })
+        if let analysis { roots.insert(ProxyCache.shared.root.appendingPathComponent(analysis.fingerprint).path);roots.insert(ProxyCache.shared.root.appendingPathComponent("video-audio").path) }
+        return roots
+    }
+    func trimCache() {
+        CachePolicy.protect(owner:cacheOwner,roots:protectedCache)
+        guard cacheLimitGB>0 else { return }
+        let limit=cacheLimitGB*(1<<30),protected=protectedCache
+        Task.detached(priority:.utility) { [weak self] in
+            let report=CachePolicy.clean(root:ProxyCache.shared.root,limitBytes:limit,protected:protected)
+            await MainActor.run {
+                self?.cacheMessage=report.overLimit ? "当前任务或保留记录超过缓存上限，可在关闭工程后清理。" : String(format:"缓存占用 %.2f GB",Double(report.after)/Double(1<<30))
+            }
+        }
+    }
+    func cleanCurrentVideo() -> CacheCleanup {
+        let roots=Set(frames.map { $0.url.deletingLastPathComponent().path })
+        closeProject()
+        return CachePolicy.clean(root:ProxyCache.shared.root,onlyVideos:roots)
+    }
+    func offerExportCleanup() {
+        guard askCleanupAfterExport,isVideoProject else { return }
+        let alert=NSAlert();alert.messageText="视频已导出";alert.informativeText="是否保存工程并清理本次视频的过程文件？清理后将关闭当前工作，保留原片和导出视频。下次打开工程时按需重新生成视频帧，沿用保存的识别结果与编辑。"
+        alert.addButton(withTitle:"保留过程文件");alert.addButton(withTitle:"保存工程并清理")
+        guard alert.runModal() == .alertSecondButtonReturn,saveProjectPanel() else { return }
+        let report=cleanCurrentVideo(),done=NSAlert();done.messageText="过程文件已清理"
+        done.informativeText=String(format:"已释放 %.2f GB。工程、原片和导出视频保留。",Double(report.removed)/Double(1<<30))+(report.failures>0 ? "部分文件正被占用，可稍后重试。" : "")
+        done.runModal()
+    }
 }

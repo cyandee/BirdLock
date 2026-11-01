@@ -19,7 +19,11 @@ windows/.venv/Scripts/python -m birdlock.cli selftest
 windows/.venv/Scripts/python windows/build_windows.py
 ```
 
-版本读取根目录的 [VERSION](../VERSION)，当前 Mac 与 Windows 源码版本均为 1.5.0，显式传入的 `--version` 必须相同。打包输出为 `windows/dist/BirdLock/` 和 `windows/dist/BirdLock-1.5.0-Windows-x64.zip`。已发布安装包与 Mac 均为 1.5.0。本次包含独立更新器，在线更新源已开放；旧版需要先手动安装一次。说明见[自动更新](../docs/自动更新.md)。首次构建会下载依赖、FFmpeg 和固定飞机权重，成品运行时不用下载模型。
+版本读取根目录的 [VERSION](../VERSION)，本轮 Mac 与 Windows 候选目标为 1.8.1，显式传入的 `--version` 必须与 VERSION 相同。打包输出为 `windows/dist/BirdLock/` 和按统一版本命名的 ZIP（本轮为 `BirdLock-1.8.1-Windows-x64.zip`）。本地候选尚未发布；公开双平台安装包和在线更新源仍为 1.5.0。更新机制见[自动更新](../docs/自动更新.md)。首次构建会下载依赖、FFmpeg 和固定飞机权重，成品运行时不用下载模型。
+
+本轮[视频导入、原声与增稳](../docs/视频导入与镜头配置.md)会自动加入随剪辑排列的原声轨；「画面 → 视频防抖」提供自动融合、图像防抖和陀螺仪，主体锁定或平滑相机运动取景，强度、平滑时间、最高 8× 附加裁切、固定裁切、强力预设和方法悬浮说明，以及自动同步和手动毫秒偏移。可导入 GCSV、含 IMU 或本地源引用的 Gyroflow 工程、含陀螺仪的原片。383 份离线镜头配置在同一可编辑下拉框内搜索和选择，核对过的组合按型号、镜头、焦距和模式匹配，其余手选；索尼 XML 读取身份信息，不会凭空生成标定或采样。SDR、120 秒 / 3600 帧限制保留，不承诺完整 Gyroflow、动态镜头、滚动快门或 HDR。
+
+1.8.1 本地 Windows 候选复用已核验的 1.6.0 原生运行库，重新编入当前 BirdLock 字节码及新资源；归档与源代码、PE 版本和许可已经核对。按用户决定，本次没有执行 Windows 运行验证，交给用户在实体电脑测试。标准 Windows 构建方法仍是上方的 `build_windows.py`；本机无可用 Windows 环境时的候选组装方法见[构建说明](../docs/构建与发布.md)。
 
 ## 显卡加速
 
@@ -40,6 +44,7 @@ windows/.venv/Scripts/python windows/build_windows.py
 | `BirdLock.exe --gui-regression <照片目录> <报告目录> --export` | 窗口布局和编码导出 |
 | `BirdLock.exe --project-regression <照片目录> <报告目录>` | 分组、排序、编辑、缓存、特写、音轨等，至少 12 张照片 |
 | `BirdLock.exe --subject-regression <鸟类目录> <飞机目录> <报告目录>` | 主体切换、取消、独立设置和飞机导出 |
+| `BirdLock.exe --video-regression <鸟类视频> <飞机视频> <报告目录>` | 真实视频导入面板、镜头 JSON、鸟眼/鸟头/机头导出、特写混音与缓存恢复（使用短受控素材） |
 
 测试只读照片，分组时间在内存里构造。结束后记得关闭测试程序及它留下的控制台，避免虚拟机一直占用资源。
 

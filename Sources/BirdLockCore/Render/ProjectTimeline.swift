@@ -88,8 +88,8 @@ public enum ProjectTimeline {
         }
         switch settings.loop {
         case .forward: break
-        case .reverse: arranged.reverse()
-        case .pingPong: arranged += arranged.reversed().dropFirst()
+        case .reverse: arranged = arranged.reversed().map(\.reversingAudio)
+        case .pingPong: arranged += arranged.reversed().dropFirst().map(\.reversingAudio)
         }
         let cycle = arranged
         if settings.repeatCount > 1 { for repetition in 1..<settings.repeatCount {

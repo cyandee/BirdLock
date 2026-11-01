@@ -281,7 +281,7 @@ class ExportDialog(QDialog):
         self.grid.setHorizontalSpacing(14)
         self.grid.setVerticalSpacing(6)
         v.addLayout(self.grid)
-        self.full = QCheckBox("使用原图全分辨率渲染（推荐，较慢）")
+        self.full = QCheckBox("以完整分辨率渲染（推荐，较慢）")
         self.full.toggled.connect(lambda on: (setattr(state.export, "useFullResolution", on), state.save_settings()))
         v.addWidget(self.full)
         self.bar = QProgressBar()
@@ -355,7 +355,9 @@ class ExportDialog(QDialog):
                 rows.append(("图片", f"{len(job.used)} 张 JPEG（对齐裁剪后）"))
             else:
                 rows.append(("GIF", f"{len(job.output_frames)} 帧，最长边 720 px"))
-            rows.append(("来源", f"使用 {len(job.used)} / {job.analysis.count} 张原图"))
+            from ..core.video_source import original_path
+            unit = "帧画面" if original_path(job.analysis.frames) else "张原图"
+            rows.append(("来源", f"使用 {len(job.used)} / {job.analysis.count} {unit}"))
             rows.append(("水印", "图片水印" if st.watermark.active else "无"))
         for r, (k, val) in enumerate(rows):
             a, b = QLabel(k), QLabel(val)
@@ -383,15 +385,21 @@ class ExportDialog(QDialog):
         self.cancel_btn.setEnabled(not stopping)
         self.close_btn.setVisible(not running)
         self.go_btn.setVisible(not running)
+        self.go_btn.setEnabled(bool(job and job.output_frames))
+        self.go_btn.setToolTip("" if job and job.output_frames else "没有可导出的画面，请检查裁剪范围和选帧设置。")
 
     def _default_name(self) -> str:
         a = self.state.analysis
-        base = Path(a.frames[0].path).stem if a and a.frames else "BirdLock"
-        return f"{base}_鸟眼锁定"
+        from ..core.video_source import original_path
+        base = Path(original_path(a.frames) or a.frames[0].path).stem if a and a.frames else "BirdLock"
+        return f"{base}_{'机头锁定' if self.state.is_aircraft else '鸟眼锁定'}"
 
     def _start_dir(self) -> str:
         a = self.state.analysis
-        return str(Path(a.frames[0].path).parent) if a and a.frames else str(Path.home())
+        from ..core.video_source import original_path
+        source = original_path(a.frames) or a.frames[0].path if a and a.frames else None
+        parent = Path(source).parent if source else Path.home()
+        return str(parent if parent.is_dir() else Path.home())
 
     def _choose(self):
         st = self.state
@@ -411,7 +419,10 @@ class ExportDialog(QDialog):
             st.export_to(self.kind, path)
 
 
-class MainWindow(QMainWindow):
+from .project_actions import ProjectActions
+from ..core import cache_policy
+
+class MainWindow(ProjectActions,QMainWindow):
     def __init__(self, state: AppState):
         super().__init__()
         self.state = state
@@ -449,7 +460,7 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         tb.setStyleSheet(f"QToolBar {{ background: {theme.hexa(theme.PANEL)}; border: none; padding: 6px 10px; spacing: 8px; }}")
         imp = QPushButton("🖼 导入")
-        imp.setToolTip("导入连拍照片（文件夹或多张 JPG / HEIF）  Ctrl+O")
+        imp.setToolTip("导入连拍照片（文件夹或多张 JPG / HEIF）  Ctrl+Alt+O")
         imp.clicked.connect(self.choose_photos)
         tb.addWidget(imp)
         self.subject_combo = QComboBox()
@@ -491,6 +502,11 @@ class MainWindow(QMainWindow):
         self.support_btn.clicked.connect(self.support)
         tb.addWidget(self.support_btn)
 
+    def show_release_notes(self):
+        DocDialog("BirdLock 1.9.0 更新说明",doc_text("更新说明-1.9.0.md"),self).exec()
+        notice=getattr(self,"release_notice",None)
+        if notice is not None:notice.acknowledge()
+
     def check_updates(self, background=False):
         from .updates import UpdateDialog
         previous = getattr(self, '_update_dialog', None)
@@ -516,15 +532,21 @@ class MainWindow(QMainWindow):
             return a
 
         m = mb.addMenu("文件")
-        act(m, "导入连拍文件夹…", self.choose_photos, "Ctrl+O")
+        act(m, "打开工程…", self.open_project_dialog, "Ctrl+O")
+        act(m, "保存工程…", self.save_project_dialog, "Ctrl+S")
+        act(m, "工程另存为…", lambda:self.save_project_dialog(True), "Ctrl+Shift+S")
+        act(m, "关闭工程", self.close_project_dialog)
+        m.addSeparator()
+        act(m, "导入连拍文件夹…", self.choose_photos, "Ctrl+Alt+O")
         act(m, "导入照片文件…", self.choose_photo_files, "Ctrl+Shift+O")
+        act(m, "导入视频（实验）…", self.choose_video)
         self.a_export = act(m, "导出…", self.show_export, "Ctrl+E")
         m.addSeparator()
         act(m, "添加背景音乐…", self.choose_audio)
         act(m, "导入图片水印…", self.choose_watermark)
         m.addSeparator()
         act(m, "打开数据文件夹（设置、缓存、日志）", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_dir()))))
-        act(m, "清空缓存…", self.clear_cache)
+        act(m, "缓存管理…", self.cache_settings_dialog)
         m.addSeparator()
         act(m, "退出", self.close, "Ctrl+Q")
         m = mb.addMenu("播放")
@@ -543,6 +565,7 @@ class MainWindow(QMainWindow):
         act(m, "原图放大 / 全图", self._toggle_zoom, "Z")
         m = mb.addMenu("帮助")
         act(m, "检查更新…", self.check_updates)
+        act(m, "本次更新说明…", self.show_release_notes)
         act(m, "BirdLock 使用说明", self.open_manual, "F1")
         act(m, "反馈与交流（邮箱）", self.contact)
         act(m, "导出诊断日志…", self.export_diagnostics)
@@ -564,6 +587,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "保存失败", str(error))
 
     def _changed(self, topic):
+        self.project_ui_changed(topic)
         st = self.state
         has = st.analysis is not None
         self.subject_combo.blockSignals(True)
@@ -612,6 +636,7 @@ class MainWindow(QMainWindow):
         st.changed.emit("zoom")
 
     def choose_photos(self):
+        if not self.can_leave_project():return
         # the native Windows folder picker never lists files: use the Qt dialog so the
         # photos inside are visible (greyed) while picking the folder
         dlg = QFileDialog(self, "选择连拍照片所在的文件夹")
@@ -628,6 +653,7 @@ class MainWindow(QMainWindow):
             self.state.import_paths(preview.selected,merge=preview.merge_groups.isChecked())
 
     def choose_photo_files(self):
+        if not self.can_leave_project():return
         files, _ = QFileDialog.getOpenFileNames(self, "选择连拍照片（可多选）", "", PHOTO_FILTER)
         if files:
             choice=QMessageBox(self)
@@ -643,6 +669,15 @@ class MainWindow(QMainWindow):
         p, _ = QFileDialog.getOpenFileName(self, "选择背景音乐", "", AUDIO_FILTER)
         if p:
             self.state.set_audio(p)
+
+    def choose_video(self, path=None):
+        if not self.can_leave_project():return
+        if self.state.export_running: return
+        if not path or not isinstance(path, str):
+            path, _ = QFileDialog.getOpenFileName(self, '选择视频（实验功能，SDR）', '', '视频 (*.mp4 *.mov *.m4v *.avi *.mkv)')
+        if path:
+            from .video_import import VideoImportDialog
+            VideoImportDialog(path, self.state, self).exec()
 
     def choose_watermark(self):
         p, _ = QFileDialog.getOpenFileName(self, "选择水印图片（推荐带透明背景的 PNG）", "", "图片 (*.png *.tif *.tiff *.jpg *.jpeg *.webp)")
@@ -665,7 +700,7 @@ class MainWindow(QMainWindow):
 
     def about(self):
         QMessageBox.about(self, f"关于 {APP_NAME}",
-                          f"<h3>{APP_NAME}</h3><p>版本 {__version__} 测试版（Windows）</p>"
+                          f"<h3>{APP_NAME}</h3><p>版本 {__version__}（Windows）</p>"
                           "<p>飞鸟连拍对齐鸟眼，一键生成连拍视频。</p>"
                           f"<p>Copyright © 2026 cyanol<br>依据 GNU AGPL-3.0 开源<br>"
                           f"源代码：<a href='https://github.com/cyandee/BirdLock'>github.com/cyandee/BirdLock</a><br>"
@@ -699,9 +734,17 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def clear_cache(self):
+        if self.state.export_running or self.state.phase in ('importing','analyzing'):
+            QMessageBox.information(self, '清空缓存', '请先停止导入、分析或导出，再清空缓存。')
+            return
         size = self.state.cache.total_size() / (1 << 20)
-        if QMessageBox.question(self, "清空缓存", f"缓存占用约 {size:.0f} MB（缩略图、分析结果和照片编辑）。\n清空会移除已保存的手动修正、排除帧和特写设置，下次打开需要重新分析。\n请先保存需要的成片。确定清空？", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) \
+        if QMessageBox.question(self, "清空缓存", f"缓存占用约 {size:.0f} MB（缩略图、视频帧、分析结果和编辑）。\n清空会移除已保存的手动修正、排除帧和特写设置；当前视频会关闭，原视频保留，之后需重新导入。\n请先保存需要的成片。确定清空？", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) \
                 == QMessageBox.Yes:
+            if any(Path(f.path).is_relative_to(self.state.cache.root / 'video-imports') for f in self.state.frames):
+                self.state.stop();self.state.cancel_analysis()
+                self.state.frames=[];self.state.segments=[];self.state.analysis=self.state.job=None
+                self.state.preview_image=self.state.source_image=self.state.source_detail=None
+                self.state.phase='empty';self.state.changed.emit('frames');self.state.changed.emit('phase')
             self.state.cache.clear()
 
     # ---------------------------------------------------------------- drag & drop
@@ -722,12 +765,22 @@ class MainWindow(QMainWindow):
     def open_paths(self, paths: list[str]):
         if not paths:
             return
+        if len(paths)==1 and Path(paths[0]).suffix.lower()=='.birdlock':
+            self.open_project_dialog(paths[0]);return
+        from ..core.video_import import VIDEO_EXT
+        if any(Path(p).suffix.lower() in VIDEO_EXT for p in paths):
+            if len(paths) != 1:
+                QMessageBox.information(self, '导入视频', '视频请每次单独导入一个文件')
+            else: self.choose_video(paths[0])
+            return
         audio = [p for p in paths if is_audio_file(p)]
         if audio and len(audio) == len(paths) and self.state.analysis is not None:
             self.state.set_audio(audio[0])
         else:
-            self.state.import_paths([p for p in paths if not is_audio_file(p)])
+            if self.can_leave_project():self.state.import_paths([p for p in paths if not is_audio_file(p)])
 
     def closeEvent(self, ev):
+        if not getattr(self.state,"_update_exit_approved",False) and not self.can_leave_project():ev.ignore();return
         self.state.close()
+        if self.state.cache_limit_gb:cache_policy.clean(self.state.cache.root,self.state.cache_limit_gb*(1<<30))
         super().closeEvent(ev)

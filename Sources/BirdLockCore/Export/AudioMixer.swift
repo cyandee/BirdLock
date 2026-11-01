@@ -84,6 +84,7 @@ public enum AudioMixer {
         var parameters: [AVAudioMixInputParameters] = []
         for layer in layers {
             try Task.checkCancellation()
+            if let issue = layer.arrangementError { throw AudioError.arrange(layer.title, issue) }
             guard let url = layer.sourceURL else { throw AudioError.noAudio(layer.title) }
             let asset = AVURLAsset(url: url)
             guard let src = try await asset.loadTracks(withMediaType: .audio).first else { throw AudioError.noAudio(layer.title) }
@@ -101,7 +102,11 @@ public enum AudioMixer {
                 let len = min(musicDur - from, limit - at)
                 guard len > 0.00001 else { break }
                 do {
-                    try track.insertTimeRange(CMTimeRange(start: t(from), duration: t(len)), of: src, at: t(at))
+                    for audible in CloseupAudio.audibleRanges(layer, start: at, end: at + len) {
+                        // Leave real empty ranges: volume automation alone has block-size latency.
+                        let sourceStart = from + audible[0] - at
+                        try track.insertTimeRange(CMTimeRange(start: t(sourceStart), duration: t(audible[1] - audible[0])), of: src, at: t(audible[0]))
+                    }
                 } catch {
                     throw AudioError.arrange(layer.title, String(describing: error))
                 }
@@ -112,8 +117,8 @@ public enum AudioMixer {
             let span = at - start
             let vol = Float(clamp(layer.volume, 0, 2) * gain)
             let p = AVMutableAudioMixInputParameters(track: track)
-            p.setVolume(vol, at: t(start))
             let fi = min(max(0, layer.fadeIn), span / 2), fo = min(max(0, layer.fadeOut), span - fi)
+            p.setVolume(vol, at: t(start))
             if fi > 0.01 { p.setVolumeRamp(fromStartVolume: 0, toEndVolume: vol, timeRange: CMTimeRange(start: t(start), duration: t(fi))) }
             if fo > 0.01 { p.setVolumeRamp(fromStartVolume: vol, toEndVolume: 0, timeRange: CMTimeRange(start: t(at - fo), duration: t(fo))) }
             parameters.append(p)

@@ -13,7 +13,7 @@ struct AudioTracksCard: View {
                 Button("添加快门声") { state.addShutter(soundID) }
                 Button("添加音频…") { state.addAudioTracks() }
             }.controlSize(.small)
-            Text("快门与背景音乐同时播放；各轨可独立静音、调音量、起点、长度和淡入淡出。长度为 0 时延续至视频结束。混音自动预留音量余量。")
+            Text("特写期间自动暂停连拍快门声，结束后恢复；背景音乐继续播放。各轨可独立调节，长度为 0 时延续至视频结束。混音自动预留音量余量。")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             ForEach($state.audio.tracks) { $track in
                 Divider()
@@ -44,11 +44,13 @@ private struct AudioTrackEditor: View {
                 CameraSoundPicker(assetID: Binding(get: { track.assetID ?? "" }, set: { track.assetID = $0 }))
             }
             Toggle("静音", isOn: $track.muted)
-            Toggle("循环播放", isOn: $track.loop)
+            if !track.videoOriginal { Toggle("循环播放", isOn: $track.loop) }
             LabeledSlider(title: "音量", value: $track.volume, range: 0...1.5, format: { String(format: "%.0f%%", $0 * 100) })
-            number("视频起点", value: $track.timelineStart)
-            number("播放长度", value: $track.duration)
-            number("素材起点", value: $track.startOffset)
+            if !track.videoOriginal {
+                number("视频起点", value: $track.timelineStart)
+                number("播放长度", value: $track.duration)
+                number("素材起点", value: $track.startOffset)
+            }
             LabeledSlider(title: "淡入", value: $track.fadeIn, range: 0...5, step: 0.1, format: { String(format: "%.1f 秒", $0) })
             LabeledSlider(title: "淡出", value: $track.fadeOut, range: 0...5, step: 0.1, format: { String(format: "%.1f 秒", $0) })
             if track.sourceURL.map({ FileManager.default.fileExists(atPath: $0.path) }) != true {

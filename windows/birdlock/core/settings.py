@@ -247,11 +247,26 @@ ASPECT_PRESETS = [
 
 
 @dataclass
+class VideoStabilizationSettings(Settings):
+    fixedZoom: bool = True
+    enabled: bool = True
+    method: str = 'auto'
+    framing: str = 'subject'
+    strength: float = 1.0
+    smoothness: float = .5
+    maxZoom: float = 1.4
+    autoZoom: bool = True
+    autoSync: bool = True
+    gyroOffset: float = 0.0
+
+
+@dataclass
 class LookSettings(Settings):
     deflicker: bool = True
     deflickerStrength: float = 1.0
     deflickerWindow: float = 8.0
     exposureEV: float = 0.0
+    stabilization: VideoStabilizationSettings = field(default_factory=VideoStabilizationSettings)
 
 
 @dataclass
@@ -350,6 +365,9 @@ class AudioTrack(Settings):
     fadeIn: float = 0.3
     fadeOut: float = 1.0
     loop: bool = True
+    muteRanges: list[list[float]] = field(default_factory=list)
+    videoOriginal: bool = False
+    arrangementError: str = ""
 
     @property
     def active(self) -> bool:

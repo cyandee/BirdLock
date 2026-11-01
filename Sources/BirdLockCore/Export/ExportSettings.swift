@@ -286,6 +286,17 @@ public struct ExportSettings: Codable, Hashable, Sendable {
 }
 
 /// One output frame: show source frame `a`, optionally blended with `b` by `t`.
+public struct SourceAudioSpan: Hashable, Sendable {
+    public var frame: Int
+    public var from: Double
+    public var to: Double
+    public var seconds: Double
+    public init(frame: Int, from: Double, to: Double, seconds: Double) {
+        self.frame = frame; self.from = from; self.to = to; self.seconds = seconds
+    }
+    public var reversed: SourceAudioSpan { SourceAudioSpan(frame: frame, from: to, to: from, seconds: seconds) }
+}
+
 public struct OutputFrame: Sendable, Hashable {
     public var a: Int
     public var b: Int
@@ -295,14 +306,20 @@ public struct OutputFrame: Sendable, Hashable {
     public var closeup = -1
     public var shotTime = 0.0
     public var audioCycle = 0
+    /// Continuous source-cell ranges for original video sound; independent of visual interpolation.
+    public var sourceAudio: [SourceAudioSpan] = []
     public init(a: Int, b: Int, t: Double, fade: Double, time: Double = 0) {
         self.a = a; self.b = b; self.t = t; self.fade = fade; self.time = time
+    }
+    public var reversingAudio: OutputFrame {
+        var result = self; result.sourceAudio = sourceAudio.reversed().map(\.reversed); return result
     }
 
     /// Keep slow-motion buffer reuse when the rendered frame does not depend on the effect clock.
     func renderKey(focus: FocusMarkSettings, closeups: [Closeup] = []) -> OutputFrame {
         var key = self
         key.audioCycle = 0
+        key.sourceAudio = []
         let animated = closeup >= 0 && (!closeups.indices.contains(closeup) || closeups[closeup].animatedFrame)
         if !animated && !focus.captureFlash && !(focus.enabled && focus.showBody && focus.blinkBody) { key.time = 0; key.shotTime = 0 }
         return key
@@ -315,20 +332,41 @@ public enum TimeMapper {
     ///   - sourceFPS: capture rate of the burst
     public static func outputFrames(used: [Int], sourceFPS: Double, settings s: ExportSettings) -> [OutputFrame] {
         guard !used.isEmpty else { return [] }
-        var order: [Int]
+        var order: [Int], directions: [Int]
         switch s.loop {
-        case .forward: order = used
-        case .reverse: order = used.reversed()
-        case .pingPong: order = used + used.reversed().dropFirst()
+        case .forward: order = used; directions = Array(repeating: 1, count: used.count)
+        case .reverse: order = used.reversed(); directions = Array(repeating: -1, count: used.count)
+        case .pingPong:
+            order = used + used.reversed().dropFirst()
+            directions = Array(repeating: 1, count: used.count) + Array(repeating: -1, count: max(0, used.count - 1))
         }
         if s.repeatCount > 1 {
-            var o = order
-            for _ in 1..<s.repeatCount { o += (s.loop == .pingPong ? Array(order.dropFirst()) : order) }
-            order = o
+            var o = order, d = directions
+            for _ in 1..<s.repeatCount {
+                o += (s.loop == .pingPong ? Array(order.dropFirst()) : order)
+                d += (s.loop == .pingPong ? Array(directions.dropFirst()) : directions)
+            }
+            order = o; directions = d
         }
         let n = order.count
-        if n == 1 { return [OutputFrame(a: order[0], b: order[0], t: 0, fade: 1)] }
         let step = s.speed * sourceFPS / s.outputFPS     // source frames advanced per output frame
+        func audioSpans(at position: Double) -> [SourceAudioSpan] {
+            var at = position, result: [SourceAudioSpan] = []
+            let limit = min(Double(n), position + step)
+            while at < limit - 1e-9 {
+                let cell = min(n - 1, Int(floor(at))), fraction = at - floor(at)
+                let stop = min(limit, Double(cell + 1)), to = fraction + stop - at
+                let backwards = directions[cell] < 0
+                result.append(SourceAudioSpan(frame: order[cell], from: backwards ? 1 - fraction : fraction,
+                    to: backwards ? 1 - to : to, seconds: (stop - at) / step / s.outputFPS))
+                at = stop
+            }
+            return result
+        }
+        if n == 1 {
+            var frame = OutputFrame(a: order[0], b: order[0], t: 0, fade: 1)
+            frame.sourceAudio = audioSpans(at: 0); return [frame]
+        }
         let count = Int(floor(Double(n - 1) / step)) + 1
         var out: [OutputFrame] = []
         out.reserveCapacity(count)
@@ -350,6 +388,7 @@ public enum TimeMapper {
             case .blend, .ai:
                 out.append(OutputFrame(a: order[i0], b: order[i1], t: fr < 1e-6 ? 0 : fr, fade: fade, time: time))
             }
+            out[out.count - 1].sourceAudio = audioSpans(at: pos)
         }
         return out
     }

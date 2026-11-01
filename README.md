@@ -4,15 +4,19 @@ BirdLock 是一个把飞鸟连拍照片做成视频的小工具。导入照片�
 
 我希望做这类视频能简单一点：不用逐张挪照片，也能调整构图、加上对焦框和快门声，再配一段音乐。现在有 macOS 和 Windows 两个版本，免费使用，开源代码也在这里。
 
+当前版本为 **1.9.0**（Mac / Windows）。新增视频导入、原声与增稳、陀螺仪同步、383份可搜索镜头配置、强力裁切、主体大小稳定、工程文件和缓存管理；详见[1.5→1.9累计更新说明](docs/更新说明-1.9.0.md)。升级后首次打开显示累计说明，也可在帮助菜单再次查看。
+
+视频入口保留 SDR、每次 120 秒 / 3600 帧的实验范围。陀螺仪路径需要真实运动采样，Sony XML 身份信息本身不是标定或陀螺仪；没有采样时使用图像防抖。Mac 原生及 Python 核心已做本地验证；本次 Windows 运行验证由用户在实体电脑完成，不承诺完整 Gyroflow、动态镜头、滚动快门或 HDR 工作流。
+
 ## 下载
 
-当前下载为 **1.5.0 测试版**，Mac 与 Windows 版本一致。安装包、对应源码、更新文件和校验文件都在同一个下载页，旧版本保留。
+当前下载为 **1.9.0**，Mac 与 Windows 版本一致。安装包、对应源码、更新文件和校验文件都在同一个下载页，旧版本保留。
 
-这一版加入[软件内更新](docs/自动更新.md)，也修复了 Mac 开启 AI 光流时的明暗闪烁。**旧版需要先手动安装一次 1.5.0**，之后才能接收后续版本。在线更新源已开放；已装 1.5.0 时显示暂无更新是正常的。
+已安装1.5.0的用户可通过[软件内更新](docs/自动更新.md)直接升级；开启自动检查时会收到提示，未开启时请手动检查。更早版本需先手动安装带更新器的版本，也可以直接安装1.9.0完整包。
 
-- [macOS 通用版](https://github.com/cyandee/BirdLock/releases/download/v1.5.0-beta.1/BirdLock-1.5.0.dmg)：macOS 14 及以上，支持 Apple 芯片和 Intel。
-- [Windows 便携版](https://github.com/cyandee/BirdLock/releases/download/v1.5.0-beta.1/BirdLock-1.5.0-Windows-x64.zip)：Windows 10 / 11 x64，完整解压后运行。
-- [更新说明、源码和校验文件](https://github.com/cyandee/BirdLock/releases/tag/v1.5.0-beta.1) · [历史版本](https://github.com/cyandee/BirdLock/releases)
+- [macOS 通用版](https://github.com/cyandee/BirdLock/releases/download/v1.9.0/BirdLock-1.9.0.dmg)：macOS 14 及以上，支持 Apple 芯片和 Intel。
+- [Windows 便携版](https://github.com/cyandee/BirdLock/releases/download/v1.9.0/BirdLock-1.9.0-Windows-x64.zip)：Windows 10 / 11 x64，完整解压后运行。
+- [更新说明、源码和校验文件](https://github.com/cyandee/BirdLock/releases/tag/v1.9.0) · [历史版本](https://github.com/cyandee/BirdLock/releases)
 
 Mac 版还没有做 Apple 公证，首次打开可能被系统拦截，安装方法见[使用说明](docs/使用说明.md)。如果遇到打不开的情况，请把报错提示、系统版本和芯片型号发给我。
 
@@ -73,7 +77,7 @@ Mac 版还没有做 Apple 公证，首次打开可能被系统拦截，安装方
 
 飞机模式还在打磨，倒置、小目标和遮挡时可能找错机头，使用前请逐帧看一下，必要时手动修正。音乐卡点也只是辅助，最后还是以耳朵听到的效果为准。
 
-目前还没有独立的工程文件，手动修正和特写保存在缓存里，清缓存前请先保存需要的成片。实体 Intel Mac、Windows 不同显卡和低内存电脑还需要更多反馈。
+可保存独立 `.birdlock` 工程继续编辑；工程引用原片与外部音频，请同时保留素材。使用缓存管理清理可重建的过程文件。实体 Intel Mac、Windows 不同显卡和低内存电脑还需要更多反馈。
 
 ## 反馈与支持
 

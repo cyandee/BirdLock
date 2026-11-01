@@ -84,9 +84,13 @@ def main():
     a = ap.parse_args()
     if a.version != version:
         raise SystemExit("打包版本与 VERSION 不一致，请先统一更新 VERSION")
+    subprocess.check_call([sys.executable, '-I', '-X', 'utf8', os.path.join(REPO, 'scripts', 'prepare_telemetry_helper.py'),
+                           '--directory', os.path.join(HERE, 'telemetry'), '--platform', 'windows'])
     subprocess.check_call([sys.executable, "-I", "-X", "utf8", os.path.join(REPO,"scripts","fetch_aircraft_model.py")])
     subprocess.check_call([sys.executable,"-I","-X","utf8",os.path.join(REPO,"scripts","verify_bundle.py"),
                            "--aircraft-resources",os.path.join(REPO,"SharedResources","AircraftModels")])
+    subprocess.check_call([sys.executable,"-I","-X","utf8",os.path.join(REPO,"scripts","verify_bundle.py"),
+                           "--lens-resources",os.path.join(REPO,"SharedResources","LensProfiles")])
     fetch_ffmpeg()
     subprocess.check_call([sys.executable, os.path.join(REPO, "scripts", "md2html.py"),
                            os.path.join(REPO, "docs", "windows", "使用说明.md"),
@@ -97,6 +101,12 @@ def main():
     subprocess.check_call([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", os.path.join(HERE, "BirdLock.spec")],
                           cwd=HERE)
     dist = os.path.join(HERE, "dist", "BirdLock")
+    subprocess.check_call([sys.executable, '-I', '-X', 'utf8', os.path.join(REPO, 'scripts', 'verify_bundle.py'),
+                           '--telemetry-resources', os.path.join(dist, '_internal', 'telemetry'),
+                           '--telemetry-binary', os.path.join(dist, '_internal', 'telemetry', 'BirdLockTelemetry.exe'),
+                           '--telemetry-windows'])
+    subprocess.check_call([sys.executable,"-I","-X","utf8",os.path.join(REPO,"scripts","verify_bundle.py"),
+                           "--lens-resources",os.path.join(dist,"_internal","lens_profiles")])
     shutil.copy(os.path.join(REPO, "LICENSE"), os.path.join(dist, "LICENSE.txt"))
     shutil.copy(os.path.join(REPO, "docs", "windows", "使用说明.html"), os.path.join(dist, "使用说明.html"))
     with open(os.path.join(dist, "源代码.txt"), "w", encoding="utf-8") as f:

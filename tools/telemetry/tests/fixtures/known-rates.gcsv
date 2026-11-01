@@ -1,0 +1,12 @@
+GYROFLOW IMU LOG
+version,1.3
+id,BirdLock_controlled_units_fixture
+vendor,BirdLock-test
+orientation,XYZ
+tscale,0.001
+gscale,0.01
+ascale,0.001
+t,gx,gy,gz,ax,ay,az
+1000,100,-200,300,0,1000,0
+1010,200,-100,0,0,1000,0
+1020,0,0,-100,0,1000,0

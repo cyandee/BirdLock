@@ -31,7 +31,7 @@ struct ExportSheet: View {
                     case .gif:
                         GridRow { Text("GIF").foregroundStyle(.secondary); Text(String(format: "%d 帧，最长边 720 px", job.outputFrames.count)) }
                     }
-                    GridRow { Text("来源").foregroundStyle(.secondary); Text("使用 \(job.used.count) / \(job.analysis.count) 张原图") }
+                    GridRow { Text("来源").foregroundStyle(.secondary); Text("使用 \(job.used.count) / \(job.analysis.count) \(VideoSource.originalURL(frames:job.analysis.frames) == nil ? "张原图" : "帧画面")") }
                     if kind == .video {
                         GridRow {
                             Text("音频").foregroundStyle(.secondary)
@@ -45,7 +45,7 @@ struct ExportSheet: View {
                     }
                 }
                 .font(.callout)
-                Toggle("使用原图全分辨率渲染（推荐，较慢）", isOn: $state.exportSettings.useFullResolution)
+                Toggle("以完整分辨率渲染（推荐，较慢）", isOn: $state.exportSettings.useFullResolution)
                     .disabled(state.exportState.running)
             }
 
@@ -53,7 +53,7 @@ struct ExportSheet: View {
                 VStack(alignment: .leading, spacing: 6) {
                     ProgressView(value: state.exportState.progress).tint(Theme.accent)
                     HStack {
-                        Text(state.exportState.running ? String(format: "正在导出… %.0f%%", state.exportState.progress * 100) : state.exportState.message)
+                        Text(state.exportState.cancelling && state.exportState.running ? "正在取消导出…" : state.exportState.running ? String(format: "正在导出… %.0f%%", state.exportState.progress * 100) : state.exportState.message)
                             .font(.caption).foregroundStyle(.secondary)
                         Spacer()
                         if !state.exportState.running, let u = state.exportState.outputURL, state.exportState.progress >= 1 {
@@ -64,14 +64,17 @@ struct ExportSheet: View {
                 }
             }
 
+            if state.job?.outputFrames.isEmpty != false { Text("没有可导出的画面，请检查裁剪范围和选帧设置。").font(.caption).foregroundStyle(Theme.warn) }
+
             HStack {
                 Spacer()
                 if state.exportState.running {
-                    Button("取消导出") { state.cancelExport() }
+                    Button(state.exportState.cancelling ? "正在取消…" : "取消导出") { state.cancelExport() }.disabled(state.exportState.cancelling)
                 } else {
                     Button("关闭") { state.exportState = ExportState(); dismiss() }.keyboardShortcut(.cancelAction)
                     Button("选择位置并导出…") { choose() }
                         .buttonStyle(.borderedProminent).tint(Theme.accent).keyboardShortcut(.defaultAction)
+                        .disabled(state.job?.outputFrames.isEmpty != false)
                 }
             }
         }
@@ -79,9 +82,19 @@ struct ExportSheet: View {
         .frame(width: 480)
     }
 
+    private var sourceURL: URL? {
+        guard let analysis = state.analysis else { return nil }
+        return VideoSource.originalURL(frames:analysis.frames) ?? analysis.frames.first?.url
+    }
+
+    private var startDirectory: URL? {
+        if let directory = sourceURL?.deletingLastPathComponent(), FileManager.default.fileExists(atPath:directory.path) { return directory }
+        return FileManager.default.urls(for:.documentDirectory,in:.userDomainMask).first
+    }
+
     private func defaultName() -> String {
-        let base = state.analysis?.frames.first?.url.deletingPathExtension().lastPathComponent ?? "BirdLock"
-        return "\(base)_鸟眼锁定"
+        let base = sourceURL?.deletingPathExtension().lastPathComponent ?? "BirdLock"
+        return "\(base)_\(state.subject == .aircraft ? "机头锁定" : "鸟眼锁定")"
     }
 
     private func choose() {
@@ -92,13 +105,13 @@ struct ExportSheet: View {
             let ext = kind == .gif ? "gif" : job.export.codec.fileExtension
             p.allowedContentTypes = [kind == .gif ? .gif : (ext == "mp4" ? .mpeg4Movie : .quickTimeMovie)]
             p.nameFieldStringValue = defaultName() + "." + ext
-            if let dir = state.analysis?.frames.first?.url.deletingLastPathComponent() { p.directoryURL = dir }
+            p.directoryURL = startDirectory
             if p.runModal() == .OK, let u = p.url { state.export(kind: kind, to: u) }
         case .images:
             let p = NSOpenPanel()
             p.canChooseDirectories = true; p.canChooseFiles = false; p.canCreateDirectories = true
             p.prompt = "导出到此文件夹"
-            if let dir = state.analysis?.frames.first?.url.deletingLastPathComponent() { p.directoryURL = dir }
+            p.directoryURL = startDirectory
             if p.runModal() == .OK, let u = p.url { state.export(kind: .images, to: u.appendingPathComponent(defaultName())) }
         }
     }

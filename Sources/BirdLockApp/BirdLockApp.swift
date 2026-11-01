@@ -18,6 +18,8 @@ struct BirdLockApp: App {
                 .onAppear {
                     updater.isBusy = { state.exportState.running || state.phase == .importing || { if case .analyzing = state.phase { return true }; return false }() }
                     updater.start()
+                    AppDelegate.terminationCheck={ state.projectCloseApproved || state.confirmCanLeave() }
+                    AppDelegate.terminationCleanup={ CachePolicy.protect(owner:state.cacheOwner,roots:[]);if state.cacheLimitGB>0 { _ = CachePolicy.clean(root:ProxyCache.shared.root,limitBytes:state.cacheLimitGB*(1<<30)) } }
                 }
         }
         .windowToolbarStyle(.unified(showsTitle: true))
@@ -34,6 +36,7 @@ struct BirdLockApp: App {
                 Button("许可与第三方组件…") { LegalWindow.show(.notices) }
             }
             CommandGroup(replacing: .help) {
+                Button("本次更新说明…") { state.showReleaseNotes=true }
                 Button("BirdLock 使用说明") { AppDocs.openManual() }
                 Button("反馈与交流（邮箱）") { AppIdentity.showContact() }
                 Button("打开日志文件夹…") { NSWorkspace.shared.open(Diagnostics.directory) }
@@ -43,7 +46,13 @@ struct BirdLockApp: App {
                 Button("请作者喝杯咖啡…") { AppIdentity.showSupport() }
             }
             CommandGroup(replacing: .newItem) {
-                Button("导入连拍…") { openImportPanel(state) }.keyboardShortcut("o")
+                Button("打开工程…") { state.openProjectPanel() }.keyboardShortcut("o")
+                Button("保存工程…") { _ = state.saveProjectPanel() }.keyboardShortcut("s").disabled(state.analysis == nil || state.workspaceBusy)
+                Button("工程另存为…") { _ = state.saveProjectPanel(asCopy:true) }.keyboardShortcut("s",modifiers:[.command,.shift]).disabled(state.analysis == nil || state.workspaceBusy)
+                Button("关闭工程") { if state.confirmCanLeave() { state.closeProject();state.trimCache() } }
+                Divider()
+                Button("导入连拍…") { openImportPanel(state) }.keyboardShortcut("o",modifiers:[.command,.option])
+                Button("导入视频（实验）…") { openVideoPanel(state) }
             }
             CommandMenu("播放") {
                 Button(state.isPlaying ? "暂停" : "播放") { state.togglePlay() }.keyboardShortcut(.space, modifiers: [])
@@ -72,6 +81,8 @@ struct BirdLockApp: App {
             CommandGroup(after: .saveItem) {
                 Button("导出…") { state.showExportSheet = true }.keyboardShortcut("e").disabled(state.job == nil)
                 Divider()
+                Button("缓存管理…") { state.showCacheSheet=true }.disabled(state.workspaceBusy)
+                Divider()
                 Button("添加背景音乐…") { state.chooseAudio() }.disabled(state.analysis == nil)
                 Button("导入图片水印…") { state.chooseWatermark() }
             }
@@ -80,7 +91,17 @@ struct BirdLockApp: App {
 }
 
 @MainActor
+func openVideoPanel(_ state: AppState) {
+    guard state.confirmCanLeave() else { return }
+    let p = NSOpenPanel()
+    p.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+    p.message = "选择要锁定主体并裁切增稳的视频（实验功能，SDR）"
+    if p.runModal() == .OK { state.videoImportURL = p.url }
+}
+
+@MainActor
 func openImportPanel(_ state: AppState) {
+    guard state.confirmCanLeave() else { return }
     let p = NSOpenPanel()
     p.allowsMultipleSelection = true
     p.canChooseDirectories = true
@@ -95,7 +116,12 @@ func openImportPanel(_ state: AppState) {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    func applicationWillTerminate(_ notification: Notification) { Diagnostics.finish() }
+    @MainActor static var terminationCheck:(()->Bool)?
+    func applicationShouldTerminate(_ sender:NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated { Self.terminationCheck?() == false ? .terminateCancel : .terminateNow }
+    }
+    @MainActor static var terminationCleanup:(()->Void)?
+    func applicationWillTerminate(_ notification: Notification) { MainActor.assumeIsolated { Self.terminationCleanup?() };Diagnostics.finish() }
     /// Set by the UI: imports folders / photos opened from Finder ("Open With", Dock icon drop, `open -a`).
     @MainActor static var openHandler: (([URL]) -> Void)?
     @MainActor private static var pendingOpen: [URL] = []

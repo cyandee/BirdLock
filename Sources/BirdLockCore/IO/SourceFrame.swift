@@ -54,6 +54,7 @@ public struct SourceFrame: Codable, Hashable, Identifiable, Sendable {
 public struct BurstSegment: Hashable, Sendable {
     public var range: Range<Int>
     public var fps: Double
+    public init(range: Range<Int>, fps: Double) { self.range = range; self.fps = fps }
 }
 
 public enum FrameImporter {

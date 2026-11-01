@@ -41,7 +41,8 @@ QPushButton:pressed {{ background: rgba(255,255,255,0.20); }}
 QPushButton:checked {{ background: {hexa(ACCENT, 0.22)}; border-color: {hexa(ACCENT)}; }}
 QPushButton:disabled {{ color: {hexa(TERTIARY)}; }}
 QPushButton#primary {{ background: {hexa(ACCENT)}; color: #1b1b1b; border: none; font-weight: 600; padding: 6px 14px; }}
-QPushButton#primary:hover {{ background: #ffc85a; }}
+QPushButton#primary:hover:enabled {{ background: #ffc85a; }}
+QPushButton#primary:disabled {{ background: rgba(255,255,255,0.06); color: {hexa(TERTIARY)}; border: 1px solid rgba(255,255,255,0.08); }}
 QPushButton#link {{ background: transparent; border: none; color: {hexa(ACCENT)}; padding: 0; }}
 QPushButton#chip {{ padding: 6px 4px; font-size: 12px; }}
 QToolButton {{ background: transparent; border: none; border-radius: 6px; padding: 4px; }}

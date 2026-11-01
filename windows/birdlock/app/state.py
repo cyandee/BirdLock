@@ -119,6 +119,9 @@ class PreviewEngine:
         self._proxies: collections.OrderedDict = collections.OrderedDict()
         self._originals: collections.OrderedDict = collections.OrderedDict()
 
+    def clear(self):
+        with self._lock:self._proxies.clear();self._originals.clear()
+
     def proxy(self, job: RenderJob, i: int):
         key = (job.analysis.fingerprint, i)
         with self._lock:
@@ -164,7 +167,10 @@ class PreviewEngine:
         self._prefetch.submit(run)
 
 
-class AppState(QObject):
+from .project_workspace import ProjectWorkspace
+from ..core import cache_policy
+
+class AppState(ProjectWorkspace,QObject):
     changed = Signal(str)              # topic
     _main = Signal(object)             # run callable on the main thread
 
@@ -225,6 +231,7 @@ class AppState(QObject):
 
         self.engine = PreviewEngine()
         self.cache = ProxyCache()
+        self.init_workspace()
         self._models: BirdModels | None = None
         self._models_device = None
         self._cancel = CancelFlag()
@@ -256,11 +263,22 @@ class AppState(QObject):
             if not self._closing:
                 raise
 
+    def on_main_wait(self,fn):
+        if self._closing:return
+        finished=threading.Event()
+        def run():
+            try:fn()
+            finally:finished.set()
+        self.on_main(run)
+        while not finished.wait(.05):
+            if self._closing:return
+
     def close(self):
         """Stop scheduling callbacks before Qt destroys the window and its signals."""
         if self._closing:
             return
         self._closing = True
+        cache_policy.protect(self._cache_owner,[])
         self.stop()
         self._cancel.cancel()
         self._export_cancel.cancel()
@@ -292,6 +310,7 @@ class AppState(QObject):
         self._import_gen += 1
         gen = self._import_gen
         self.phase = "importing"
+        self.message = "正在读取照片…"
         self.analysis = None
         self.job = None
         self.preview_image = self.source_image = None
@@ -299,33 +318,127 @@ class AppState(QObject):
         self.changed.emit("phase")
 
         def work():
-            log.info("import %s", paths)
+            with cache_policy.operation(self.cache.root):
+                log.info("import %s", paths)
+                try:
+                    fr = F.import_frames(paths)
+                    segs = F.segments(fr)
+                except Exception:
+                    log.exception("import failed")
+                    fr, segs = [], []
+                log.info("import found %d photos in %d bursts", len(fr), len(segs))
+
+                def done():
+                    if gen != self._import_gen:
+                        return
+                    self.project_path="";self.project_dirty=True
+                    self.frames, self.segments = fr, segs
+                    self.cache.retain_records(fr)
+                    cache_policy.protect(self._cache_owner,self.protected_cache())
+                    saved=self._group_orders.get(fingerprint(fr),[])
+                    self.merge_group_indices=list(saved) if isinstance(saved,list) and saved and all(type(i) is int and 0<=i<len(segs) for i in saved) and len(set(saved))==len(saved) else list(range(len(segs)))
+                    self.segment_index = 0
+                    self.current_frame = 0
+                    if not fr:
+                        self.phase = "failed"
+                        self.message = "没有找到 JPG / HEIF 图片（也查找了子文件夹）"
+                        self.changed.emit("phase")
+                        return
+                    self.segment_index = -1 if merge and len(segs)>1 else max(range(len(segs)), key=lambda k: segs[k].count)
+                    self.audio.tracks = [t for t in self.audio.tracks if not t.videoOriginal]
+                    self.changed.emit("frames")
+                    self.start_analysis()
+                self.on_main_wait(done)
+
+            self.on_main(self.trim_cache)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def import_video(self, path, start=0., seconds=10., fps=30., profile=None):
+        from ..core.video_import import extract, VideoImportCancelled
+        from ..core import video_source, video_stabilization
+        self.stop(); self._cancel.cancel()
+        self._subject_rollback = None
+        self._import_gen += 1
+        gen, flag = self._import_gen, CancelFlag()
+        self._cancel = flag
+        self.phase, self.message = 'importing', '正在读取视频帧… 0%'
+        self.changed.emit('phase')
+        def work():
+            with cache_policy.operation(self.cache.root):
+                try:
+                    last_percent = -1
+                    def progress(p):
+                        nonlocal last_percent
+                        percent = int(p*100)
+                        if percent == last_percent: return
+                        last_percent = percent
+                        def update():
+                            if gen != self._import_gen or flag.cancelled: return
+                            self.message = f'正在读取视频帧… {percent}%'; self.changed.emit('phase')
+                        self.on_main(update)
+                    fr, actual_fps = extract(path, start, seconds, fps, profile, progress=progress, cancelled=lambda: flag.cancelled)
+                    last_percent = -1
+                    def motion_progress(p):
+                        percent = int(p*100)
+                        def update():
+                            if gen != self._import_gen or flag.cancelled: return
+                            self.message = f'正在分析画面防抖… {percent}%'; self.changed.emit('phase')
+                        self.on_main(update)
+                    video_stabilization.prepare(fr, path, start, actual_fps, profile=profile,
+                        progress=motion_progress, cancelled=lambda: flag.cancelled)
+                    original = video_source.original_track(fr)
+                    def done():
+                        if gen != self._import_gen or flag.cancelled: return
+                        if self.analysis is not None: self.cache.save_analysis(self.analysis)
+                        self.project_path="";self.project_dirty=True
+                        self.frames, self.segments = fr, [F.BurstSegment(0, len(fr), actual_fps)]
+                        self.cache.retain_records(fr)
+                        self.segment_index, self.merge_group_indices, self.current_frame = 0, [0], 0
+                        self.analysis = self.job = self.preview_image = self.source_image = self.source_detail = None
+                        self.selection.dropUntracked = False
+                        self.audio.tracks = [t for t in self.audio.tracks if not t.videoOriginal] + ([original] if original else [])
+                        self.timeline_message = '视频已导入，可在「画面」调节防抖。' + ('已导入视频原声。' if original else '')
+                        self.changed.emit('audio')
+                        cache_policy.protect(self._cache_owner,self.protected_cache())
+                        self.changed.emit('frames'); self.start_analysis()
+                    self.on_main_wait(done)
+                except VideoImportCancelled:
+                    pass
+                except Exception as error:
+                    message = str(error)
+                    log.exception('video import failed')
+                    def failed():
+                        if gen != self._import_gen or flag.cancelled: return
+                        self.phase = 'ready' if self.analysis is not None else 'failed'
+                        self.message = message; self.timeline_message = message
+                        self.changed.emit('phase'); self.changed.emit('analysis')
+                    self.on_main(failed)
+            self.on_main(self.trim_cache)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def import_video_gyro(self, path):
+        from ..core.video_stabilization import import_gyro
+        if self.analysis is None: return
+        fr, gen, flag = self.current_frames, self._import_gen, self._cancel
+        self.timeline_message = '正在读取陀螺仪记录…'; self.changed.emit('analysis')
+        def work():
             try:
-                fr = F.import_frames(paths)
-                segs = F.segments(fr)
-            except Exception:
-                log.exception("import failed")
-                fr, segs = [], []
-            log.info("import found %d photos in %d bursts", len(fr), len(segs))
-
-            def done():
-                if gen != self._import_gen:
-                    return
-                self.frames, self.segments = fr, segs
-                saved=self._group_orders.get(fingerprint(fr),[])
-                self.merge_group_indices=list(saved) if isinstance(saved,list) and saved and all(type(i) is int and 0<=i<len(segs) for i in saved) and len(set(saved))==len(saved) else list(range(len(segs)))
-                self.segment_index = 0
-                self.current_frame = 0
-                if not fr:
-                    self.phase = "failed"
-                    self.message = "没有找到 JPG / HEIF 图片（也查找了子文件夹）"
-                    self.changed.emit("phase")
-                    return
-                self.segment_index = -1 if merge and len(segs)>1 else max(range(len(segs)), key=lambda k: segs[k].count)
-                self.changed.emit("frames")
-                self.start_analysis()
-            self.on_main(done)
-
+                sync = import_gyro(fr, path, cancelled=lambda: flag.cancelled)
+                message = (f'已同步：{sync["offset"]*1000:+.1f} ms，可信度 {sync["score"]:.0%}' if sync['valid']
+                    else '已导入陀螺仪记录；自动同步未通过，请在「画面」调整时间偏移。')
+                def done():
+                    if gen != self._import_gen or flag.cancelled: return
+                    self.look.stabilization.autoSync = True
+                    self.timeline_message = message; self.settings_changed()
+                self.on_main(done)
+            except Exception as error:
+                message = str(error)
+                def failed():
+                    if gen != self._import_gen or flag.cancelled: return
+                    self.timeline_message = message; self.changed.emit('analysis')
+                self.on_main(failed)
         threading.Thread(target=work, daemon=True).start()
 
     @property
@@ -361,6 +474,7 @@ class AppState(QObject):
 
     def remember_group_order(self):
         if not self.frames:return
+        if not self._project_loading:self.project_dirty=True
         self._group_orders[fingerprint(self.frames)]=list(self.merge_group_indices)
         self._group_orders=dict(list(self._group_orders.items())[-20:])
         self.save_settings()
@@ -513,66 +627,71 @@ class AppState(QObject):
             self.on_main(update)
 
         def work():
-            try:
-                edits, shots = keep, kept_shots
-                if hint is None and not fresh:
-                    cached = self.cache.load_analysis(fp)
-                    if cached is not None:
-                        if len(clips) <= 1 or (cached.groupedDetection and cached.clips == clips):
-                            cached.clips = clips
-                            cached.track = build_track(cached)
-                            self.on_main(lambda: self._finish_analysis(cached, flag))
-                            return
-                        if edits is None:
-                            edits = (dict(cached.manualEye), set(cached.excluded))
-                            shots = [s.copy() for s in cached.closeups]
-                self.stage = "加载识别模型"
-                self.on_main(lambda: self.changed.emit("progress"))
-                t0 = time.time()
-                if subject == "aircraft":
-                    def make_models():
-                        detector = YOLOModel(str(models_dir()/"BirdDetector.onnx"),0,device)
-                        description = "机身："+gpu.describe_device(detector.providers,device)+" · 机头：CPU"
-                        def show_device():
-                            if not flag.cancelled:
-                                self.device_text = description;self.changed.emit("device")
-                        self.on_main(show_device)
-                        return SimpleNamespace(detector=detector)
-                    a = AircraftAnalyzer(cache=self.cache,parts_directory=parts_directory,models_factory=make_models).analyze(
-                        fr,fps,hint,progress,lambda:flag.cancelled,clips=clips)
-                else:
-                    models = self._get_models(flag)
-                    log.info("analysis of %d frames on %s (providers %s)", len(fr), models.device_description, models.detector.providers)
-                    a = Analyzer(models).analyze(fr, fps, hint, progress, lambda: flag.cancelled, clips=clips)
-                log.info("%s analysis done in %.1fs: %d/%d targets",subject,time.time()-t0,sum(p.target is not None for p in a.perFrame),a.count)
-                if edits:
-                    a.manualEye, a.excluded = edits
-                    if a.manualEye:
-                        a.track = build_track(a)
-                a.clips, a.closeups = clips, shots
-                if clips:a.track = build_track(a)
-                self.cache.save_analysis(a)
-                self.on_main(lambda: self._finish_analysis(a, flag))
-            except Cancelled:
-                pass
-            except Exception as e:
-                log.exception("analysis failed")
-                msg = f"分析失败：{e}"
+            with cache_policy.operation(self.cache.root):
+                try:
+                    edits, shots = keep, kept_shots
+                    if hint is None and not fresh:
+                        cached = self.cache.load_analysis(fp)
+                        if cached is not None:
+                            if len(clips) <= 1 or (cached.groupedDetection and cached.clips == clips):
+                                cached.clips = clips
+                                cached.track = build_track(cached)
+                                self.on_main(lambda: self._finish_analysis(cached, flag))
+                                return
+                            if edits is None:
+                                edits = (dict(cached.manualEye), set(cached.excluded))
+                                shots = [s.copy() for s in cached.closeups]
+                    self.stage = "加载识别模型"
+                    self.on_main(lambda: self.changed.emit("progress"))
+                    t0 = time.time()
+                    if subject == "aircraft":
+                        def make_models():
+                            detector = YOLOModel(str(models_dir()/"BirdDetector.onnx"),0,device)
+                            description = "机身："+gpu.describe_device(detector.providers,device)+" · 机头：CPU"
+                            def show_device():
+                                if not flag.cancelled:
+                                    self.device_text = description;self.changed.emit("device")
+                            self.on_main(show_device)
+                            return SimpleNamespace(detector=detector)
+                        a = AircraftAnalyzer(cache=self.cache,parts_directory=parts_directory,models_factory=make_models).analyze(
+                            fr,fps,hint,progress,lambda:flag.cancelled,clips=clips)
+                    else:
+                        models = self._get_models(flag)
+                        log.info("analysis of %d frames on %s (providers %s)", len(fr), models.device_description, models.detector.providers)
+                        a = Analyzer(models).analyze(fr, fps, hint, progress, lambda: flag.cancelled, clips=clips)
+                    log.info("%s analysis done in %.1fs: %d/%d targets",subject,time.time()-t0,sum(p.target is not None for p in a.perFrame),a.count)
+                    if edits:
+                        a.manualEye, a.excluded = edits
+                        if a.manualEye:
+                            a.track = build_track(a)
+                    a.clips, a.closeups = clips, shots
+                    if clips:a.track = build_track(a)
+                    self.cache.save_analysis(a)
+                    self.on_main(lambda: self._finish_analysis(a, flag))
+                except Cancelled:
+                    pass
+                except Exception as e:
+                    log.exception("analysis failed")
+                    msg = f"分析失败：{e}"
 
-                def fail():
-                    if flag is self._cancel and not flag.cancelled:
-                        self.phase, self.message = "failed", msg
-                        self.changed.emit("phase")
-                self.on_main(fail)
+                    def fail():
+                        if flag is self._cancel and not flag.cancelled:
+                            self.phase, self.message = "failed", msg
+                            self.changed.emit("phase")
+                    self.on_main(fail)
+
+            self.on_main(self.trim_cache)
 
         threading.Thread(target=work, daemon=True).start()
 
     def _finish_analysis(self, a: SequenceAnalysis, flag: CancelFlag):
         if flag is not self._cancel or flag.cancelled:
             return
+        if not self._project_loading:self.project_dirty=True
         self.source_detail = None
         self.current_frame = int(clamp(self.current_frame, 0, max(0, a.count - 1)))
         self.analysis = a
+        cache_policy.protect(self._cache_owner,self.protected_cache())
         self._subject_rollback = None
         self.timeline_message = ""
         self.phase = "ready"
@@ -581,7 +700,10 @@ class AppState(QObject):
         self.changed.emit("analysis")
         self.rebuild_job(immediate=True)
 
+        self.trim_cache()
+
     def cancel_analysis(self):
+        self._import_gen += 1
         self._cancel.cancel()
         if self._subject_rollback is not None:
             self._restore_subject_transition()
@@ -596,6 +718,7 @@ class AppState(QObject):
     # ------------------------------------------------------------------ settings → job
 
     def settings_changed(self, topic: str = "settings"):
+        if self.analysis is not None and not self._project_loading:self.project_dirty=True
         self._save_timer.start()
         self.rebuild_job()
         self.changed.emit(topic)
@@ -651,6 +774,7 @@ class AppState(QObject):
     def _edited(self):
         a = self.analysis
         a.track = build_track(a)
+        if not self._project_loading:self.project_dirty=True
         self._analysis_save_timer.start()
         self.changed.emit("analysis")
         self.rebuild_job(immediate=True)
@@ -672,6 +796,7 @@ class AppState(QObject):
         self.project_changed()
 
     def project_changed(self):
+        if not self._project_loading:self.project_dirty=True
         self._analysis_save_timer.start()
         self.changed.emit("analysis")
         self.rebuild_job(immediate=False)
@@ -698,6 +823,7 @@ class AppState(QObject):
         if a is None or not 0 <= self.current_frame < a.count:
             return
         a.excluded ^= {self.current_frame}
+        if not self._project_loading:self.project_dirty=True
         self._analysis_save_timer.start()
         self.changed.emit("analysis")
         self.rebuild_job(immediate=True)
@@ -705,6 +831,7 @@ class AppState(QObject):
     def restore_all_excluded(self):
         if self.analysis is not None:
             self.analysis.excluded.clear()
+            if not self._project_loading:self.project_dirty=True
             self._analysis_save_timer.start()
             self.changed.emit("analysis")
             self.rebuild_job(immediate=True)
@@ -993,6 +1120,7 @@ class AppState(QObject):
         self._audio_changed(path_changed=True)
 
     def audio_settings_changed(self):
+        if self.analysis is not None and not self._project_loading:self.project_dirty=True
         self._audio_changed(path_changed=False)
 
     def _audio_changed(self, path_changed: bool):
@@ -1120,6 +1248,7 @@ class AppState(QObject):
         return True
 
     def watermark_changed(self, path_changed: bool = False):
+        if self.analysis is not None and not self._project_loading:self.project_dirty=True
         if path_changed:
             self._load_watermark_image()
         self._save_timer.start()
@@ -1151,6 +1280,7 @@ class AppState(QObject):
     # ------------------------------------------------------------------ export
 
     def export_to(self, kind: str, path: str):
+        self.cleanup_export_token+=1;self.last_export_kind=kind
         if self.export_running or self._closing:
             return
         a = self.analysis
@@ -1179,34 +1309,36 @@ class AppState(QObject):
             self.on_main(update)
 
         def work():
-            ex = VideoExporter()
-            t0 = time.time()
-            try:
-                log.info("export start kind=%s size=%s fps=%s codec=%r quality=%r encoder=%r interpolation=%r frames=%d workers=%d",
-                         kind,job.output_size,job.export.outputFPS,job.export.codec,job.export.quality,
-                         job.export.encoder,job.export.interpolation,len(job.output_frames),ex.workers)
-                if kind == "video":
-                    ex.export_video(job, path, music, progress, lambda: flag.cancelled)
-                elif kind == "images":
-                    ex.export_images(job, path, progress, lambda: flag.cancelled)
-                else:
-                    ex.export_gif(job, path, progress=progress, cancelled=lambda: flag.cancelled)
-                enc = f"，编码器 {ex.encoder_used}" if kind == "video" and ex.encoder_used else ""
-                msg, prog = f"导出完成（{time.time() - t0:.0f} 秒{enc}）", 1.0
-                log.info("export %s done: %s", kind, msg)
-            except ExportCancelled:
-                msg, prog = "已取消", 0.0
-            except Exception as e:
-                log.exception("export %s failed", kind)
-                msg, prog = str(e)+"。可在帮助中导出诊断日志。", 0.0
+            with cache_policy.operation(self.cache.root) as lease:
+                ex = VideoExporter()
+                t0 = time.time()
+                try:
+                    log.info("export start kind=%s size=%s fps=%s codec=%r quality=%r encoder=%r interpolation=%r frames=%d workers=%d",
+                             kind,job.output_size,job.export.outputFPS,job.export.codec,job.export.quality,
+                             job.export.encoder,job.export.interpolation,len(job.output_frames),ex.workers)
+                    if kind == "video":
+                        ex.export_video(job, path, music, progress, lambda: flag.cancelled)
+                    elif kind == "images":
+                        ex.export_images(job, path, progress, lambda: flag.cancelled)
+                    else:
+                        ex.export_gif(job, path, progress=progress, cancelled=lambda: flag.cancelled)
+                    enc = f"，编码器 {ex.encoder_used}" if kind == "video" and ex.encoder_used else ""
+                    msg, prog = f"导出完成（{time.time() - t0:.0f} 秒{enc}）", 1.0
+                    log.info("export %s done: %s", kind, msg)
+                except ExportCancelled:
+                    msg, prog = "已取消", 0.0
+                except Exception as e:
+                    log.exception("export %s failed", kind)
+                    msg, prog = str(e)+"。可在帮助中导出诊断日志。", 0.0
 
-            def done():
-                if flag is not self._export_cancel:
-                    return
-                self.export_running, self.export_message, self.export_progress = False, msg, prog
-                self._export_thread = None
-                self.changed.emit("export")
-            self.on_main(done)
+                def done():
+                    if flag is not self._export_cancel:
+                        return
+                    self.export_running, self.export_message, self.export_progress = False, msg, prog
+                    self._export_thread = None
+                    self.changed.emit("export")
+                cache_policy.end(lease)
+                self.on_main_wait(done)
         self._export_thread = threading.Thread(target=work, daemon=True, name="BirdLock-export")
         self._export_thread.start()
 
@@ -1231,6 +1363,7 @@ class AppState(QObject):
         d = {"version": 3, **bird.untrimmed().to_dict(), "subject": self.subject,
              "profiles": {k:v.untrimmed().to_dict() for k,v in self._subject_profiles.items()},
              "watermark": self.watermark.to_dict(), "audio": self.audio.to_dict(),
+             "cacheLimitGB":self.cache_limit_gb,"askCleanupAfterExport":self.ask_cleanup_after_export,
              "device": self.device, "gpuImage": self.gpu_image, "agreementAccepted": self.agreement_accepted,
              "inspectorTab": getattr(self, "inspector_tab", 0), "groupOrders": self._group_orders}
         try:
@@ -1246,6 +1379,8 @@ class AppState(QObject):
         except Exception:
             self.composition = PRESETS[1].composition.copy()
             return
+        self.cache_limit_gb=max(0,min(4096,int(d.get("cacheLimitGB",20))))
+        self.ask_cleanup_after_export=bool(d.get("askCleanupAfterExport",True))
         self._group_orders = d.get("groupOrders",{}) if isinstance(d.get("groupOrders"),dict) else {}
         self.composition = Composition.from_dict(d.get("composition"))
         self.look = LookSettings.from_dict(d.get("look"))

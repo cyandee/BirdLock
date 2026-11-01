@@ -95,7 +95,7 @@ def _ordered_render(frames: list[OutputFrame], render: Callable[[OutputFrame], n
                     cancelled: Callable[[], bool], workers: int):
     """Yield (index, image) in order, rendering a few frames ahead in parallel.
     Consecutive identical output frames (slow-motion holds) are rendered once."""
-    window = max(2, workers * 2)
+    window = max(2, workers + 1)
     with ThreadPoolExecutor(max_workers=workers) as ex:
         queue = collections.deque()
         it = iter(enumerate(frames))
@@ -175,7 +175,7 @@ def _encoder_args(codec: VideoCodec, quality, W: int, H: int, fps: float, prefer
 def _audio_filter(s: AudioSettings, duration: float) -> str:
     fi = min(max(0.0, s.fadeIn), duration / 2)
     fo = min(max(0.0, s.fadeOut), duration - fi)
-    f = [f"atrim=0:{duration:.3f}", "asetpts=PTS-STARTPTS", f"volume={max(0.0, min(2.0, s.volume)):.3f}"]
+    f = [f"atrim=0:{duration:.9f}", "asetpts=PTS-STARTPTS", f"volume={max(0.0, min(2.0, s.volume)):.3f}"]
     if fi > 0.01:
         f.append(f"afade=t=in:st=0:d={fi:.3f}")
     if fo > 0.01:
@@ -188,7 +188,7 @@ def _audio_input(s: AudioSettings) -> list[str]:
     # _audio_plan limits non-looping tracks to their remaining source duration before padding;
     # keeping the decoder alive does not repeat their audible content.
     args = ["-stream_loop", "-1"] if s.loop or IS_WINDOWS else []
-    args += ["-ss", f"{max(0.0, s.startOffset):.3f}", "-i", s.source_path]
+    args += ["-ss", f"{max(0.0, s.startOffset):.9f}", "-i", s.source_path]
     return args
 
 
@@ -198,6 +198,14 @@ def _source_duration(path):
     stat = os.stat(path)
     key = (path, stat.st_mtime_ns, stat.st_size)
     if key not in _audio_lengths:
+        if str(path).lower().endswith('.wav'):
+            import wave
+            try:
+                with wave.open(str(path),'rb') as wav:
+                    _audio_lengths[key] = wav.getnframes()/wav.getframerate()
+                    return _audio_lengths[key]
+            except (OSError, EOFError, wave.Error):
+                pass
         r = _run_quiet([_ffmpeg(), "-hide_banner", "-i", path], timeout=20)
         match = re.search(rb"Duration: (\d+):(\d+):([\d.]+)", r.stderr)
         if not match:
@@ -213,6 +221,8 @@ def _audio_plan(settings, duration, first_input=0):
     gain = mix_gain(layers,duration)
     inputs, filters, labels = [], [], []
     for i, layer in enumerate(layers):
+        if layer.arrangementError:
+            raise ExportError("无法编排视频原声：" + layer.arrangementError)
         path = layer.source_path
         if not path or not os.path.isfile(path):
             raise ExportError("找不到音频：" + (layer.assetID or os.path.basename(layer.path)))
@@ -228,8 +238,14 @@ def _audio_plan(settings, duration, first_input=0):
         track.volume = max(0, min(2, track.volume)) * gain
         inputs += _audio_input(track)
         label = f"layer{i}"
+        from .closeup_audio import audible_ranges
+        mute = ""
+        if layer.muteRanges:
+            spans = audible_ranges(layer, start, start + span)
+            expression = '+'.join(f'gte(t,{a-start:.9f})*lt(t,{b-start:.9f})' for a,b in spans) or '0'
+            mute = f",aeval=exprs='val(ch)*({expression})':channel_layout=same"
         filters.append(f"[{first_input + i}:a]" + _audio_filter(track, span) +
-                       f",adelay={start * 1000:.3f}:all=1,apad,atrim=0:{duration:.6f}[{label}]")
+                       mute + f",adelay={start * 1000:.3f}:all=1,apad,atrim=0:{duration:.6f}[{label}]")
         labels.append(f"[{label}]")
     if not labels:
         return [], "", None
@@ -349,13 +365,15 @@ def _stream_frames(cmd: list[str], frames: list[OutputFrame], render, progress, 
 
 class VideoExporter:
     def __init__(self, workers: int | None = None):
-        self.workers = workers or max(2, min(8, (os.cpu_count() or 4) - 1))
+        from .resource_budget import workers as budget_workers
+        self.workers = workers or budget_workers(maximum=16)
         self.encoder_used = ""
         VideoExporter._default_workers = self.workers
 
     @staticmethod
     def workers_default() -> int:
-        return getattr(VideoExporter, "_default_workers", None) or max(2, min(8, (os.cpu_count() or 4) - 1))
+        from .resource_budget import workers as budget_workers
+        return getattr(VideoExporter, "_default_workers", None) or budget_workers(maximum=16)
 
     def export_video(self, job: RenderJob, out: str, audio: AudioSettings | None = None,
                      progress: Callable[[float], None] = lambda p: None, cancelled: Callable[[], bool] = lambda: False):
@@ -371,8 +389,12 @@ class VideoExporter:
             raise ExportError("没有可导出的帧")
         W, H = job.output_size
         s = job.export
+        from .resource_budget import workers as budget_workers
+        pixels=max((f.pixelWidth*f.pixelHeight for f in getattr(getattr(job,"analysis",None),"frames",[])),default=W*H)
+        active_workers=min(self.workers,budget_workers(int(pixels*job.export_decode_scale**2*8+W*H*12)*2,maximum=16))
+        log.info('export resource workers=%d requested=%d size=%dx%d',active_workers,self.workers,W,H)
 
-        cache = SourceCache(job, proxy=not s.useFullResolution, scale=job.export_decode_scale, cancelled=cancelled)
+        cache = SourceCache(job, proxy=not s.useFullResolution, scale=job.export_decode_scale, limit=max(2,active_workers*2),cancelled=cancelled)
         interp = FlowInterpolator() if s.interpolation == FrameInterpolation.AI else None
 
         def render(of):
@@ -400,7 +422,7 @@ class VideoExporter:
         while True:
             cmd, args = build_cmd(preference)
             try:
-                _stream_frames(cmd, frames, render, progress, cancelled, W, H, self.workers)
+                _stream_frames(cmd, frames, render, progress, cancelled, W, H, active_workers)
                 return
             except ExportError as e:
                 hardware = self.encoder_used.endswith(("_nvenc", "_amf", "_qsv", "_videotoolbox"))

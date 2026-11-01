@@ -13,9 +13,11 @@ struct ContentView: View {
     /// Imports (or queues until the agreement is accepted) photos / music opened from the command line or Finder.
     private func open(_ urls: [URL]) {
         guard agreed else { pendingOpen += urls; return }
+        if urls.count==1,urls[0].pathExtension.lowercased()=="birdlock" { state.openProjectPanel(urls[0]);return }
+        if urls.contains(where: { VideoImporter.extensions.contains($0.pathExtension.lowercased()) }) { if state.confirmCanLeave() { state.importURLs(urls) };return }
         let audio = urls.filter { isAudioFile($0) }
         if audio.count == urls.count, state.analysis != nil, let u = audio.first { state.setAudio(u) }
-        else if state.frames.isEmpty || !urls.isEmpty { state.importURLs(urls.filter { !isAudioFile($0) }) }
+        else if state.frames.isEmpty || !urls.isEmpty { if state.confirmCanLeave() { state.importURLs(urls.filter { !isAudioFile($0) }) } }
     }
 
     var body: some View {
@@ -36,7 +38,8 @@ struct ContentView: View {
                         StatusCard {
                             HStack(spacing: 14) {
                                 ProgressView().controlSize(.small)
-                                Text("正在读取照片…").font(.headline)
+                                Text(state.importMessage).font(.headline)
+                                Button("取消") { state.cancelAnalysis() }
                             }
                         }
                     }
@@ -68,8 +71,21 @@ struct ContentView: View {
             }
         }
         .background(Theme.canvas)
+        .background(ProjectWindowGuard(state:state).frame(width:0,height:0))
         .toolbar { MainToolbar() }
         .sheet(isPresented: $state.showExportSheet) { ExportSheet() }
+        .sheet(isPresented: $state.showReleaseNotes,onDismiss:{ state.releaseNotice.acknowledge();state.releaseNotesPending=false }) { ReleaseNotesView() }
+        .task {
+            state.releaseNotesPending=state.releaseNotice.start()
+            while !Task.isCancelled && state.releaseNotesPending {
+                try? await Task.sleep(for:.milliseconds(500))
+                if agreed && !state.workspaceBusy && !state.showExportSheet && !state.showCacheSheet && state.videoImportURL == nil && !state.showReleaseNotes { state.showReleaseNotes=true;return }
+            }
+        }
+        .sheet(isPresented: $state.showCacheSheet) { CacheSettingsView().environment(state) }
+        .sheet(isPresented: Binding(get: { state.videoImportURL != nil }, set: { if !$0 { state.videoImportURL = nil } })) {
+            if let url = state.videoImportURL { VideoImportSheet(url: url).environment(state) }
+        }
         .preferredColorScheme(.dark)
         .onAppear {
             // `open BirdLock.app --args <folder>` imports a folder directly (handy for testing)
@@ -101,12 +117,13 @@ struct ContentView: View {
         }
         group.notify(queue: .main) {
             guard !urls.isEmpty else { return }
+            if urls.contains(where: { VideoImporter.extensions.contains($0.pathExtension.lowercased()) || $0.pathExtension.lowercased()=="birdlock" }) { open(urls); return }
             // a dropped audio file (with a burst already loaded) becomes the background music
             let audio = urls.filter { isAudioFile($0) }
             if audio.count == urls.count, state.analysis != nil, let u = audio.first {
                 state.setAudio(u)
             } else {
-                state.importURLs(urls.filter { !isAudioFile($0) })
+                if state.confirmCanLeave() { state.importURLs(urls.filter { !isAudioFile($0) }) }
             }
         }
     }
@@ -197,11 +214,12 @@ struct DropZoneView: View {
                 Circle().fill(Theme.accent.opacity(0.12)).frame(width: 110, height: 110)
                 Image(systemName: "bird.fill").font(.system(size: 46)).foregroundStyle(Theme.accent)
             }
-            Text("把连拍照片拖到这里").font(.title2.weight(.semibold))
-            Text("支持 JPG / HEIF，整个文件夹或多选照片都可以。\n自动识别并锁定主体，一键生成连拍视频。")
+            Text("把连拍照片或视频拖到这里").font(.title2.weight(.semibold))
+            Text("照片支持 JPG / HEIF，视频推荐 SDR MP4 / MOV。\n自动识别并锁定主体，一键生成连拍视频。")
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Button("选择文件夹…") { openImportPanel(state) }
                 .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.large)
+            Button("导入视频（实验）…") { openVideoPanel(state) }
         }
         .padding(60)
         .background(

@@ -12,6 +12,11 @@ VERSION="${VERSION:-$EXPECTED_VERSION}"
 [ "$VERSION" = "$EXPECTED_VERSION" ] || { echo "打包版本与 VERSION 不一致" >&2; exit 1; }
 python3 -I scripts/fetch_aircraft_model.py
 python3 -I scripts/verify_bundle.py --aircraft-resources SharedResources/AircraftModels
+python3 -I scripts/verify_bundle.py --lens-resources SharedResources/LensProfiles
+TELEMETRY_DIR="$ROOT/dist/telemetry/macos"
+TELEMETRY_ARGS=()
+[ "${UNIVERSAL:-0}" = "1" ] && TELEMETRY_ARGS=(--universal)
+python3 -I scripts/prepare_telemetry_helper.py --directory "$TELEMETRY_DIR" --platform macos "${TELEMETRY_ARGS[@]}"
 
 # UNIVERSAL=1 builds for Apple silicon and Intel (needed when distributing to other Macs)
 ARCH_ARGS=()
@@ -25,12 +30,17 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Models"
 cp "$BIN" "$APP/Contents/MacOS/BirdLock"
 cp "${BIN:h}/BirdLockInterpolation" "$APP/Contents/MacOS/BirdLockInterpolation"
+cp "$TELEMETRY_DIR/BirdLockTelemetry" "$APP/Contents/MacOS/BirdLockTelemetry"
 chmod 755 "$APP/Contents/MacOS/BirdLockInterpolation"
 chmod 755 "$APP/Contents/MacOS/BirdLock"
 cp VERSION "$APP/Contents/Resources/"
 cp -R SharedResources/Audio "$APP/Contents/Resources/Audio"
 cp -R SharedResources/Support "$APP/Contents/Resources/Support"
 cp -R SharedResources/AircraftModels "$APP/Contents/Resources/AircraftModels"
+cp -R SharedResources/LensProfiles "$APP/Contents/Resources/LensProfiles"
+mkdir -p "$APP/Contents/Resources/Telemetry"
+cp "$TELEMETRY_DIR/manifest.json" "$APP/Contents/Resources/Telemetry/manifest.json"
+cp -R "$TELEMETRY_DIR/Licenses" "$APP/Contents/Resources/Telemetry/Licenses"
 cp -R Models/*.mlmodelc "$APP/Contents/Resources/Models/"
 cp Models/*.json "$APP/Contents/Resources/Models/" 2>/dev/null || true
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
@@ -38,7 +48,7 @@ cp Models/*.json "$APP/Contents/Resources/Models/" 2>/dev/null || true
 # Bundled documents: agreement, licenses, manual (HTML + PDF)
 DOCS="$APP/Contents/Resources/Docs"
 mkdir -p "$DOCS"
-cp docs/用户协议.md docs/第三方许可.md docs/使用说明.md docs/自动更新.md LICENSE "$DOCS/"
+cp docs/用户协议.md docs/第三方许可.md docs/使用说明.md docs/自动更新.md docs/视频导入与镜头配置.md docs/工程与缓存管理.md docs/更新说明-1.9.0.md LICENSE "$DOCS/"
 python3 -I scripts/md2html.py docs/使用说明.md "$DOCS/使用说明.html"
 HTML2PDF="$ROOT/.build/html2pdf"
 [ "$HTML2PDF" -nt scripts/html2pdf.swift ] || swiftc -O scripts/html2pdf.swift -o "$HTML2PDF"
@@ -63,8 +73,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSApplicationCategoryType</key><string>public.app-category.photography</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <key>UTExportedTypeDeclarations</key>
+  <array><dict><key>UTTypeIdentifier</key><string>app.birdlock.project</string><key>UTTypeDescription</key><string>BirdLock 工程</string><key>UTTypeConformsTo</key><array><string>public.json</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>birdlock</string></array></dict></dict></array>
   <key>CFBundleDocumentTypes</key>
   <array>
+    <dict><key>CFBundleTypeName</key><string>BirdLock 工程</string><key>CFBundleTypeRole</key><string>Editor</string><key>LSHandlerRank</key><string>Owner</string><key>LSItemContentTypes</key><array><string>app.birdlock.project</string></array></dict>
     <dict>
       <key>CFBundleTypeName</key><string>连拍文件夹</string>
       <key>CFBundleTypeRole</key><string>Viewer</string>

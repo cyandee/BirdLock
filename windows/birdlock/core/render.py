@@ -38,6 +38,8 @@ class OutputFrame:
     closeup: int = -1
     shotTime: float = 0.0
     audioCycle: int = 0
+    # (source frame index, fractional cell start/end, output seconds), independent of repeated pixels.
+    sourceAudio: tuple = ()
 
 
 def output_frames(used: list[int], source_fps: float, s: ExportSettings) -> list[OutputFrame]:
@@ -45,19 +47,34 @@ def output_frames(used: list[int], source_fps: float, s: ExportSettings) -> list
         return []
     if s.loop == LoopMode.FORWARD:
         order = list(used)
+        directions = [1] * len(used)
     elif s.loop == LoopMode.REVERSE:
         order = list(reversed(used))
+        directions = [-1] * len(used)
     else:
         order = list(used) + list(reversed(used))[1:]
+        directions = [1] * len(used) + [-1] * (len(used)-1)
     if s.repeatCount > 1:
         o = list(order)
+        d = list(directions)
         for _ in range(1, s.repeatCount):
             o += order[1:] if s.loop == LoopMode.PING_PONG else order
+            d += directions[1:] if s.loop == LoopMode.PING_PONG else directions
         order = o
+        directions = d
     n = len(order)
-    if n == 1:
-        return [OutputFrame(order[0], order[0], 0.0, 1.0)]
     step = s.speed * source_fps / s.outputFPS
+    def audio_spans(position):
+        at, limit, spans = position, min(n, position+step), []
+        while at < limit-1e-9:
+            cell = min(n-1,math.floor(at)); fraction = at-math.floor(at)
+            stop = min(limit,cell+1); to = fraction+stop-at
+            backward = directions[cell] < 0
+            spans.append((order[cell],1-fraction if backward else fraction,1-to if backward else to,(stop-at)/step/s.outputFPS))
+            at = stop
+        return tuple(spans)
+    if n == 1:
+        return [OutputFrame(order[0], order[0], 0.0, 1.0, sourceAudio=audio_spans(0))]
     count = int(math.floor((n - 1) / step)) + 1
     total = count / s.outputFPS
     out = []
@@ -75,9 +92,9 @@ def output_frames(used: list[int], source_fps: float, s: ExportSettings) -> list
         fade = clamp(fade, 0.0, 1.0)
         if s.interpolation == FrameInterpolation.NEAREST:
             idx = i0 if fr < 0.5 else i1
-            out.append(OutputFrame(order[idx], order[idx], 0.0, fade, time))
+            out.append(OutputFrame(order[idx], order[idx], 0.0, fade, time,sourceAudio=audio_spans(pos)))
         else:
-            out.append(OutputFrame(order[i0], order[i1], 0.0 if fr < 1e-6 else fr, fade, time))
+            out.append(OutputFrame(order[i0], order[i1], 0.0 if fr < 1e-6 else fr, fade, time,sourceAudio=audio_spans(pos)))
     return out
 
 
@@ -103,9 +120,9 @@ def project_frames(used, clips, closeups, source_fps, settings):
             arranged += [OutputFrame(shot.frame,shot.frame,0,1,closeup=match,shotTime=k/settings.outputFPS) for k in range(count)]
         active = match
     if settings.loop == LoopMode.REVERSE:
-        arranged.reverse()
+        arranged = [replace(f,sourceAudio=tuple((i,b,a,d) for i,a,b,d in reversed(f.sourceAudio))) for f in reversed(arranged)]
     elif settings.loop == LoopMode.PING_PONG:
-        arranged += list(reversed(arranged))[1:]
+        arranged += [replace(f,sourceAudio=tuple((i,b,a,d) for i,a,b,d in reversed(f.sourceAudio))) for f in list(reversed(arranged))[1:]]
     cycle = list(arranged)
     for repetition in range(1,settings.repeatCount):
         arranged += [replace(f,audioCycle=repetition) for f in (cycle[1:] if settings.loop == LoopMode.PING_PONG else cycle)]
@@ -357,13 +374,15 @@ class RenderJob:
         sharp = np.array([p.sharpness if p.sharpness is not None else np.nan for p in analysis.perFrame])
         med_sharp = median(sharp) or 0.0
         end = min(n - 1, selection.trimEnd if selection.trimEnd >= 0 else n - 1)
+        from .video_stabilization import cache_file
+        camera_mode = look.stabilization.enabled and look.stabilization.framing == 'camera' and cache_file(analysis.frames) is not None
         st = []
         for i in range(n):
             if i < selection.trimStart or i > end:
                 st.append(STATUS_TRIMMED)
             elif i in analysis.excluded:
                 st.append(STATUS_EXCLUDED)
-            elif selection.dropUntracked and not self.track.has_data[i]:
+            elif selection.dropUntracked and not camera_mode and not self.track.has_data[i]:
                 st.append(STATUS_UNTRACKED)
             elif selection.dropBlurry and math.isfinite(sharp[i]) and med_sharp > 0 and sharp[i] < med_sharp * selection.blurThreshold:
                 st.append(STATUS_BLURRY)
@@ -385,17 +404,23 @@ class RenderJob:
             self.plan=CompositionPlan([x for p in parts for x in p.xforms],float(W),float(H),max(p.max_upscale for p in parts),
                  sum(p.out_of_bounds_frames for p in parts),sum(p.shifted_frames for p in parts),sum(p.zoomed_frames for p in parts),
                  sum(p.image_limited_frames for p in parts),parts[0].mirrored)
+        from .video_stabilization import compose_plan
+        stabilized, self.stabilization_status = compose_plan(analysis, self.track, composition, export, self.used, look.stabilization)
+        if stabilized is not None: self.plan = stabilized
         self.gains = deflicker_gains(analysis, look)
         self.output_frames = project_frames(self.used, analysis.clips, analysis.closeups, analysis.fps, export) if analysis.clips or analysis.closeups else output_frames(self.used, analysis.fps, export)
+        from .video_source import arrange
+        self.original_video_audio = arrange(analysis.frames, self.output_frames, export.outputFPS, root=self.cache.root)
         self._wm_img = None
         self._wm_loaded = False
         self._lock = threading.Lock()
 
     def mixed_audio(self, user_audio=None):
         from .settings import AudioSettings
-        from .closeup_audio import tracks
-        result = user_audio.copy() if user_audio else AudioSettings()
-        result.tracks += tracks(self.output_frames,self.analysis.closeups)
+        from .closeup_audio import tracks, mute_bursts
+        from .video_source import resolve
+        result = mute_bursts(resolve(user_audio or AudioSettings(),self.original_video_audio,self.duration), self.output_frames, self.export.outputFPS)
+        result.tracks += tracks(self.output_frames,self.analysis.closeups,self.export.outputFPS)
         return result
 
     @property
@@ -446,6 +471,20 @@ class RenderJob:
         if not self.contains(i):
             return np.zeros((h, w, 3), np.uint8)
         xf = self.plan.xforms[i].scaled(w / self.output_size[0])
+        if xf.prewarp is not None:
+            matrix = np.vstack([xf.matrix(), [0., 0., 1.]]) @ xf.prewarp @ np.diag([1/source_scale,1/source_scale,1.])
+            work = src
+            factor = min(1.,xf.z/source_scale)
+            if factor < .6:
+                nw,nh=max(1,round(src.shape[1]*factor)),max(1,round(src.shape[0]*factor))
+                work=cv2.resize(src,(nw,nh),interpolation=cv2.INTER_AREA)
+                matrix=matrix @ np.diag([src.shape[1]/nw,src.shape[0]/nh,1.])
+            plus=np.array([[1,0,.5],[0,1,.5],[0,0,1.]])
+            minus=np.array([[1,0,-.5],[0,1,-.5],[0,0,1.]])
+            matrix=minus @ matrix @ plus
+            border=cv2.BORDER_REPLICATE if self.composition.edgeFill==EdgeFill.BLUR_EXTEND else cv2.BORDER_CONSTANT
+            out=cv2.warpPerspective(work,matrix,(w,h),flags=cv2.INTER_CUBIC,borderMode=border)
+            return apply_gains(out,self.gains[i])
         A = _compose_affine(xf.matrix(), np.array([[1 / source_scale, 0, 0], [0, 1 / source_scale, 0]]))
         z_eff = xf.z / source_scale
         work = src

@@ -48,10 +48,12 @@ public final class RenderJob: @unchecked Sendable {
     public let export: ExportSettings
     public let selection: FrameSelection
     public let plan: CompositionPlan
+    public let stabilizationStatus: VideoStabilizationStatus?
     public let gains: [[Double]]
     public let used: [Int]
     public let status: [FrameStatus]
     public let outputFrames: [OutputFrame]
+    public let originalVideoAudio: VideoAudioArrangement
     public let renderer: FrameRenderer
     public let cache: ProxyCache
     public let watermark: WatermarkSettings
@@ -85,6 +87,8 @@ public final class RenderJob: @unchecked Sendable {
         self.selection = selection
         self.renderer = renderer
         self.cache = cache
+        let motion = look.stabilization.enabled ? VideoStabilization.load(frames:analysis.frames) : nil
+        let keepCameraFrames = motion != nil && look.stabilization.framing == "camera"
         let n = analysis.count
         let sharp = analysis.perFrame.map { $0.sharpness ?? .nan }
         let medSharp = Stats.median(sharp) ?? 0
@@ -93,23 +97,26 @@ public final class RenderJob: @unchecked Sendable {
         for i in 0..<n {
             if i < selection.trimStart || i > end { st[i] = .trimmed; continue }
             if analysis.excluded.contains(i) { st[i] = .excluded; continue }
-            if selection.dropUntracked && !track.frames[i].hasData { st[i] = .untracked; continue }
+            if selection.dropUntracked && !keepCameraFrames && !track.frames[i].hasData { st[i] = .untracked; continue }
             if selection.dropBlurry, sharp[i].isFinite, medSharp > 0, sharp[i] < medSharp * selection.blurThreshold { st[i] = .blurry }
         }
         status = st
         used = (0..<n).filter { st[$0] == .ok }
         let sz = export.outputSize
-        plan = ProjectTimeline.plan(analysis, track: track, composition: composition, width: Double(sz.w), height: Double(sz.h), used: used)
+        let stabilized = VideoStabilization.composePlan(analysis:analysis,track:track,composition:composition,export:export,used:used,settings:look.stabilization,record:motion)
+        plan = stabilized.plan ?? ProjectTimeline.plan(analysis, track: track, composition: composition, width: Double(sz.w), height: Double(sz.h), used: used)
+        stabilizationStatus = stabilized.status
         gains = Deflicker.gains(analysis, look: look)
         if analysis.clips?.isEmpty == false || analysis.closeups?.isEmpty == false {
             outputFrames = ProjectTimeline.frames(used: used, clips: analysis.clips ?? [], closeups: analysis.closeups ?? [], fallbackFPS: analysis.fps, settings: export)
         } else { outputFrames = TimeMapper.outputFrames(used: used, sourceFPS: analysis.fps, settings: export) }
+        originalVideoAudio = VideoSource.arrange(frames: analysis.frames, outputFrames: outputFrames, outputFPS: export.outputFPS, cacheRoot: cache.root)
     }
 
     /// Derived events follow the final edit, including reverse/repeat, without duplicating saved tracks.
     public func mixedAudio(_ userAudio: AudioSettings? = nil) -> AudioSettings {
-        var result = userAudio ?? AudioSettings()
-        result.tracks += CloseupAudio.tracks(frames: outputFrames, closeups: analysis.closeups ?? [])
+        var result = CloseupAudio.muteBursts(VideoSource.resolve(userAudio ?? AudioSettings(), arrangement: originalVideoAudio, duration: duration), frames: outputFrames, fps: export.outputFPS)
+        result.tracks += CloseupAudio.tracks(frames: outputFrames, closeups: analysis.closeups ?? [], fps: export.outputFPS)
         return result
     }
 

@@ -25,7 +25,7 @@ class AudioTracksCard(Card):
         buttons.addWidget(shutter)
         buttons.addWidget(upload)
         self.add(buttons)
-        self.add(caption("快门与背景音乐同时播放。各轨独立调节；长度为 0 时延续至视频结束。混音自动预留音量余量。"))
+        self.add(caption("特写期间自动暂停连拍快门声，结束后恢复；背景音乐继续播放。各轨独立调节，长度为 0 时延续至视频结束。混音自动预留音量余量。"))
         self.layers = QWidget()
         self.layers.setMinimumWidth(1)
         self.layer_layout = QVBoxLayout(self.layers)
@@ -73,11 +73,12 @@ class AudioTracksCard(Card):
         box = Card(f"音轨 {index + 1}")
         name = caption("")
         box.add(name)
-        self.refreshers.append(lambda: name.setText(next((e["title"] for e in assets() if e["id"] == canonical_id(track.assetID)), os.path.basename(track.path) or "已移除档位，请重新选择")))
+        self.refreshers.append(lambda: name.setText("视频原声" if track.videoOriginal else next((e["title"] for e in assets() if e["id"] == canonical_id(track.assetID)), os.path.basename(track.path) or "已移除档位，请重新选择")))
         if track.assetID:
             choice = CameraSoundPicker(track.assetID, lambda value: self.set(track, "assetID", value))
             box.add(choice)
         for label, key in (("静音", "muted"), ("循环播放", "loop")):
+            if track.videoOriginal and key == "loop": continue
             check = QCheckBox(label)
             check.setChecked(getattr(track, key))
             check.toggled.connect(lambda value, k=key: self.set(track, k, value))
@@ -85,6 +86,7 @@ class AudioTracksCard(Card):
         for label, key, limit, suffix in (("音量", "volume", 1.5, " ×"), ("视频起点", "timelineStart", 86400, " 秒"),
                                          ("播放长度", "duration", 86400, " 秒"), ("素材起点", "startOffset", 86400, " 秒"),
                                          ("淡入", "fadeIn", 5, " 秒"), ("淡出", "fadeOut", 5, " 秒")):
+            if track.videoOriginal and key in ("timelineStart", "duration", "startOffset"): continue
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
             spin = QDoubleSpinBox()
