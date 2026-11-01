@@ -6,6 +6,21 @@ ROOT=Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('update_packages',ROOT/'scripts/prepare_windows_update.py');mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
 
 class UpdatePackageTests(unittest.TestCase):
+    def test_mac_external_notes_are_independently_authenticated(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        spec=importlib.util.spec_from_file_location('verify_release',ROOT/'scripts/verify_update_release.py');verify=importlib.util.module_from_spec(spec);spec.loader.exec_module(verify)
+        key=Ed25519PrivateKey.generate();public=key.public_key().public_bytes(serialization.Encoding.Raw,serialization.PublicFormat.Raw)
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);note=b'<h1>Changes</h1>';package=b'package'
+            (root/'notes.html').write_bytes(note);(root/'app.zip').write_bytes(package)
+            def sig(data):return base64.b64encode(key.sign(data)).decode()
+            prefix=('<rss xmlns:sparkle="'+verify.NS+'"><channel><item><sparkle:version>1.9.0</sparkle:version><sparkle:releaseNotesLink sparkle:edSignature="'+sig(note)+'" sparkle:length="'+str(len(note))+'">https://example.org/notes.html</sparkle:releaseNotesLink><enclosure url="https://example.org/app.zip" length="7" sparkle:edSignature="'+sig(package)+'"/></item></channel></rss>').encode()
+            footer=('<!-- sparkle-signatures:\nedSignature: '+sig(prefix)+'\nlength: '+str(len(prefix))+'\n-->').encode()
+            feed=root/'macos.xml';feed.write_bytes(prefix+footer)
+            cfg=dict(ed25519_public_key=base64.b64encode(public).decode())
+            self.assertEqual(len(verify.macos(feed,root,cfg,'1.9.0')),1)
+            (root/'notes.html').write_bytes(b'tampered')
+            with self.assertRaises(ValueError):verify.macos(feed,root,cfg,'1.9.0')
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name)
         self.key=rsa.generate_private_key(public_exponent=65537,key_size=2048)

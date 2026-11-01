@@ -48,9 +48,16 @@ def macos(feed,directory,config,version):
     match=re.fullmatch(rb'edSignature: ([A-Za-z0-9+/=]+)\nlength: ([0-9]+)\n-->\s*',suffix)
     if not match or int(match[2])!=len(prefix):raise ValueError('Malformed signed appcast')
     key.verify(base64.b64decode(match[1],validate=True),prefix)
+    # Sparkle 2.10 reads signature attributes by their canonical prefixed name.
+    if b'sparkle:edSignature=' not in prefix:raise ValueError('Mac feed must retain canonical sparkle signature attribute names')
     items=ET.parse(feed).findall('./channel/item');current=[i for i in items if i.findtext('{'+NS+'}version')==version]
     if len(current)!=1:raise ValueError('Missing or repeated Mac version')
     result=[]
+    note=current[0].find('{'+NS+'}releaseNotesLink')
+    if note is not None:
+        notes=asset(directory,note.text).read_bytes()
+        if len(notes)!=int(note.get('{'+NS+'}length','0')):raise ValueError('Release notes size mismatch')
+        key.verify(base64.b64decode(note.get('{'+NS+'}edSignature',''),validate=True),notes)
     for enclosure in current[0].iter('enclosure'):
         p=asset(directory,enclosure.get('url'));data=p.read_bytes()
         if len(data)!=int(enclosure.get('length')):raise ValueError('Mac archive size mismatch')
