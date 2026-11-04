@@ -4,15 +4,15 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>BirdLock</title>
         <item>
-            <title>1.9.0</title>
-            <pubDate>Sun, 01 Nov 2026 19:35:15 +0800</pubDate>
-            <sparkle:version>1.9.0</sparkle:version>
-            <sparkle:shortVersionString>1.9.0</sparkle:shortVersionString>
+            <title>1.10.0</title>
+            <pubDate>Wed, 04 Nov 2026 16:42:50 +0800</pubDate>
+            <sparkle:version>1.10.0</sparkle:version>
+            <sparkle:shortVersionString>1.10.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/cyandee/BirdLock/releases/download/v1.9.0/BirdLock-1.9.0-macOS-update.zip" length="246407752" type="application/octet-stream" sparkle:edSignature="YsbRhYB8qTdDhGdzSu89FFwIf7GDX0jgsstzp9S7SH07PkdnRjI21da8LH1fNx0/ydRM8O4JYGLmHtJVH3/zAg=="></enclosure>
-            <sparkle:releaseNotesLink sparkle:edSignature="Yb6BAiXU6GmhTZGV568o+113Wyz4iFldKlcQQRZV+FVE92wKcuSI9l+mdHCwrdLYzXHKatY7DIG5gzAJZox7CQ==" sparkle:length="8306">https://github.com/cyandee/BirdLock/releases/download/v1.9.0/BirdLock-1.9.0-notes-signed.html</sparkle:releaseNotesLink></item>
+            <enclosure url="https://github.com/cyandee/BirdLock/releases/download/v1.10.0/BirdLock-1.10.0-macOS-update.zip" length="246617073" type="application/octet-stream" sparkle:edSignature="YJzvxVxNNrDLSBDMUC5Z4HoJ0IlHD0PdXZtvVyaDHr0KlymGb346SwCV0CQ0GSOif1ONKOj/vqviIDL0v1TbBA=="></enclosure>
+        <sparkle:releaseNotesLink sparkle:edSignature="T5crkYY64tWFCuRvTbCQuMt/dViWxHnNqDXGOcGESAMKqYhK6nXgTYn+zbIG6s8jhW4oOKKwCv8cqXj1UjZXBw==" sparkle:length="3983">https://github.com/cyandee/BirdLock/releases/download/v1.10.0/BirdLock-1.10.0-notes-signed.html</sparkle:releaseNotesLink></item>
     </channel>
 </rss><!-- sparkle-signatures:
-edSignature: mQq7XhwDFAKFcH2w5H0djHThzxi4MBvyH5TtMOJ/o+CUbtuBpt1sRErcg9A1w6qJvO56HBhHCcIT/T1ntketBw==
-length: 1359
+edSignature: m9sjqLmuSzSeHMAGlu9gIC84LOSQ6v6YtWYIZPGgiaRDxOUsvlKmjzcFhW1Iw0suIKfE8MXN96g1Qu8V7pseAQ==
+length: 1362
 -->
