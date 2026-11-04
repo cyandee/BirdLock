@@ -181,9 +181,10 @@ struct SourcePreview: View {
     @State private var drag: DragKind? = nil
     @State private var ghostEye: V2? = nil
     @State private var ghostQuad: [V2]? = nil
+    @State private var ghostBox: CGRect? = nil
     @State private var zoomCenter: (frame: Int, zoom: Double, c: V2)? = nil
 
-    enum DragKind { case eye, place, pick, move(start: [V2]), scale(start: [V2], center: V2), none }
+    enum DragKind { case eye, place, pick, selectEye, box, customAnchor, move(start: [V2]), scale(start: [V2], center: V2), none }
 
     var body: some View {
         if let a = state.analysis, a.frames.indices.contains(state.currentFrame) {
@@ -278,7 +279,7 @@ struct SourcePreview: View {
     private func updateCursor(at p: CGPoint, a: SequenceAnalysis, i: Int, m: SourceMapping) {
         guard drag == nil else { return }
         switch state.sourceTool {
-        case .fixEye, .pickBird: CursorKeeper.shared.set(.crosshair)
+        case .fixEye, .pickBird, .pickEye, .customBox, .customAnchor: CursorKeeper.shared.set(.crosshair)
         case .none:
             switch hitTest(p, a: a, i: i, m: m) {
             case .eye: CursorKeeper.shared.set(.pointingHand)
@@ -291,10 +292,14 @@ struct SourcePreview: View {
 
     private func dragGesture(a: SequenceAnalysis, i: Int, m: SourceMapping) -> some Gesture {
         DragGesture(minimumDistance: 0).onChanged { g in
+            guard state.phase == .ready else { return }
             if drag == nil {
                 let hit = hitTest(g.startLocation, a: a, i: i, m: m)
                 switch state.sourceTool {
                 case .pickBird: drag = .pick
+                case .pickEye: drag = .selectEye
+                case .customBox: drag = .box
+                case .customAnchor: drag = .customAnchor
                 case .fixEye:
                     drag = .place
                 case .none:
@@ -313,6 +318,7 @@ struct SourcePreview: View {
             }
             let cur = m.src(g.location), start = m.src(g.startLocation)
             switch drag {
+            case .box?: ghostBox=CGRect(x:min(start.x,cur.x),y:min(start.y,cur.y),width:abs(cur.x-start.x),height:abs(cur.y-start.y))
             case .eye?, .place?: ghostEye = cur
             case .move(let q)?:
                 let d = cur - start
@@ -328,6 +334,9 @@ struct SourcePreview: View {
         .onEnded { g in
             let p = m.src(g.location)
             switch drag {
+            case .box?: state.setCustomBox(from:m.src(g.startLocation),to:p)
+            case .selectEye?: if m.imageRect.contains(g.location) { state.pickEye(at:p) }
+            case .customAnchor?: if m.imageRect.contains(g.location) { state.setCustomAnchor(p) }
             case .eye?, .place?:
                 if m.imageRect.contains(g.location) { state.setManualEye(p, frame: i) }
             case .pick?:
@@ -335,7 +344,7 @@ struct SourcePreview: View {
             case .move?, .scale?: state.endCropEdit()
             default: break
             }
-            drag = nil; ghostEye = nil; ghostQuad = nil
+            drag = nil; ghostEye = nil; ghostQuad = nil;ghostBox=nil
             if let h = hover { updateCursor(at: h, a: a, i: i, m: m) }
         }
     }
@@ -344,6 +353,10 @@ struct SourcePreview: View {
 
     private func drawOverlay(ctx: GraphicsContext, a: SequenceAnalysis, i: Int, m: SourceMapping) {
         let fa = a.perFrame[i]
+        let pending=state.pendingCustomBox.flatMap { $0.frame==i ? $0.box.rect : nil }
+        if let box=ghostBox ?? pending ?? fa.custom?.box.rect {
+            ctx.stroke(Path(m.rect(box)),with:.color(Theme.accent),style:StrokeStyle(lineWidth:2,dash:[5,3]))
+        }
         // birds
         for (j, b) in fa.birds.enumerated() {
             let rect = m.rect(b.rect)
@@ -352,7 +365,7 @@ struct SourcePreview: View {
                        style: StrokeStyle(lineWidth: isT ? 1.2 : 1, dash: isT ? [] : [4, 3]))
         }
         // output crop (+ handles), or the ghost while dragging
-        if let q = ghostQuad ?? cropQuad(i) {
+        if state.sourceTool != .customBox && state.sourceTool != .customAnchor,let q = ghostQuad ?? cropQuad(i) {
             let vq = q.map { m.view($0) }
             var p = Path(); p.move(to: vq[0]); for v in vq.dropFirst() { p.addLine(to: v) }; p.closeSubpath()
             // dim everything outside the crop
@@ -372,8 +385,18 @@ struct SourcePreview: View {
             let c = m.view(kp.p)
             ctx.fill(Path(ellipseIn: CGRect(x: c.x - 2.5, y: c.y - 2.5, width: 5, height: 5)), with: .color(Theme.bad.opacity(min(1, kp.conf + 0.2))))
         }
+        if state.sourceTool == .pickEye {
+            for (index,side) in ["left_eye","right_eye"].enumerated() {
+                if let k=a.poseSchema.keypoints.firstIndex(of:side),fa.keypoints.indices.contains(k),fa.keypoints[k].conf>=0.35 {
+                    let point=m.view(fa.keypoints[k].p)
+                    ctx.stroke(Path(ellipseIn:CGRect(x:point.x-9,y:point.y-9,width:18,height:18)),with:.color(Theme.manual),lineWidth:2)
+                    ctx.draw(Text("\(index+1)").font(.caption.bold()).foregroundColor(.white),at:CGPoint(x:point.x,y:point.y-17))
+                }
+            }
+        }
         guard let t = a.track, t.frames.indices.contains(i) else { return }
         let tf = t.frames[i]
+        if state.isCustom && !tf.hasData { return }
         let hc = m.view(tf.headCenter)
         ctx.stroke(Path(CGRect(x: hc.x - 5, y: hc.y - 5, width: 10, height: 10)), with: .color(Theme.accent.opacity(0.8)), lineWidth: 1)
         // short trail of the solved eye (previous frames)
@@ -421,8 +444,12 @@ struct SourceToolBar: View {
         if state.viewMode == .source, let a = state.analysis {
             let predicted = state.predictedFrames
             HStack(spacing: 6) {
-                toolButton(.fixEye, "scope", state.isAircraft ? "修正机头" : "修正鸟眼", state.isAircraft ? "点击当前帧机头的准确位置（E）" : "点击（或拖动）到鸟眼的准确位置。本帧作为强约束，前后帧自动重新计算（E）")
-                toolButton(.pickBird, "hand.tap", state.isAircraft ? "选择飞机" : "选择目标鸟", "点击要跟踪的主体（会重新识别）")
+                toolButton(.fixEye, "scope", state.isCustom ? "调整锁定点" : (state.isAircraft ? "修正机头" : "修正鸟眼"), "点击准确位置（E）；自定义模式会建立跟踪关键帧")
+                if state.isCustom {
+                    Button("重新框选",systemImage:"rectangle.dashed") { state.beginCustomBox() }
+                } else {
+                    toolButton(.pickBird, "hand.tap", state.isAircraft ? "选择飞机" : "选择目标鸟", "点击要跟踪的主体（会重新识别）")
+                }
                 Divider().frame(height: 18)
                 Picker("", selection: Binding(get: { zoomStep }, set: { state.sourceZoom = $0 })) {
                     Text("全图").tag(1.0)
@@ -445,6 +472,7 @@ struct SourceToolBar: View {
             }
             .controlSize(.small)
             .buttonStyle(.bordered)
+            .disabled(state.phase != .ready)
             .padding(6)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 9))
         }
@@ -482,9 +510,12 @@ struct PreviewHint: View {
         guard !state.isPlaying else { return nil }
         if state.viewMode == .source {
             switch state.sourceTool {
-            case .fixEye: if state.isAircraft { return "点击当前帧机头的准确位置，可拖动微调" };return "在鸟眼的准确位置点击（可按住拖动微调）· 推算不准的帧逐一修正后，前后帧会自动跟着重算"
+            case .pickEye: return "点选要整组固定的那只眼睛；可从最后一张清晰照片开始"
+            case .customBox: return "拖出稳定纹理区域，避开大面积背景和持续变形的翅膀"
+            case .customAnchor: return "在框内点击锁定点；随后自动向前、向后跟踪本组照片"
+            case .fixEye: if state.isCustom { return "点击跟踪区域内要固定的位置，建立新的跟踪关键帧" };if state.isAircraft { return "点击当前帧机头的准确位置，可拖动微调" };return "在鸟眼的准确位置点击（可按住拖动微调）· 推算不准的帧逐一修正后，前后帧会自动跟着重算"
             case .pickBird: return state.isAircraft ? "点击要跟踪的飞机" : "点击要跟踪的鸟"
-            case .none: return "拖动虚线框移动取景 · 拖动四角缩放取景范围 · 拖动圆圈修正锁定点"
+            case .none: return state.isCustom ? "拖动取景框调整构图 · 拖动圆圈调整锁定点 · 失锁处重新框选" : "拖动虚线框移动取景 · 拖动四角缩放取景范围 · 拖动圆圈修正锁定点"
             }
         }
         if state.watermark.isActive && state.watermarkImage != nil { return "拖动水印调整位置，拖动右下角圆点调整大小" }
@@ -508,6 +539,7 @@ struct FrameBadges: View {
                     badge(tf.hasData ? (a.perFrame[i].aircraft?.source == .tracked ? "机头跟踪" : "机头识别") : "未定位机头", tf.hasData ? Theme.ok : Theme.warn)
                     Button("修正机头") { state.startFixingEye() }.controlSize(.small)
                 }
+                else if state.isCustom { badge(tf.hasData ? (tf.eyeVisible ? "局部跟踪" : "短距推算") : "失锁，请框选",tf.eyeVisible ? Theme.ok : Theme.warn) }
                 else if tf.eyeVisible { badge("鸟眼", Theme.ok) }
                 else if tf.hasData {
                     badge("鸟头推算", Theme.warn)

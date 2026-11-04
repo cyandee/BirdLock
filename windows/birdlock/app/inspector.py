@@ -303,13 +303,16 @@ class ComposeTab(Tab):
     def __init__(self, state):
         super().__init__(state)
         st = state
+        from .tracking_controls import TrackingCard
+        self.v.addWidget(TrackingCard(st))
         c = lambda: st.composition   # noqa: E731
 
         card = Card("构图风格", "✨")
         grid = QGridLayout()
         grid.setSpacing(6)
         self.preset_btns = []
-        for k, pr in enumerate(st.presets):
+        for k in range(max(6,len(st.presets))):
+            pr=st.presets[min(k,len(st.presets)-1)]
             b = QPushButton(pr.name)
             b.setObjectName("chip")
             b.setCheckable(True)
@@ -320,13 +323,15 @@ class ComposeTab(Tab):
         card.add(grid)
         def refresh_presets():
             for k,(button,_) in enumerate(self.preset_btns):
+                button.setVisible(k<len(st.presets))
+                if k>=len(st.presets):continue
                 preset = st.presets[k]
                 button.setText(preset.name);button.setToolTip(preset.detail);button.setChecked(st.is_preset_active(preset))
         self.b.add(refresh_presets)
         self.v.addWidget(card)
 
         card = Card("锁定", "◎")
-        self.combo(card, "锁定点", lambda: [("机头",LockPoint.HEAD_CENTER)] if st.is_aircraft else [(x.title,x) for x in LockPoint], lambda: c().lockPoint, lambda v: setattr(c(), "lockPoint", v))
+        self.combo(card, "锁定点", lambda: [("所选位置",LockPoint.EYE)] if st.subject=='custom' else ([("机头",LockPoint.HEAD_CENTER)] if st.is_aircraft else [(x.title,x) for x in LockPoint]), lambda: c().lockPoint, lambda v: setattr(c(), "lockPoint", v))
         self.slider(card, "跟随方式", lambda: c().followSoftness, lambda v: setattr(c(), "followSoftness", v), 0, 1,
                     lambda v: "硬锁定" if v < 0.02 else f"柔和 {v * 100:.0f}%",
                     tip="0 = 锁定点固定在画面一点；往右拉，镜头像摄像机一样柔和跟随，主体在画面中轻微浮动")
@@ -340,6 +345,7 @@ class ComposeTab(Tab):
         col.addWidget(caption("拖动小圆点，设置锁定点在成片中的位置。也可以在「原图+识别」里直接拖动取景框。"))
         lead = QCheckBox("飞行方向自动留白")
         lead.setToolTip("主体朝左飞时自动镜像水平位置，让主体的前方留出空间")
+        self.visible_when(lead,lambda: st.subject!="custom")
         lead.toggled.connect(lambda on: (setattr(c(), "autoLeadRoom", on), st.settings_changed()))
         self.b.add(lambda: (lead.blockSignals(True), lead.setChecked(c().autoLeadRoom), lead.blockSignals(False)))
         col.addWidget(lead)
@@ -360,7 +366,7 @@ class ComposeTab(Tab):
         top = QHBoxLayout()
         top.addWidget(QLabel("取景范围"))
         top.addStretch(1)
-        top.addWidget(caption("短边 = 头长 ×"))
+        unit=caption("");self.b.add(lambda: unit.setText("短边 = 区域长边 ×" if st.subject=="custom" else "短边 = 头长 ×"));top.addWidget(unit)
         spin = QLineEdit()
         spin.setFixedWidth(64)
         spin.setAlignment(Qt.AlignRight)
@@ -452,7 +458,7 @@ class ComposeTab(Tab):
         self.v.addWidget(card)
 
         card = Card("旋转", "↻")
-        self.combo(card, "旋转", [(x.title, x) for x in RotationMode], lambda: c().rotationMode, lambda v: setattr(c(), "rotationMode", v))
+        self.combo(card, "旋转", lambda: [(x.title, x) for x in RotationMode if st.subject!="custom" or x==RotationMode.NONE], lambda: c().rotationMode, lambda v: setattr(c(), "rotationMode", v))
         self.slider(card, "角度微调", lambda: c().rotationOffsetDeg, lambda v: setattr(c(), "rotationOffsetDeg", v), -30, 30,
                     lambda v: f"{v:+.1f}°", step=0.5)
         self.v.addWidget(card)
@@ -541,7 +547,7 @@ class LookTab(Tab):
                          lambda v: f"低于中位数 {v * 100:.0f}%")
         self.visible_when(th, lambda: S().dropBlurry)
         self.status(card, lambda: (f"将跳过 {st.job.status.count('blurry')} 帧", "caption") if S().dropBlurry and st.job else None)
-        self.check(card, lambda: "跳过未定位机头的帧" if st.is_aircraft else "跳过未识别到鸟的帧", lambda: S().dropUntracked, lambda v: setattr(S(), "dropUntracked", v))
+        self.check(card, lambda: "跳过失锁的帧" if st.subject=="custom" else "跳过未定位机头的帧" if st.is_aircraft else "跳过未识别到鸟的帧", lambda: S().dropUntracked, lambda v: setattr(S(), "dropUntracked", v))
         ex_row = QHBoxLayout()
         ex_lbl = caption("")
         ex_btn = QPushButton("全部恢复")
@@ -560,7 +566,7 @@ class LookTab(Tab):
         self.v.addWidget(card)
 
         card = Card("识别与修正", "🐦")
-        self.status(card, lambda: ((f"机头已定位：{int(st.analysis.track.has_data.sum())}/{st.analysis.count} 帧" if st.is_aircraft else f"识别到鸟：{int(st.analysis.track.has_data.sum())}/{st.analysis.count} 帧，其中鸟眼可见 "
+        self.status(card, lambda: ((f"有效跟踪：{int(st.analysis.track.has_data.sum())}/{st.analysis.count} 帧" if st.subject=="custom" else f"机头已定位：{int(st.analysis.track.has_data.sum())}/{st.analysis.count} 帧" if st.is_aircraft else f"识别到鸟：{int(st.analysis.track.has_data.sum())}/{st.analysis.count} 帧，其中鸟眼可见 "
                                    f"{int(st.analysis.track.eye_visible.sum())} 帧"), "caption")
                     if st.analysis and st.analysis.track is not None else None)
         pr_row = QHBoxLayout()
@@ -585,18 +591,18 @@ class LookTab(Tab):
         def ref_fix():
             n = len(st.predicted_frames)
             pr_w.setVisible(n > 0 and not st.is_aircraft)
-            pr_lbl.setText(f"{n} 帧鸟眼被遮挡，位置为推算")
+            pr_lbl.setText(f"{n} 帧为短距推算" if st.subject=="custom" else f"{n} 帧鸟眼被遮挡，位置为推算")
             m = len(st.analysis.manualEye) if st.analysis else 0
             man_w.setVisible(m > 0)
             man_lbl.setText(f"手动修正 {m} 帧")
         self.b.add(ref_fix)
         note = caption("")
-        self.b.add(lambda: note.setText("飞机识别为试验功能，复杂视角可能误定位。请逐帧检查；切到「原图+识别」，点「修正机头」后标记当前帧机头。" if st.is_aircraft else "修正方法：切换到「原图+识别」，点「修正鸟眼」，在鸟眼的准确位置点击（或拖动圆圈）。前后帧会自动重新计算。"))
+        self.b.add(lambda: note.setText("失锁处切到原图重新框选，并点击框内锁定点建立关键帧；长时间遮挡需要人工确认。" if st.subject=="custom" else "飞机识别为试验功能，复杂视角可能误定位。请逐帧检查；切到「原图+识别」，点「修正机头」后标记当前帧机头。" if st.is_aircraft else "修正方法：切换到「原图+识别」，点「修正鸟眼」，在鸟眼的准确位置点击（或拖动圆圈）。前后帧会自动重新计算。"))
         card.add(note)
         row = QHBoxLayout()
         b1, b2 = QPushButton("修正鸟眼"), QPushButton("重新识别")
-        self.b.add(lambda: b1.setText("修正机头" if st.is_aircraft else "修正鸟眼"))
-        b1.clicked.connect(st.start_fixing_eye)
+        self.b.add(lambda: b1.setText("重新框选" if st.subject=="custom" else "修正机头" if st.is_aircraft else "修正鸟眼"))
+        b1.clicked.connect(lambda: st.begin_custom_box() if st.subject=="custom" else st.start_fixing_eye())
         b2.clicked.connect(lambda: st.start_analysis(fresh=True))
         row.addWidget(b1)
         row.addWidget(b2)
@@ -793,20 +799,24 @@ class OutputTab(Tab):
         sub = Card("")
         sub.setStyleSheet("QFrame#card { background: transparent; border: none; }")
         sub.lay.setContentsMargins(0, 0, 0, 0)
-        eye = self.check(sub, "鸟眼框", lambda: Fm().showEye, lambda vv: setattr(Fm(), "showEye", vv))
+        eye = self.check(sub, lambda: "锁定点框" if st.subject=="custom" else "鸟眼框", lambda: Fm().showEye, lambda vv: setattr(Fm(), "showEye", vv))
         self.visible_when(eye,lambda: not st.is_aircraft)
-        self.check(sub, lambda: "机头框" if st.is_aircraft else "鸟头框", lambda: Fm().showHead, lambda vv: setattr(Fm(), "showHead", vv))
-        self.check(sub, lambda: "机身框（含机翼）" if st.is_aircraft else "鸟身框（含展开的翅膀）", lambda: Fm().showBody, lambda vv: setattr(Fm(), "showBody", vv))
-        self.check(sub, lambda: "机身框闪烁" if st.is_aircraft else "鸟身框闪烁", lambda: Fm().blinkBody, lambda vv: setattr(Fm(), "blinkBody", vv))
+        self.check(sub, lambda: "跟踪区域框" if st.subject=="custom" else "机头框" if st.is_aircraft else "鸟头框", lambda: Fm().showHead, lambda vv: setattr(Fm(), "showHead", vv))
+        body=self.check(sub, lambda: "机身框（含机翼）" if st.is_aircraft else "鸟身框（含展开的翅膀）", lambda: Fm().showBody, lambda vv: setattr(Fm(), "showBody", vv))
+        self.visible_when(body,lambda: st.subject!="custom")
+        blink=self.check(sub, lambda: "机身框闪烁" if st.is_aircraft else "鸟身框闪烁", lambda: Fm().blinkBody, lambda vv: setattr(Fm(), "blinkBody", vv))
+        self.visible_when(blink,lambda: st.subject!="custom")
         self.combo(sub, "样式", [(x.title, x) for x in FocusMarkStyle], lambda: Fm().style, lambda vv: setattr(Fm(), "style", vv))
         for label, key in [("鸟眼颜色", "eyeColor"), ("鸟头颜色", "headColor"), ("鸟身颜色", "bodyColor")]:
-            color = self.combo(sub, lambda k=key,l=label: ({"headColor":"机头颜色","bodyColor":"机身颜色"}.get(k,l) if st.is_aircraft else l), [(x.title, x) for x in FocusMarkColor], lambda k=key: getattr(Fm(), k), lambda vv, k=key: setattr(Fm(), k, vv))
+            color = self.combo(sub, lambda k=key,l=label: ({"eyeColor":"锁定点颜色","headColor":"区域框颜色","bodyColor":"区域框颜色"}[k] if st.subject=="custom" else {"headColor":"机头颜色","bodyColor":"机身颜色"}.get(k,l) if st.is_aircraft else l), [(x.title, x) for x in FocusMarkColor], lambda k=key: getattr(Fm(), k), lambda vv, k=key: setattr(Fm(), k, vv))
             if key == "eyeColor":self.visible_when(color.row,lambda: not st.is_aircraft)
-        self.slider(sub, lambda: "机身框大小" if st.is_aircraft else "鸟身框大小", lambda: Fm().bodySize, lambda vv: setattr(Fm(), "bodySize", vv), 0.5, 2.5, lambda x: f"{x:.1f}×")
-        self.slider(sub, lambda: "机头框大小" if st.is_aircraft else "眼/头框大小", lambda: Fm().size, lambda vv: setattr(Fm(), "size", vv), 0.5, 2.5, lambda x: f"{x:.1f}×")
+            if key == "bodyColor":self.visible_when(color.row,lambda: st.subject!="custom")
+        body_size=self.slider(sub, lambda: "机身框大小" if st.is_aircraft else "鸟身框大小", lambda: Fm().bodySize, lambda vv: setattr(Fm(), "bodySize", vv), 0.5, 2.5, lambda x: f"{x:.1f}×")
+        self.visible_when(body_size,lambda: st.subject!="custom")
+        self.slider(sub, lambda: "锁定点框大小" if st.subject=="custom" else "机头框大小" if st.is_aircraft else "眼/头框大小", lambda: Fm().size, lambda vv: setattr(Fm(), "size", vv), 0.5, 2.5, lambda x: f"{x:.1f}×")
         self.slider(sub, "线宽", lambda: Fm().lineWidth, lambda vv: setattr(Fm(), "lineWidth", vv), 0.5, 3, lambda x: f"{x:.1f}×")
         hidden = self.check(sub, "鸟眼被遮挡时框住鸟头", lambda: Fm().headWhenHidden, lambda vv: setattr(Fm(), "headWhenHidden", vv))
-        self.visible_when(hidden,lambda: not st.is_aircraft)
+        self.visible_when(hidden,lambda: st.subject=="bird")
         v.addWidget(sub)
         card.add(box)
         self.visible_when(box, lambda: Fm().enabled)

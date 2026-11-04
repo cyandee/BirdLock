@@ -2,9 +2,32 @@ import Foundation
 import CoreGraphics
 
 public enum AnalysisSubject: String, Codable, CaseIterable, Sendable, Identifiable {
-    case bird, aircraft
+    case bird, aircraft, custom
     public var id: String { rawValue }
-    public var title: String { self == .bird ? "鸟类" : "飞机" }
+    public var title: String { self == .bird ? "鸟类" : (self == .aircraft ? "飞机" : "自定义目标") }
+}
+
+public struct EyeSelection: Codable, Sendable, Equatable {
+    public var frame: Int
+    public var side: String
+    public init(frame: Int, side: String) { self.frame=frame;self.side=side }
+}
+
+public struct CustomSeed: Codable, Sendable {
+    public var frame: Int
+    public var box: BoxD
+    public var anchor: V2
+    public init(frame: Int, box: BoxD, anchor: V2) { self.frame=frame;self.box=box;self.anchor=anchor }
+}
+
+public struct CustomObservation: Codable, Sendable {
+    public var box: BoxD
+    public var anchor: V2
+    public var confidence: Double
+    public var source: String
+    public init(box: BoxD, anchor: V2, confidence: Double, source: String = "tracked") {
+        self.box=box;self.anchor=anchor;self.confidence=confidence;self.source=source
+    }
 }
 
 public struct BoxD: Codable, Hashable, Sendable {
@@ -34,9 +57,10 @@ public struct FrameAnalysis: Codable, Sendable {
     public var sharpness: Double? = nil
     public var link: RegistrationLink? = nil
     public var aircraft: AircraftFrameObservation? = nil
+    public var custom: CustomObservation? = nil
 
     public init(index: Int) { self.index = index }
-    public var targetBox: BoxD? { target.flatMap { $0 < birds.count ? birds[$0] : nil } }
+    public var targetBox: BoxD? { custom?.box ?? target.flatMap { $0 >= 0 && $0 < birds.count ? birds[$0] : nil } }
 }
 
 /// Solved per-frame track used for composition.
@@ -78,6 +102,8 @@ public struct SequenceAnalysis: Codable, Sendable {
     public var groupedDetection: Bool? = nil
     public var subject: AnalysisSubject? = nil
     public var modelIdentity: String? = nil
+    public var eyeSelections: [EyeSelection]? = nil
+    public var customSeeds: [CustomSeed]? = nil
 
     public var analysisSubject: AnalysisSubject { subject ?? .bird }
 
@@ -90,4 +116,15 @@ public struct SequenceAnalysis: Codable, Sendable {
     }
 
     public var count: Int { frames.count }
+
+    public func clipRange(containing frame: Int) -> Range<Int> {
+        if let clip=clips?.first(where: { $0.start <= frame && frame < $0.start+$0.count }) {
+            return clip.start..<(clip.start+clip.count)
+        }
+        return 0..<count
+    }
+    public func selectedEye(at frame: Int) -> String? {
+        let range=clipRange(containing:frame)
+        return eyeSelections?.last(where: { range.contains($0.frame) && ["left_eye","right_eye"].contains($0.side) })?.side
+    }
 }

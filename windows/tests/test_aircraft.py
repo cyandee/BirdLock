@@ -87,6 +87,7 @@ class AircraftTests(unittest.TestCase):
     def fake_model(self, session):
         model = AircraftPartsModel()
         model._session = session
+        session.get_providers = lambda: ['CPUExecutionProvider']
         manifest = Path(__file__).resolve().parents[2] / "SharedResources/AircraftModels/manifest.json"
         model._meta = json.loads(manifest.read_text(encoding="utf-8"))
         return model

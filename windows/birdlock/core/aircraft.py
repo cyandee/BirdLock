@@ -11,6 +11,8 @@ import json
 import math
 import os
 import threading
+import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -18,7 +20,8 @@ from typing import Callable
 import cv2
 import numpy as np
 
-from .paths import resource_dir
+from .paths import resource_dir, IS_WINDOWS
+from . import gpu
 from .phasecorr import PhaseCorrelator, extract_exact
 from .log import log
 
@@ -214,16 +217,104 @@ def choose_consensus(candidates: list[NoseCandidate], body, min_views=2) -> Nose
 
 
 class AircraftPartsModel:
-    """Lazy CPU session: no model allocation while importing this module or using bird mode.
+    """Lazy, serial session using the selected Windows GPU, with an explicit CPU fallback.
 
     All rotations of one request share a lock. Callers must also bound image decoding concurrency;
     the runtime's inference arena can use roughly 2 GB on the tested Mac.
     """
-    def __init__(self, directory: Path | None = None):
+    def __init__(self, directory: Path | None = None, device="auto", status=None):
         self.directory = directory
         self._session = None
         self._meta = None
         self._lock = threading.Lock()
+        self.device, self.status = device, status
+        self.providers = []
+        self.execution = {}
+        self.fallback_reason = None
+        self._profile = None
+        self._timing = dict(calls=0, inference=0., load=0.)
+
+    @property
+    def device_description(self):
+        active = [p for p, count in self.execution.items() if count]
+        if active:
+            if active == ["CPUExecutionProvider"]:
+                return "CPU" + ("（显卡回退）" if self.fallback_reason else "")
+            description = gpu.describe_device(active, self.device)
+            return description + (" / CPU 混合" if "CPUExecutionProvider" in active else "")
+        if self.providers and self.providers != ["CPUExecutionProvider"]:
+            return "显卡后端已启用，待验证"
+        return "CPU" + ("（显卡回退）" if self.fallback_reason else "")
+
+    def _notify(self):
+        if self.status:
+            self.status(self.device_description)
+
+    def _create_session(self, providers):
+        import onnxruntime as ort
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = aircraft_threads()
+        options.log_severity_level = 3
+        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        options.add_free_dimension_override_by_name("sequence_length",len(self._meta["token_ids"]))
+        names = [p[0] if isinstance(p, tuple) else p for p in providers]
+        if "DmlExecutionProvider" in names:
+            options.enable_mem_pattern = False
+            options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        # Profile only the first actual inference. Provider registration alone does not prove
+        # that this model's kernels were assigned to the GPU. Never retain image/tensor data.
+        if names != ["CPUExecutionProvider"]:
+            self._profile = tempfile.TemporaryDirectory(prefix="birdlock-aircraft-ep-")
+            options.enable_profiling = True
+            options.profile_file_prefix = str(Path(self._profile.name) / "execution")
+        session = ort.InferenceSession(str((self.directory or model_directory()) / self._meta["file"]),
+                                       sess_options=options, providers=providers)
+        if hasattr(session, "disable_fallback"):
+            session.disable_fallback()
+        self.providers = session.get_providers()
+        return session
+
+    def _finish_profile(self):
+        if self._profile is None:
+            return
+        try:
+            path = self._session.end_profiling()
+            events = json.loads(Path(path).read_text(encoding="utf-8"))
+            self.execution = {}
+            for event in events:
+                provider = event.get("args", {}).get("provider")
+                if event.get("cat") == "Node" and provider:
+                    self.execution[provider] = self.execution.get(provider, 0) + 1
+            log.info("aircraft actual execution nodes=%s (node counts are not GPU utilization)", self.execution)
+        except Exception:
+            log.exception("aircraft execution profile unavailable; GPU execution is unverified")
+        finally:
+            self._profile.cleanup()
+            self._profile = None
+            self._notify()
+
+    def _run(self, inputs):
+        started = time.monotonic()
+        try:
+            try:
+                result = self._session.run(["logits", "pred_boxes"], inputs)
+            except Exception as error:
+                if self.providers == ["CPUExecutionProvider"]:
+                    raise
+                self._finish_profile()
+                self.fallback_reason = type(error).__name__
+                log.exception("aircraft GPU inference failed; retrying this request once on CPU")
+                self._session = None  # Release the GPU arena before allocating the CPU model.
+                self.execution = {}
+                self._session = self._create_session(["CPUExecutionProvider"])
+                self._notify()
+                result = self._session.run(["logits", "pred_boxes"], inputs)
+            self.providers = self._session.get_providers()
+            self._finish_profile()
+            return result
+        finally:
+            self._timing["calls"] += 1
+            self._timing["inference"] += time.monotonic() - started
 
     def _load(self):
         if self._session is not None:
@@ -231,18 +322,30 @@ class AircraftPartsModel:
         directory = self.directory or model_directory()
         meta = verify_model(directory)
         # Import only after validation and only when aircraft inference is actually requested.
-        import onnxruntime as ort
-        options = ort.SessionOptions()
-        options.intra_op_num_threads = aircraft_threads()
-        options.log_severity_level = 3
-        session = ort.InferenceSession(str(directory / meta["file"]), sess_options=options,
-                                       providers=["CPUExecutionProvider"])
-        self._meta, self._session = meta, session
-        log.info("aircraft nose provider=CPU cpu_threads=%d", options.intra_op_num_threads)
+        self._meta = meta
+        started = time.monotonic()
+        providers = gpu.onnx_providers(self.device) if IS_WINDOWS else ["CPUExecutionProvider"]
+        try:
+            self._session = self._create_session(providers)
+        except Exception as error:
+            if providers == ["CPUExecutionProvider"]:
+                raise
+            self.fallback_reason = type(error).__name__
+            log.exception("aircraft GPU initialization failed; falling back to CPU")
+            if self._profile:
+                self._profile.cleanup(); self._profile = None
+            self._session = self._create_session(["CPUExecutionProvider"])
+        self._timing["load"] += time.monotonic() - started
+        log.info("aircraft requested_device=%s providers=%s cpu_threads=%d load_seconds=%.3f",
+                 self.device, self.providers, aircraft_threads(), self._timing["load"])
+        self._notify()
 
     def close(self):
         """Drop the runtime arena after analysis; previews and bird mode must not retain it."""
         with self._lock:
+            if self._profile is not None and self._session is not None:
+                self._finish_profile()
+            log.info("aircraft inference summary=%s execution=%s fallback=%s", self._timing, self.execution, self.fallback_reason)
             self._session = None
             self._meta = None
 
@@ -288,7 +391,7 @@ class AircraftPartsModel:
                 rotated = cv2.warpAffine(padded, matrix, (side, side), borderValue=(127, 127, 127))
                 pixels = cv2.cvtColor(cv2.resize(rotated, (size, size)), cv2.COLOR_BGR2RGB).astype(np.float32) / 255
                 blob = ((pixels-mean)/std).transpose(2, 0, 1)[None]
-                logits, boxes = self._session.run(["logits", "pred_boxes"], dict(fixed, pixel_values=blob))
+                logits, boxes = self._run(dict(fixed, pixel_values=np.ascontiguousarray(blob)))
                 if cancelled():
                     raise AircraftCancelled()
                 if logits.shape != (1, 900, 256) or boxes.shape != (1, 900, 4):

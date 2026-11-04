@@ -105,6 +105,7 @@ struct ComposeSection: View {
 
     var body: some View {
         @Bindable var state = state
+        TrackingCard()
         InspectorCard(title: "构图风格", icon: "sparkles.rectangle.stack") {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
                 ForEach(state.presets) { p in
@@ -125,7 +126,7 @@ struct ComposeSection: View {
         InspectorCard(title: "锁定", icon: "scope") {
             FormRow(label: "锁定点") {
                 Picker("", selection: $state.composition.lockPoint) {
-                    ForEach(state.isAircraft ? [.headCenter] : LockPoint.allCases) { Text(state.isAircraft ? "机头" : $0.title).tag($0) }
+                    ForEach(state.isCustom ? [.eye] : (state.isAircraft ? [.headCenter] : LockPoint.allCases)) { Text(state.isCustom ? "所选位置" : (state.isAircraft ? "机头" : $0.title)).tag($0) }
                 }.labelsHidden()
             }
             LabeledSlider(title: "跟随方式", value: $state.composition.followSoftness, range: 0...1,
@@ -142,6 +143,7 @@ struct ComposeSection: View {
                     Text("拖动小圆点，设置锁定点在成片中的位置。也可以在「原图+识别」里直接拖动取景框。")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Toggle("飞行方向自动留白", isOn: $state.composition.autoLeadRoom)
+                        .disabled(state.isCustom)
                         .help("主体朝左飞时自动镜像水平位置，让主体的前方留出空间")
                     HStack {
                         Button("居中") { state.composition.anchorX = 0.5; state.composition.anchorY = 0.5 }
@@ -187,7 +189,7 @@ struct ComposeSection: View {
         InspectorCard(title: "旋转", icon: "rotate.right") {
             FormRow(label: "旋转") {
                 Picker("", selection: $state.composition.rotationMode) {
-                    ForEach(RotationMode.allCases) { Text($0.title).tag($0) }
+                    ForEach(state.isCustom ? [.none] : RotationMode.allCases) { Text($0.title).tag($0) }
                 }.labelsHidden()
             }
             LabeledSlider(title: "角度微调", value: $state.composition.rotationOffsetDeg, range: -30...30, step: 0.5,
@@ -225,7 +227,7 @@ struct FramingControl: View {
             HStack(spacing: 6) {
                 Text("取景范围").font(.callout)
                 Spacer()
-                Text("短边 = 头长 ×").font(.caption).foregroundStyle(.secondary)
+                Text(state.isCustom ? "短边 = 区域长边 ×" : "短边 = 头长 ×").font(.caption).foregroundStyle(.secondary)
                 TextField("", value: Binding(get: { state.composition.framing },
                                              set: { state.composition.framing = clamp($0, range.lowerBound, range.upperBound) }),
                           format: .number.precision(.fractionLength(0...1)))
@@ -321,7 +323,7 @@ struct LookSection: View {
                     Text("将跳过 \(job.status.filter { $0 == .blurry }.count) 帧").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Toggle(state.isAircraft ? "跳过未定位机头的帧" : "跳过未识别到鸟的帧", isOn: $state.selection.dropUntracked)
+            Toggle(state.isCustom ? "跳过失锁的帧" : state.isAircraft ? "跳过未定位机头的帧" : "跳过未识别到鸟的帧", isOn: $state.selection.dropUntracked)
             if let a = state.analysis, !a.excluded.isEmpty {
                 HStack {
                     Text("手动排除了 \(a.excluded.count) 帧").font(.caption).foregroundStyle(.secondary)
@@ -335,10 +337,10 @@ struct LookSection: View {
                 let eye = t.frames.filter { $0.eyeVisible }.count
                 let has = t.frames.filter { $0.hasData }.count
                 let predicted = state.predictedFrames.count
-                Text(state.isAircraft ? "机头已定位：\(has)/\(a.count) 帧" : "识别到鸟：\(has)/\(a.count) 帧，其中鸟眼可见 \(eye) 帧").font(.caption).foregroundStyle(.secondary)
+                Text(state.isCustom ? "有效跟踪：\(has)/\(a.count) 帧" : state.isAircraft ? "机头已定位：\(has)/\(a.count) 帧" : "识别到鸟：\(has)/\(a.count) 帧，其中鸟眼可见 \(eye) 帧").font(.caption).foregroundStyle(.secondary)
                 if predicted > 0 && !state.isAircraft {
                     HStack {
-                        StatusNote(text: "\(predicted) 帧鸟眼被遮挡，位置为推算", icon: "eye.trianglebadge.exclamationmark", color: Theme.warn)
+                        StatusNote(text: state.isCustom ? "\(predicted) 帧为短距推算" : "\(predicted) 帧鸟眼被遮挡，位置为推算", icon: "eye.trianglebadge.exclamationmark", color: Theme.warn)
                         Spacer()
                         Button("逐帧检查") { state.startFixingEye(); state.jumpToPredicted(1) }.controlSize(.small)
                     }
@@ -351,10 +353,10 @@ struct LookSection: View {
                     }
                 }
             }
-            Text(state.isAircraft ? "飞机识别为试验功能，复杂视角可能误定位。请逐帧检查；切到「原图+识别」，点「修正机头」后标记当前帧机头。" : "修正方法：切换到「原图+识别」，点「修正鸟眼」，在鸟眼的准确位置点击（或直接拖动青色圆圈）。前后帧会自动重新计算。")
+            Text(state.isCustom ? "失锁处切到原图重新框选稳定区域，并点击框内锁定点建立关键帧；长时间遮挡需要人工确认。" : state.isAircraft ? "飞机识别为试验功能，复杂视角可能误定位。请逐帧检查；切到「原图+识别」，点「修正机头」后标记当前帧机头。" : "修正方法：切换到「原图+识别」，点「修正鸟眼」，在鸟眼的准确位置点击（或直接拖动青色圆圈）。前后帧会自动重新计算。")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
-                Button(state.isAircraft ? "修正机头" : "修正鸟眼") { state.startFixingEye() }
+                Button(state.isCustom ? "重新框选" : state.isAircraft ? "修正机头" : "修正鸟眼") { if state.isCustom { state.beginCustomBox() } else { state.startFixingEye() } }
                 Button("重新识别") { state.startAnalysis(fresh: true) }
             }
             .controlSize(.small)
@@ -576,27 +578,29 @@ struct FocusMarkCard: View {
             Toggle("在成片里显示对焦点", isOn: $state.exportSettings.focusMark.enabled)
                 .help("模拟相机对焦，在锁定位置绘制对焦框，让观众看到焦点")
             if state.exportSettings.focusMark.enabled {
-                if !state.isAircraft { Toggle("鸟眼框", isOn: $state.exportSettings.focusMark.showEye) }
-                Toggle(state.isAircraft ? "机头框" : "鸟头框", isOn: $state.exportSettings.focusMark.showHead)
-                Toggle(state.isAircraft ? "机身框（含机翼）" : "鸟身框（含展开的翅膀）", isOn: $state.exportSettings.focusMark.showBody)
+                if !state.isAircraft { Toggle(state.isCustom ? "锁定点框" : "鸟眼框", isOn: $state.exportSettings.focusMark.showEye) }
+                Toggle(state.isCustom ? "跟踪区域框" : state.isAircraft ? "机头框" : "鸟头框", isOn: $state.exportSettings.focusMark.showHead)
+                if !state.isCustom { Toggle(state.isAircraft ? "机身框（含机翼）" : "鸟身框（含展开的翅膀）", isOn: $state.exportSettings.focusMark.showBody)
                 if state.exportSettings.focusMark.showBody {
                     Toggle(state.isAircraft ? "机身框闪烁" : "鸟身框闪烁", isOn: $state.exportSettings.focusMark.blinkBody)
+                }
                 }
                 FormRow(label: "样式") {
                     Picker("", selection: $state.exportSettings.focusMark.style) {
                         ForEach(FocusMarkStyle.allCases) { Text($0.title).tag($0) }
                     }.labelsHidden()
                 }
-                if !state.isAircraft { focusColor("鸟眼颜色", selection: $state.exportSettings.focusMark.eyeColor) }
-                focusColor(state.isAircraft ? "机头颜色" : "鸟头颜色", selection: $state.exportSettings.focusMark.headColor)
-                focusColor(state.isAircraft ? "机身颜色" : "鸟身颜色", selection: $state.exportSettings.focusMark.bodyColor)
-                LabeledSlider(title: state.isAircraft ? "机头框大小" : "眼/头框大小", value: $state.exportSettings.focusMark.size, range: 0.5...2.5,
+                if !state.isAircraft { focusColor(state.isCustom ? "锁定点颜色" : "鸟眼颜色", selection: $state.exportSettings.focusMark.eyeColor) }
+                focusColor(state.isCustom ? "区域框颜色" : state.isAircraft ? "机头颜色" : "鸟头颜色", selection: $state.exportSettings.focusMark.headColor)
+                if !state.isCustom { focusColor(state.isAircraft ? "机身颜色" : "鸟身颜色", selection: $state.exportSettings.focusMark.bodyColor) }
+                LabeledSlider(title: state.isCustom ? "锁定点框大小" : state.isAircraft ? "机头框大小" : "眼/头框大小", value: $state.exportSettings.focusMark.size, range: 0.5...2.5,
                               format: { String(format: "%.1f×", $0) })
-                LabeledSlider(title: state.isAircraft ? "机身框大小" : "鸟身框大小", value: $state.exportSettings.focusMark.bodySize, range: 0.5...2.5,
+                if !state.isCustom { LabeledSlider(title: state.isAircraft ? "机身框大小" : "鸟身框大小", value: $state.exportSettings.focusMark.bodySize, range: 0.5...2.5,
                               format: { String(format: "%.1f×", $0) })
+                }
                 LabeledSlider(title: "线宽", value: $state.exportSettings.focusMark.lineWidth, range: 0.5...3,
                               format: { String(format: "%.1f×", $0) })
-                if !state.isAircraft { Toggle("鸟眼被遮挡时框住鸟头", isOn: $state.exportSettings.focusMark.headWhenHidden)
+                if state.subject == .bird { Toggle("鸟眼被遮挡时框住鸟头", isOn: $state.exportSettings.focusMark.headWhenHidden)
                     .help("关闭时，遮挡帧仍在推算的鸟眼位置显示小框") }
             }
             Toggle("快门闪烁边框", isOn: $state.exportSettings.focusMark.captureFlash)

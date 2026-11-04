@@ -102,13 +102,13 @@ def build_aircraft_track(a: SequenceAnalysis) -> Track:
 
 class AircraftAnalyzer:
     def __init__(self, models=None, cache: ProxyCache | None = None, parts_directory: Path | None = None,
-                 parts_model=None, proxy_long_side=2560, models_factory=None):
+                 parts_model=None, proxy_long_side=2560, models_factory=None, device="auto", status=None):
         self.models = models
         self.models_factory = models_factory
         self.cache = cache or ProxyCache()
         self.parts_directory = parts_directory or model_directory()
         self.identity = analysis_identity(self.parts_directory)
-        self.parts = parts_model if parts_model is not None else AircraftPartsModel(self.parts_directory)
+        self.parts = parts_model if parts_model is not None else AircraftPartsModel(self.parts_directory,device=device,status=status)
         self.base = Analyzer(None, cache=self.cache, proxy_long_side=max(1,min(4096, proxy_long_side)),
                              workers=min(4, os.cpu_count() or 1))
 

@@ -209,6 +209,13 @@ public final class RenderJob: @unchecked Sendable {
     }
 
     public func focusRect(_ i: Int, target: String, scale: Double) -> CGRect? {
+        if analysis.analysisSubject == .custom && target != "eye" {
+            guard target=="head",contains(i),let box=analysis.perFrame[i].custom?.box else { return nil }
+            let xf=plan.xforms[i].scaled(scale)
+            let ps=[V2(box.x,box.y),V2(box.x+box.w,box.y),V2(box.x,box.y+box.h),V2(box.x+box.w,box.y+box.h)].map(xf.map)
+            let xs=ps.map(\.x),ys=ps.map(\.y)
+            return CGRect(x:xs.min()!,y:ys.min()!,width:xs.max()!-xs.min()!,height:ys.max()!-ys.min()!)
+        }
         let aircraft = analysis.analysisSubject == .aircraft
         if aircraft && target == "eye" { return nil }
         guard contains(i), track.frames[i].hasData || (aircraft && target == "body") else { return nil }

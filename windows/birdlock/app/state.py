@@ -199,6 +199,8 @@ class AppState(ProjectWorkspace,QObject):
         self.preset_id: str | None = "lead"
         self.subject = "bird"
         self._subject_profiles = {}
+        self.pending_custom_box = None
+        self.eye_undo = None
         self._subject_rollback = None
         self.audio = AudioSettings()
         self.watermark = WatermarkSettings()
@@ -543,7 +545,7 @@ class AppState(ProjectWorkspace,QObject):
         self.preset_id = profile.presetID
 
     def change_subject(self, subject):
-        if subject not in ("bird","aircraft") or subject == self.subject or self.export_running:
+        if subject not in ("bird","aircraft","custom") or subject == self.subject or self.export_running:
             return
         self.stop();self._cancel.cancel();self._job_gen += 1
         self._rebuild_timer.stop();self._analysis_save_timer.stop()
@@ -557,7 +559,7 @@ class AppState(ProjectWorkspace,QObject):
             return
         self.subject = subject
         if subject not in self._subject_profiles:
-            self._subject_profiles[subject] = SubjectProfile.initial_aircraft(self._subject_profiles["bird"]) if subject == "aircraft" else self._profile()
+            self._subject_profiles[subject] = SubjectProfile.initial_aircraft(self._subject_profiles["bird"]) if subject == "aircraft" else SubjectProfile.initial_custom(self._profile())
         self._apply_profile(self._subject_profiles[subject])
         self._models = None;self._models_device = None
         self.analysis = None;self.job = None;self.preview_image = self.source_image = None;self.source_detail = None
@@ -578,6 +580,7 @@ class AppState(ProjectWorkspace,QObject):
         self.rebuild_job(immediate=True)
 
     def start_analysis(self, hint=None, fresh: bool = False):
+        self.pending_custom_box=None;self.source_tool='none'
         self._cancel.cancel()
         self.stop()
         flag = CancelFlag()
@@ -597,13 +600,15 @@ class AppState(ProjectWorkspace,QObject):
             if subject == "aircraft":
                 parts_directory = model_directory()
                 fp = fingerprint(fr,subject,analysis_identity(parts_directory))
-            else:fp = fingerprint(fr)
+            else:fp = fingerprint(fr,subject)
         except Exception as error:
             self.phase,self.message = "failed",str(error)
             self.changed.emit("phase")
             return
         clips = self.timeline_clips()
         kept_shots = [s.copy() for s in self.analysis.closeups] if self.analysis is not None and self.analysis.fingerprint == fp else []
+        kept_eyes = list(self.analysis.eyeSelections) if self.analysis is not None and self.analysis.fingerprint == fp else []
+        kept_seeds = list(self.analysis.customSeeds) if self.analysis is not None and self.analysis.fingerprint == fp else []
         keep = (dict(self.analysis.manualEye), set(self.analysis.excluded)) \
             if hint is None and self.analysis is not None and self.analysis.fingerprint == fp else None
 
@@ -644,16 +649,30 @@ class AppState(ProjectWorkspace,QObject):
                     self.stage = "加载识别模型"
                     self.on_main(lambda: self.changed.emit("progress"))
                     t0 = time.time()
-                    if subject == "aircraft":
+                    if subject == "custom":
+                        from ..core.custom_tracking import prepare,retrack
+                        a=prepare(fr,fps,self.cache,clips,lambda:flag.cancelled,lambda p:progress('准备跟踪照片',p))
+                        a.customSeeds=kept_seeds
+                        if kept_seeds:a=retrack(a,self.cache,cancelled=lambda:flag.cancelled,progress=lambda p:progress('跟踪自定义目标',p))
+                    elif subject == "aircraft":
+                        body_device = ["准备中"]
+                        def nose_status(description):
+                            def show():
+                                if flag is self._cancel and not flag.cancelled:
+                                    self.device_text = "机身："+body_device[0]+" · 机头："+description
+                                    self.changed.emit("device")
+                            self.on_main(show)
                         def make_models():
                             detector = YOLOModel(str(models_dir()/"BirdDetector.onnx"),0,device)
-                            description = "机身："+gpu.describe_device(detector.providers,device)+" · 机头：CPU"
+                            body_device[0] = gpu.describe_device(detector.providers,device)
+                            description = "机身："+body_device[0]+" · 机头：准备中"
                             def show_device():
                                 if not flag.cancelled:
                                     self.device_text = description;self.changed.emit("device")
                             self.on_main(show_device)
                             return SimpleNamespace(detector=detector)
-                        a = AircraftAnalyzer(cache=self.cache,parts_directory=parts_directory,models_factory=make_models).analyze(
+                        a = AircraftAnalyzer(cache=self.cache,parts_directory=parts_directory,models_factory=make_models,
+                                             device=device,status=nose_status).analyze(
                             fr,fps,hint,progress,lambda:flag.cancelled,clips=clips)
                     else:
                         models = self._get_models(flag)
@@ -665,7 +684,8 @@ class AppState(ProjectWorkspace,QObject):
                         if a.manualEye:
                             a.track = build_track(a)
                     a.clips, a.closeups = clips, shots
-                    if clips:a.track = build_track(a)
+                    a.eyeSelections=kept_eyes or a.eyeSelections
+                    a.track = build_track(a)
                     self.cache.save_analysis(a)
                     self.on_main(lambda: self._finish_analysis(a, flag))
                 except Cancelled:
@@ -695,6 +715,8 @@ class AppState(ProjectWorkspace,QObject):
         self._subject_rollback = None
         self.timeline_message = ""
         self.phase = "ready"
+        if a.subject=='custom' and not a.customSeeds:
+            self.view_mode='source';self.source_zoom=1.;self.source_tool='customBox'
         self.selection.trimStart, self.selection.trimEnd = 0, -1
         self.changed.emit("phase")
         self.changed.emit("analysis")
@@ -771,6 +793,95 @@ class AppState(ProjectWorkspace,QObject):
 
     # ------------------------------------------------------------------ edits
 
+    def begin_picking_eye(self):
+        if self.phase!='ready' or self.subject!='bird':return
+        self.stop();self.view_mode='source';self.source_tool='pickEye';self.source_zoom=max(4,self.source_zoom)
+        self.changed.emit('tool');self.refresh_preview()
+
+    def pick_eye(self,p):
+        a=self.analysis
+        if a is None or self.subject!='bird' or self.phase!='ready':return
+        i=self.current_frame;choices=[]
+        for side in ('left_eye','right_eye'):
+            k=a.poseSchema.index(side)
+            if k is not None and k<len(a.perFrame[i].keypoints) and a.perFrame[i].keypoints[k][2]>=.35:
+                choices.append((side,np.array(a.perFrame[i].keypoints[k][:2])))
+        if not choices:
+            self.timeline_message='未找到可靠的眼睛候选，请换一张清晰照片点选。';self.changed.emit('analysis');return
+        side,position=min(choices,key=lambda s:np.linalg.norm(s[1]-p))
+        if np.linalg.norm(position-p)>max(12,a.track.head_length[i]*.7):
+            self.timeline_message='请点选已识别的眼睛候选，或换一张清晰照片。';self.changed.emit('analysis');return
+        self.eye_undo=(a.fingerprint,list(a.eyeSelections));span=a.clip_range(i)
+        a.eyeSelections=[s for s in a.eyeSelections if s['frame'] not in span]+[dict(frame=i,side=side)]
+        self.source_tool='none';self.timeline_message='本组已固定同一只眼；已有手动修正仍优先生效。';self._edited()
+
+    def automatic_eye(self):
+        a=self.analysis
+        if a is None or self.subject!='bird' or self.phase!='ready':return
+        self.eye_undo=(a.fingerprint,list(a.eyeSelections));span=a.clip_range(self.current_frame)
+        a.eyeSelections=[s for s in a.eyeSelections if s['frame'] not in span];self.source_tool='none';self._edited()
+
+    def undo_eye_selection(self):
+        a=self.analysis
+        if a is None or not self.eye_undo or self.eye_undo[0]!=a.fingerprint or self.phase!='ready':return
+        a.eyeSelections=self.eye_undo[1];self.eye_undo=None;self._edited()
+
+    def begin_custom_box(self):
+        if self.subject!='custom' or self.phase!='ready':return
+        self.stop();self.pending_custom_box=None;self.view_mode='source';self.source_zoom=1.;self.source_tool='customBox'
+        self.changed.emit('tool');self.refresh_preview()
+
+    def set_custom_box(self,first,last):
+        if self.subject!='custom' or self.analysis is None or self.phase!='ready':return
+        f=self.analysis.frames[self.current_frame]
+        lo=np.maximum(0,np.minimum(first,last));hi=np.minimum([f.pixelWidth,f.pixelHeight],np.maximum(first,last))
+        if min(hi-lo)<4:
+            self.timeline_message='请框选稍大的稳定纹理区域。';self.changed.emit('analysis');return
+        self.pending_custom_box=(self.current_frame,dict(x=float(lo[0]),y=float(lo[1]),w=float(hi[0]-lo[0]),h=float(hi[1]-lo[1]),score=1.))
+        self.source_tool='customAnchor';self.timeline_message='在框内点击要固定的位置；点击中心即可按中心跟踪。'
+        self.changed.emit('tool');self.changed.emit('analysis')
+
+    def set_custom_anchor(self,p):
+        a=self.analysis
+        if a is None or self.subject!='custom' or self.phase!='ready':return
+        from ..core.custom_tracking import valid_seed
+        i=self.current_frame;o=a.perFrame[i].custom
+        b=self.pending_custom_box[1] if self.pending_custom_box and self.pending_custom_box[0]==i else (o['box'] if o else None)
+        seed=dict(frame=i,box=b,anchor=dict(x=float(p[0]),y=float(p[1])))
+        if b is None or not valid_seed(seed,a.frames):
+            self.timeline_message='请先在当前照片框选区域，再在框内点选锁定位置。';self.changed.emit('analysis');return
+        a=a.copy_edits();a.customSeeds=[s for s in a.customSeeds if s['frame']!=i]+[seed];a.manualEye.pop(i,None)
+        self.pending_custom_box=None;self.source_tool='none';self._retrack_custom(a,a.clip_range(i))
+
+    def remove_custom_seed(self):
+        if self.analysis is None or self.subject!='custom' or self.phase!='ready':return
+        a=self.analysis.copy_edits();a.customSeeds=[s for s in a.customSeeds if s['frame']!=self.current_frame]
+        self._retrack_custom(a,a.clip_range(self.current_frame))
+
+    def _retrack_custom(self,a,span):
+        self.stop();self._cancel.cancel();flag=CancelFlag();self._cancel=flag
+        self.phase='analyzing';self.stage='跟踪自定义目标';self.stage_progress=0.;self.analysis_started=time.time();self.changed.emit('phase')
+        def progress(p):
+            def update():
+                if flag is self._cancel and not flag.cancelled:self.stage_progress=p;self.changed.emit('progress')
+            self.on_main(update)
+        def work():
+            try:
+                from ..core.custom_tracking import retrack
+                with cache_policy.operation(self.cache.root):result=retrack(a,self.cache,span,lambda:flag.cancelled,progress)
+                def done():
+                    if flag is not self._cancel or flag.cancelled:return
+                    self.analysis=result;self.phase='ready';self.timeline_message='已跟踪；失锁处可重新框选，短距推算会标黄。'
+                    self._edited();self.changed.emit('phase')
+                self.on_main(done)
+            except Cancelled:pass
+            except Exception as error:
+                log.exception('custom tracking failed');message=str(error)
+                def fail():
+                    if flag is self._cancel and not flag.cancelled:self.phase='ready';self.timeline_message=message;self.changed.emit('phase')
+                self.on_main(fail)
+        threading.Thread(target=work,daemon=True).start()
+
     def _edited(self):
         a = self.analysis
         a.track = build_track(a)
@@ -802,6 +913,7 @@ class AppState(ProjectWorkspace,QObject):
         self.rebuild_job(immediate=False)
 
     def set_manual_eye(self, p, frame: int | None = None):
+        if self.subject=='custom':self.set_custom_anchor(p);return
         if self.analysis is None:
             return
         i = self.current_frame if frame is None else frame
@@ -1039,6 +1151,9 @@ class AppState(ProjectWorkspace,QObject):
         if a is None or a.count == 0:
             return
         self.current_frame = int(clamp(i, 0, a.count - 1))
+        if self.pending_custom_box and self.pending_custom_box[0]!=self.current_frame:
+            self.pending_custom_box=None
+            if self.subject=='custom':self.source_tool='customBox';self.changed.emit('tool')
         if self.playing and self.job:
             k = next((k for k, of in enumerate(self.job.output_frames) if of.a >= self.current_frame), None)
             if k is not None:
@@ -1391,11 +1506,13 @@ class AppState(ProjectWorkspace,QObject):
         if d.get("version",1) < 2 and self.composition.edgeFill == EdgeFill.AUTO_ZOOM:
             self.composition.edgeFill = EdgeFill.SHIFT
         self._subject_profiles = {k:SubjectProfile.from_dict(v) for k,v in d.get("profiles",{}).items()
-                                  if k in ("bird","aircraft") and isinstance(v,dict)}
+                                  if k in ("bird","aircraft","custom") and isinstance(v,dict)}
         self._subject_profiles.setdefault("bird",self._profile())
-        self.subject = d.get("subject") if d.get("subject") in ("bird","aircraft") else "bird"
+        self.subject = d.get("subject") if d.get("subject") in ("bird","aircraft","custom") else "bird"
         if self.subject == "aircraft":
             self._subject_profiles.setdefault("aircraft",SubjectProfile.initial_aircraft(self._subject_profiles["bird"]))
+        if self.subject == "custom":
+            self._subject_profiles.setdefault("custom",SubjectProfile.initial_custom(self._subject_profiles["bird"]))
         self._apply_profile(self._subject_profiles[self.subject])
         self.watermark = WatermarkSettings.from_dict(d.get("watermark"))
         if self.watermark.imagePath and not os.path.exists(self.watermark.imagePath):

@@ -34,6 +34,10 @@ def native_analysis(a):
     for p in d['perFrame']:
         p['keypoints']=[dict(x=k[0],y=k[1],conf=k[2]) for k in p['keypoints']]
         if p.get('aircraft') and 'registration_quality' in p['aircraft']:p['aircraft']['registrationQuality']=p['aircraft'].pop('registration_quality')
+        if p.get('custom'):
+            v=p['custom']['anchor'];p['custom']['anchor']=[v['x'],v['y']]
+    for seed in d.get('customSeeds',[]):
+        v=seed['anchor'];seed['anchor']=[v['x'],v['y']]
     return d
 
 def local_analysis(data):
@@ -45,6 +49,11 @@ def local_analysis(data):
         p.setdefault('target',None);p.setdefault('sharpness',None);p.setdefault('link',None);p.setdefault('aircraft',None)
         if p['link'] and isinstance(p['link']['delta'],dict):p['link']['delta']=[p['link']['delta']['x'],p['link']['delta']['y']]
         if p.get('aircraft') and 'registrationQuality' in p['aircraft']:p['aircraft']['registration_quality']=p['aircraft'].pop('registrationQuality')
+        if p.get('custom') and not isinstance(p['custom']['anchor'],dict):
+            v=p['custom']['anchor'];p['custom']['anchor']=dict(x=v[0],y=v[1])
+    for seed in d.get('customSeeds') or []:
+        if not isinstance(seed['anchor'],dict):
+            v=seed['anchor'];seed['anchor']=dict(x=v[0],y=v[1])
     d['manualEye']={k:((v['x'],v['y']) if isinstance(v,dict) else tuple(v)) for k,v in d.get('manualEye',{}).items()}
     a=SequenceAnalysis.from_dict(d);a.track=build_track(a);return a
 
@@ -90,7 +99,7 @@ def create(*,frames,segments,analysis,remembered,subject,profile,profiles,audio,
             if not recipe.is_file():raise ValueError('请重新导入一次该视频，记录原片与镜头参数后再保存工程。')
             motion=root/'motion.json'
             videos.append(dict(cacheDirectory=directory,recipe=json.loads(recipe.read_text(encoding='utf-8')),motion=json.loads(motion.read_text(encoding='utf-8')) if motion.exists() else None))
-    return dict(format=FORMAT,schema=SCHEMA,creatorVersion='1.9.0',subject=subject,frames=[{**f.to_dict(),'url':uri(f.path)} for f in frames],
+    return dict(format=FORMAT,schema=SCHEMA,creatorVersion='1.10.0',subject=subject,frames=[{**f.to_dict(),'url':uri(f.path)} for f in frames],
         segments=[dict(start=s.start,count=s.count,fps=s.fps) for s in segments],segmentIndex=segment_index,mergeGroups=list(merge_groups),
         analyses=[native_analysis(a) for a in analyses],profile=native_profile(profile),profiles={k:native_profile(v) for k,v in profiles.items()},
         audio=native_audio(audio),watermark=native_watermark(watermark),videos=videos,currentFrame=current_frame,viewMode=view_mode,sourceZoom=source_zoom,previewAudio=preview_audio)
@@ -130,7 +139,7 @@ def read(path, relocation=None):
     d=json.loads(path.read_text(encoding='utf-8'))
     if d.get('format')!=FORMAT or d.get('schema')!=SCHEMA:raise ValueError('不支持的工程格式或版本。')
     if not d.get('frames') or len(d['frames'])>100000 or not d.get('analyses'):raise ValueError('工程缺少有效画面或识别记录。')
-    if d.get('subject') not in ('bird','aircraft'):raise ValueError('工程主体类型无效。')
+    if d.get('subject') not in ('bird','aircraft','custom'):raise ValueError('工程主体类型无效。')
     missing=[];mapping={};warnings=[]
     for loc in d.get('locations',[]):
         original=loc['path'];name=original.replace('\\','/').rsplit('/',1)[-1]
@@ -147,6 +156,10 @@ def read(path, relocation=None):
         if not 0<=seg['start']<seg['start']+seg['count']<=n or not 0<seg['fps']<=1000:raise ValueError('工程分组范围无效。')
     master={f['url'] for f in d['frames']}
     for a in d['analyses']:
+        from .custom_tracking import valid_seed
+        local=local_analysis(a)
+        if any(not valid_seed(s,local.frames) for s in local.customSeeds):raise ValueError('工程跟踪参考记录无效。')
+        if any(not 0<=s['frame']<local.count or s['side'] not in ('left_eye','right_eye') for s in local.eyeSelections):raise ValueError('工程选眼记录无效。')
         if any(f['url'] not in master for f in a['frames']):raise ValueError('工程识别记录引用了其他素材。')
         for i,frame in enumerate(a['perFrame']):
             if frame['index']!=i or len(frame['head']['points'])!=6 or len(frame['head']['conf'])!=6:raise ValueError('工程头部记录不完整。')

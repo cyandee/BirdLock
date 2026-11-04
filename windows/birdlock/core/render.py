@@ -561,6 +561,11 @@ class RenderJob:
     # -- full output frame
 
     def focus_rect(self, i: int, target: str, scale: float):
+        if getattr(self.analysis,'subject','bird')=='custom' and target!='eye':
+            if target!='head' or not self.contains(i) or self.analysis.perFrame[i].custom is None:return None
+            box=self.analysis.perFrame[i].custom['box'];xf=self.plan.xforms[i].scaled(scale)
+            points=np.array([xf.map(p) for p in ((box['x'],box['y']),(box['x']+box['w'],box['y']),(box['x'],box['y']+box['h']),(box['x']+box['w'],box['y']+box['h']))])
+            lo,hi=points.min(0),points.max(0);return np.r_[(lo+hi)/2,hi-lo]
         aircraft = getattr(self.analysis, "subject", "bird") == "aircraft"
         if aircraft and target == "eye":
             return None

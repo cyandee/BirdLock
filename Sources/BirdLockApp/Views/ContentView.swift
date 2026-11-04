@@ -157,10 +157,11 @@ struct MainToolbar: ToolbarContent {
             Picker("识别主体", selection: Binding(get: { state.subject },set: { state.changeSubject($0) })) {
                 Text("鸟类").tag(AnalysisSubject.bird)
                 Text("飞机（试验）").tag(AnalysisSubject.aircraft)
+                Text("自定义目标").tag(AnalysisSubject.custom)
             }
             .frame(width: 125)
             .disabled(state.exportState.running || state.phase == .importing)
-            .help("飞机模式自动识别机头和机身；复杂视角请检查机头，可逐帧修正。首次分析较慢。")
+            .help("自定义目标：在一张清晰照片框选稳定区域，再点击框内锁定点，自动跟踪同组照片。")
             Button { openImportPanel(state) } label: { Label("导入", systemImage: "photo.stack") }
                 .help("导入连拍照片（文件夹或多张 JPG / HEIF）")
             if state.segments.count > 1 {

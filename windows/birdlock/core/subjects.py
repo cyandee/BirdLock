@@ -21,10 +21,13 @@ def _aircraft_presets():
 
 
 AIRCRAFT_PRESETS=_aircraft_presets()
+CUSTOM_PRESETS=[CompositionPreset('custom-center','目标居中','锁定所选局部位置',Composition(lockPoint=LockPoint.EYE,autoLeadRoom=False,anchorX=.5,anchorY=.5,framing=4,sizeMode=SizeMode.FIXED_CROP)),
+                CompositionPreset('custom-wide','宽松取景','保留周围环境',Composition(lockPoint=LockPoint.EYE,autoLeadRoom=False,anchorX=.5,anchorY=.5,framing=7,sizeMode=SizeMode.FIXED_CROP)),
+                CompositionPreset('custom-follow','柔和跟随','平缓跟随所选位置',Composition(lockPoint=LockPoint.EYE,autoLeadRoom=False,anchorX=.5,anchorY=.5,framing=4,followSoftness=.45,sizeMode=SizeMode.FIXED_CROP))]
 
 
 def presets(subject):
-    return AIRCRAFT_PRESETS if subject=='aircraft' else PRESETS
+    return AIRCRAFT_PRESETS if subject=='aircraft' else (CUSTOM_PRESETS if subject=='custom' else PRESETS)
 
 
 @dataclass
@@ -47,3 +50,8 @@ class SubjectProfile(Settings):
         profile.export.focusMark.enabled=True
         profile.export.focusMark.showEye=False;profile.export.focusMark.showHead=True;profile.export.focusMark.showBody=True
         return profile
+
+    @staticmethod
+    def initial_custom(previous):
+        profile=previous.untrimmed();profile.composition=CUSTOM_PRESETS[0].composition.copy();profile.presetID='custom-center'
+        profile.export.focusMark.enabled=False;profile.export.focusMark.headWhenHidden=False;profile.selection.dropUntracked=True;return profile

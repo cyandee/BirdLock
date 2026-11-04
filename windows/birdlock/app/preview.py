@@ -208,6 +208,14 @@ class PreviewCanvas(QWidget):
             q, (x, y, w, h), _ = st.source_detail
             p.drawImage(m.rect(x, y, w, h), q)
         fa = a.perFrame[i]
+        box=fa.custom['box'] if fa.custom else None
+        if st.pending_custom_box and st.pending_custom_box[0]==i:box=st.pending_custom_box[1]
+        if self._drag and self._drag.get('kind')=='customBox':
+            start,end=self._drag['start'],self._drag.get('end',self._drag['start'])
+            lo,hi=np.minimum(start,end),np.maximum(start,end);box=dict(x=lo[0],y=lo[1],w=hi[0]-lo[0],h=hi[1]-lo[1])
+        if box:
+            p.setPen(QPen(theme.ACCENT,2,Qt.DashLine));p.setBrush(Qt.NoBrush)
+            p.drawRect(m.rect(*(box[k] for k in ('x','y','w','h'))))
         # birds
         for j, b in enumerate(fa.birds):
             rr = m.rect(b.x, b.y, b.w, b.h)
@@ -219,7 +227,7 @@ class PreviewCanvas(QWidget):
             p.drawRoundedRect(rr, 4, 4)
         # crop (or the ghost while dragging), outside dimmed
         quad = self._drag["ghost"] if self._drag and self._drag.get("ghost") is not None else self.crop_quad(i)
-        if quad is not None:
+        if quad is not None and st.source_tool not in ('customBox','customAnchor'):
             vq = [m.view(v) for v in quad]
             path = QPainterPath()
             path.addRect(ir)
@@ -244,7 +252,13 @@ class PreviewCanvas(QWidget):
                 p.setBrush(c)
                 p.drawEllipse(m.view((x, y)), 2.5, 2.5)
         t = a.track
-        if t is not None:
+        if st.source_tool=='pickEye':
+            for j,side in enumerate(('left_eye','right_eye')):
+                k=a.poseSchema.index(side)
+                if k is not None and k<len(fa.keypoints) and fa.keypoints[k][2]>=.35:
+                    center=m.view(fa.keypoints[k][:2]);p.setPen(QPen(theme.MANUAL,2));p.setBrush(Qt.NoBrush);p.drawEllipse(center,9,9)
+                    p.drawText(center+QPointF(-3,-14),str(j+1))
+        if t is not None and (st.subject!='custom' or t.has_data[i]):
             hc = m.view(t.head_center[i])
             p.setPen(QPen(QColor(250, 184, 61, 205), 1))
             p.setBrush(Qt.NoBrush)
@@ -312,7 +326,7 @@ class PreviewCanvas(QWidget):
         m = self.mapping()
         if m is None or self._drag:
             return
-        if st.source_tool in ("fixEye", "pickBird"):
+        if st.source_tool in ("fixEye", "pickBird", "pickEye", "customBox", "customAnchor"):
             self.setCursor(Qt.CrossCursor)
             return
         kind, _ = self._hit(pos, m)
@@ -335,7 +349,10 @@ class PreviewCanvas(QWidget):
         if m is None:
             return
         start = m.src(pos)
-        if st.source_tool == "pickBird":
+        if st.phase!='ready':return
+        if st.source_tool in ('customBox','customAnchor','pickEye'):
+            self._drag={'kind':st.source_tool,'start':start,'end':start}
+        elif st.source_tool == "pickBird":
             self._drag = {"kind": "pick", "start": start}
         elif st.source_tool == "fixEye":
             self._drag = {"kind": "place", "start": start, "eye": start}
@@ -387,6 +404,7 @@ class PreviewCanvas(QWidget):
             return
         cur = m.src(pos)
         d = self._drag
+        if d['kind']=='customBox':d['end']=cur
         if d["kind"] in ("eye", "place"):
             d["eye"] = cur
         elif d["kind"] == "move":
@@ -418,6 +436,9 @@ class PreviewCanvas(QWidget):
                 inside = m.image_rect.contains(ev.position())
                 if d["kind"] in ("eye", "place") and inside:
                     st.set_manual_eye(p)
+                elif d['kind']=='customBox':st.set_custom_box(d['start'],p)
+                elif d['kind']=='customAnchor' and inside:st.set_custom_anchor(p)
+                elif d['kind']=='pickEye' and inside:st.pick_eye(p)
                 elif d["kind"] == "pick" and inside:
                     st.pick_bird(p)
             if d["kind"] in ("move", "scale"):
@@ -487,6 +508,7 @@ class SourceToolBar(QFrame):
         self.refresh()
 
     def _tool(self, t):
+        if self.state.subject=='custom' and t=='pickBird':self.state.begin_custom_box();return
         self.state.source_tool = "none" if self.state.source_tool == t else t
         self.state.changed.emit("tool")
 
@@ -500,9 +522,10 @@ class SourceToolBar(QFrame):
         self.setVisible(vis)
         if not vis:
             return
-        self.fix.setText("◎ 修正机头" if st.is_aircraft else "◎ 修正鸟眼")
-        self.fix.setToolTip("点击当前帧机头的准确位置（E）" if st.is_aircraft else "点击鸟眼的准确位置（E）")
-        self.pick.setText("☝ 选择飞机" if st.is_aircraft else "☝ 选择目标鸟")
+        self.fix.setText("◎ 调整锁定点" if st.subject=='custom' else ("◎ 修正机头" if st.is_aircraft else "◎ 修正鸟眼"))
+        self.fix.setToolTip("点击区域内锁定位置，建立跟踪关键帧" if st.subject=="custom" else "点击当前帧机头的准确位置（E）" if st.is_aircraft else "点击鸟眼的准确位置（E）")
+        self.pick.setText("重新框选" if st.subject=='custom' else ("☝ 选择飞机" if st.is_aircraft else "☝ 选择目标鸟"))
+        self.setEnabled(st.phase=='ready')
         self.pick.setToolTip("点击要跟踪的主体（会重新识别）")
         self.fix.setChecked(st.source_tool == "fixEye")
         self.pick.setChecked(st.source_tool == "pickBird")
@@ -562,6 +585,8 @@ class FrameBadges(QWidget):
             source = a.perFrame[i].aircraft
             self._add(Pill(("机头跟踪" if source is not None and source.source == "tracked" else "机头识别") if t.has_data[i] else "未定位机头",theme.OK if t.has_data[i] else theme.WARN))
             button = QPushButton("修正机头");button.clicked.connect(st.start_fixing_eye);self._add(button)
+        elif st.subject=='custom':
+            self._add(Pill(('局部跟踪' if t.eye_visible[i] else '短距推算') if t.has_data[i] else '失锁，请框选',theme.OK if t.eye_visible[i] else theme.WARN))
         elif t.eye_visible[i]:
             self._add(Pill("鸟眼", theme.OK))
         elif t.has_data[i]:
@@ -603,7 +628,13 @@ class HintLabel(QLabel):
             if st.view_mode == "source":
                 text = {"fixEye": "在鸟眼的准确位置点击（可按住拖动微调）· 推算不准的帧逐一修正后，前后帧会自动跟着重算",
                         "pickBird": "点击要跟踪的鸟",
-                        "none": "拖动虚线框移动取景 · 拖动四角缩放取景范围 · 拖动圆圈修正鸟眼 · 滚轮缩放"}[st.source_tool]
+                        "none": "拖动虚线框移动取景 · 拖动四角缩放取景范围 · 拖动圆圈修正鸟眼 · 滚轮缩放"}.get(st.source_tool,'')
+                extra={'pickEye':'点选要整组固定的那只眼睛；可从末尾清晰照片开始',
+                       'customBox':'拖出稳定纹理区域，避开大面积背景和持续变形的翅膀',
+                       'customAnchor':'在框内点击锁定点；随后自动向前、向后跟踪本组照片'}
+                if st.source_tool in extra:text=extra[st.source_tool]
+                if st.subject=='custom' and st.source_tool=='fixEye':text='点击区域内锁定位置，建立新的跟踪关键帧'
+                if st.subject=='custom' and st.source_tool=='none':text='拖动取景框调整构图 · 拖动圆圈调整锁定点 · 失锁处重新框选'
                 if st.is_aircraft:
                     text = {"fixEye":"点击当前帧机头的准确位置，可拖动微调","pickBird":"点击要跟踪的飞机",
                             "none":"拖动虚线框移动取景 · 拖动四角缩放 · 拖动圆圈修正当前帧机头"}[st.source_tool]

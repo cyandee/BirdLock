@@ -185,9 +185,9 @@ class FrameTimeline(QWidget):
             p.drawPath(path)
             p.drawText(QPointF(lx, H - 5), label)
 
-        curve(t.eye[:, 0], QColor(64, 217, 255, 215), ("机头 X" if self.state.is_aircraft else "鸟眼 X"), PAD)
-        curve(t.eye[:, 1], QColor(64, 217, 255, 115), ("机头 Y" if self.state.is_aircraft else "鸟眼 Y"), PAD + 52)
-        curve(t.head_length, QColor(250, 184, 61, 205), ("机头大小" if self.state.is_aircraft else "鸟头大小"), PAD + 104)
+        curve(t.eye[:, 0], QColor(64, 217, 255, 215), ("锁定点 X" if self.state.subject=="custom" else "机头 X" if self.state.is_aircraft else "鸟眼 X"), PAD)
+        curve(t.eye[:, 1], QColor(64, 217, 255, 115), ("锁定点 Y" if self.state.subject=="custom" else "机头 Y" if self.state.is_aircraft else "鸟眼 Y"), PAD + 52)
+        curve(t.head_length, QColor(250, 184, 61, 205), ("区域大小" if self.state.subject=="custom" else "机头大小" if self.state.is_aircraft else "鸟头大小"), PAD + 104)
         curve([pp.sharpness if pp.sharpness is not None else np.nan for pp in a.perFrame], QColor(255, 255, 255, 90), "清晰度", PAD + 168)
         if job:
             s0 = min(job.selection.trimStart, n - 1)
@@ -201,7 +201,7 @@ class FrameTimeline(QWidget):
         p.setBrush(theme.ACCENT)
         p.setPen(Qt.NoPen)
         p.drawEllipse(QPointF(px, 6), 4, 4)
-        legend = ([(theme.WARN,"机头定位")] if self.state.is_aircraft else [(theme.OK,"鸟眼"),(theme.WARN,"鸟头推算")]) + [ (theme.MANUAL, "手动修正"), (theme.BAD, "未识别/模糊")]
+        legend = ([(theme.OK,"可靠跟踪"),(theme.WARN,"短距推算")] if self.state.subject=="custom" else [(theme.WARN,"机头定位")] if self.state.is_aircraft else [(theme.OK,"鸟眼"),(theme.WARN,"鸟头推算")]) + [ (theme.MANUAL, "手动修正"), (theme.BAD, "未识别/模糊")]
         fm = p.fontMetrics()
         xx = W - PAD
         for color, label in reversed(legend):

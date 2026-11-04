@@ -1,4 +1,4 @@
-"""Assemble the unrun 1.9.0 Windows candidate from the verified 1.6.0 runtime.
+"""Assemble the unrun 1.10.0 Windows candidate from the verified 1.6.0 runtime.
 
 This is a local maintenance fallback, not PyInstaller cross-compilation. It preserves
 the Windows bootloader, native dependencies and third-party PYZ payloads, recompiles
@@ -58,6 +58,51 @@ def make_pyz(old_data, reader, sources):
     return bytes(payload)
 
 
+def patch_version_resource(prefix, pe, version):
+    """Rebuild length-prefixed VERSIONINFO, keeping PE sections and executable code intact.
+
+    The two-digit minor version no longer fits an in-place string substitution. Shorten
+    the existing descriptive product strings to BirdLock, which leaves enough room in
+    the original resource allocation. No Win32 loader/API or application code is run.
+    """
+    def parse(data, offset=0):
+        length, count, kind=struct.unpack_from('<HHH',data,offset)
+        end=offset+6
+        while data[end:end+2] != b'\0\0':end+=2
+        name=data[offset+6:end].decode('utf-16le');start=(end+2+3)&~3
+        value=data[start:start+(count*2 if kind==1 else count)]
+        children=[];cursor=(start+len(value)+3)&~3
+        while cursor+6<=offset+length:
+            if struct.unpack_from('<H',data,cursor)[0]<6:break
+            child,used=parse(data,cursor);children.append(child);cursor=(cursor+used+3)&~3
+        return [name,kind,value,children],length
+    def encode(node):
+        name,kind,value,children=node
+        if name in ('FileVersion','ProductVersion'):value=(version+'\0').encode('utf-16le')
+        if name in ('FileDescription','ProductName'):value='BirdLock\0'.encode('utf-16le')
+        if name=='VS_VERSION_INFO':
+            value=bytearray(value);major,minor,patch=map(int,version.split('.'))
+            struct.pack_into('<IIII',value,8,(major<<16)|minor,patch<<16,(major<<16)|minor,patch<<16)
+        key=(name+'\0').encode('utf-16le');raw=bytearray(b'\0'*6+key)
+        raw.extend(b'\0'*((-len(raw))%4));raw.extend(value)
+        for child in children:
+            raw.extend(b'\0'*((-len(raw))%4));raw.extend(encode(child))
+        struct.pack_into('<HHH',raw,0,len(raw),len(value)//2 if kind==1 else len(value),kind)
+        return bytes(raw)
+    entries=[]
+    for entry in pe.DIRECTORY_ENTRY_RESOURCE.entries:
+        if entry.id==16:
+            for item in entry.directory.entries:
+                entries.extend(language.data.struct for language in item.directory.entries)
+    if len(entries)!=1:raise ValueError('Unexpected version resource layout')
+    entry=entries[0];offset=pe.get_offset_from_rva(entry.OffsetToData)
+    node,_=parse(bytes(prefix[offset:offset+entry.Size]));blob=encode(node)
+    if len(blob)>entry.Size:raise ValueError('Version metadata exceeds the original resource allocation')
+    prefix[offset:offset+entry.Size]=blob+b'\0'*(entry.Size-len(blob))
+    struct.pack_into('<I',prefix,entry.get_field_absolute_offset('Size'),len(blob))
+    return prefix
+
+
 def make_executable(base_path, pyz_data, launcher):
     original = base_path.read_bytes(); reader = CArchiveReader(str(base_path))
     cookie = struct.unpack(reader._COOKIE_FORMAT, original[reader._end_offset-reader._COOKIE_LENGTH:reader._end_offset])
@@ -65,15 +110,7 @@ def make_executable(base_path, pyz_data, launcher):
     prefix = bytearray(original[:reader._start_offset]); pe = pefile.PE(data=bytes(prefix))
     if pe.FILE_HEADER.Machine != 0x8664 or pe.OPTIONAL_HEADER.DATA_DIRECTORY[4].VirtualAddress:
         raise ValueError('Expected the unsigned x64 local test bootloader')
-    old_text = '1.6.0'.encode('utf-16le'); new_text = '1.9.0'.encode('utf-16le')
-    if prefix.count(old_text) != 2: raise ValueError('Unexpected version resource layout')
-    prefix = prefix.replace(old_text, new_text)
-    fixed = pe.VS_FIXEDFILEINFO[0]
-    for field in ('FileVersionMS', 'ProductVersionMS'):
-        offset = fixed.get_field_absolute_offset(field)
-        prefix[offset:offset+4] = struct.pack('<I', (1 << 16) | 9)
-    for field in ('FileVersionLS', 'ProductVersionLS'):
-        offset = fixed.get_field_absolute_offset(field); prefix[offset:offset+4] = struct.pack('<I', 0)
+    prefix = patch_version_resource(prefix,pe,'1.10.0')
     data = bytearray(); toc = []
     for name, (offset, length, unpacked, compressed, kind) in reader.toc.items():
         blob = original[reader._start_offset+offset:reader._start_offset+offset+length]
@@ -117,11 +154,11 @@ def verify_archive(base_path, executable, sources):
     for name in ('xml.etree.ElementTree', 'xml.etree.ElementPath', 'xml.parsers.expat', 'wave', 'csv'):
         if name not in new.toc: raise ValueError('Missing standard-library module: ' + name)
     pe = pefile.PE(str(executable)); fixed = pe.VS_FIXEDFILEINFO[0]
-    if fixed.FileVersionMS != (1 << 16) | 9 or fixed.FileVersionLS != 0: raise ValueError('Incorrect PE version')
+    if fixed.FileVersionMS != (1 << 16) | 10 or fixed.FileVersionLS != 0: raise ValueError('Incorrect PE version')
     for info in pe.FileInfo:
         for entry in info:
             for table in getattr(entry, 'StringTable', []):
-                if table.entries.get(b'FileVersion') != b'1.9.0' or table.entries.get(b'ProductVersion') != b'1.9.0': raise ValueError('Incorrect version strings')
+                if table.entries.get(b'FileVersion') != b'1.10.0' or table.entries.get(b'ProductVersion') != b'1.10.0': raise ValueError('Incorrect version strings')
     return dict(birdlockModules=len(sources), preservedThirdPartyModules=preserved, python='3.12', pyinstaller=PyInstaller.__version__, sourceBytecodeEqual=True, bootloaderCodeUnchanged=True)
 
 
@@ -132,7 +169,7 @@ def main():
     parser.add_argument('--release',action='store_true',help='Package for an authorized public release, keeping the Windows runtime limitation explicit')
     args = parser.parse_args()
     if sys.version_info[:2] != (3,12) or PyInstaller.__version__ != '6.22.3': raise SystemExit('Use Python 3.12 and PyInstaller 6.22.3')
-    if (ROOT/'VERSION').read_text().strip() != '1.9.0': raise SystemExit('This maintenance fallback is limited to the reviewed 1.6.0 → 1.9.0 change')
+    if (ROOT/'VERSION').read_text().strip() != '1.10.0': raise SystemExit('This maintenance fallback is limited to the reviewed 1.6.0 → 1.10.0 change')
     if digest(args.base) != BASE_SHA256: raise SystemExit('Base is not the verified local 1.6.0 Windows package')
     output = args.output.resolve()
     if output.exists(): raise SystemExit('Output already exists; choose a new directory to retain the rollback point')
@@ -164,18 +201,18 @@ def main():
         for source, target in ((ROOT/'SharedResources/LensProfiles', internal/'lens_profiles'), (ROOT/'windows/telemetry', internal/'telemetry')):
             shutil.copytree(source, target)
         docs = internal/'docs'
-        for name in ('用户协议.md','第三方许可.md','自动更新.md','视频导入与镜头配置.md','工程与缓存管理.md','更新说明-1.9.0.md'):
+        for name in ('用户协议.md','第三方许可.md','自动更新.md','视频导入与镜头配置.md','工程与缓存管理.md','更新说明-1.10.0.md','自定义目标与固定选眼.md'):
             shutil.copy2(ROOT/'docs'/name, docs/name)
         shutil.copy2(ROOT/'LICENSE', docs/'LICENSE')
         for source in (ROOT/'docs/windows').glob('*.md'): shutil.copy2(source, docs/'windows'/source.name)
         subprocess.run([sys.executable,'-I',str(ROOT/'scripts/md2html.py'),str(ROOT/'docs/windows/使用说明.md'),str(docs/'windows/使用说明.html')],check=True)
         shutil.copy2(docs/'windows/使用说明.html', app/'使用说明.html')
-        note = 'Windows 1.9.0 本地待测候选。基于已核验 1.6.0 运行库重新编入当前程序与资源；未做本次 Windows 运行验证，请在实体电脑测试。\n'
+        note = 'Windows 1.10.0 本地待测候选。基于已核验 1.6.0 运行库重新编入当前程序与资源；未做本次 Windows 运行验证，请在实体电脑测试。\n'
         if args.release:
-            note='BirdLock 1.9.0 Windows版。已核对源码、版本、更新协议与资源；本次未完成Windows实体电脑运行验证，请先用短片段测试。\n'
+            note='BirdLock 1.10.0 Windows版。已核对源码、版本、更新协议与资源；本次未完成Windows实体电脑运行验证，请先用短片段测试。\n'
             (app/'本地测试说明.txt').unlink(missing_ok=True)
         (app/('运行验证说明.txt' if args.release else '本地测试说明.txt')).write_text(note,encoding='utf-8')
-        (app/'源代码.txt').write_text('1.9.0 完整源代码随同版本 BirdLock-1.9.0-source.zip 提供。公开仓库：https://github.com/cyandee/BirdLock\n',encoding='utf-8')
+        (app/'源代码.txt').write_text('1.10.0 完整源代码随同版本 BirdLock-1.10.0-source.zip 提供。公开仓库：https://github.com/cyandee/BirdLock\n',encoding='utf-8')
         subprocess.run([sys.executable,'-I',str(ROOT/'scripts/verify_bundle.py'),'--lens-resources',str(internal/'lens_profiles')],check=True)
         subprocess.run([sys.executable,'-I',str(ROOT/'scripts/verify_bundle.py'),'--telemetry-resources',str(internal/'telemetry'),'--telemetry-binary',str(internal/'telemetry/BirdLockTelemetry.exe'),'--telemetry-windows'],check=True)
         catalog = internal/'updates/managed-files.json'
@@ -191,12 +228,12 @@ def main():
                 native_files += 1
         receipt['preservedNativeFiles'] = native_files
         output.mkdir(); shutil.move(str(app), str(output/'BirdLock'))
-    archive = output/'BirdLock-1.9.0-Windows-x64.zip'
+    archive = output/'BirdLock-1.10.0-Windows-x64.zip'
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6, strict_timestamps=False) as z:
         for path in sorted((output/'BirdLock').rglob('*')): z.write(path, path.relative_to(output).as_posix())
     with zipfile.ZipFile(archive) as z:
         if z.testzip(): raise ValueError('Final ZIP CRC error')
-    receipt.update(version='1.9.0', baseSHA256=BASE_SHA256, archiveSHA256=digest(archive), windowsRuntimeVerified=False, nativeDependenciesReused=True)
+    receipt.update(version='1.10.0', baseSHA256=BASE_SHA256, archiveSHA256=digest(archive), windowsRuntimeVerified=False, nativeDependenciesReused=True)
     (output/'assembly-verification.json').write_text(json.dumps(receipt,indent=2)+'\n',encoding='utf-8')
     print(json.dumps(receipt,indent=2))
 

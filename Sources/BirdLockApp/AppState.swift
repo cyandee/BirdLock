@@ -21,7 +21,7 @@ enum ViewMode: String, CaseIterable, Identifiable {
 }
 
 enum SourceTool: String, CaseIterable, Identifiable {
-    case none, fixEye, pickBird
+    case none, fixEye, pickBird, pickEye, customBox, customAnchor
     var id: String { rawValue }
 }
 
@@ -88,6 +88,9 @@ final class AppState {
     }
     private var subjectRollback: SubjectRollback?
     var isAircraft: Bool { subject == .aircraft }
+    var isCustom: Bool { subject == .custom }
+    var pendingCustomBox: (frame: Int, box: BoxD)?
+    var eyeUndo: (fingerprint:String, selections:[EyeSelection])?
     var presets: [CompositionPreset] { CompositionPreset.forSubject(subject) }
     var audio = AudioSettings() { didSet { audioChanged(from: oldValue) } }
     var watermark = WatermarkSettings() { didSet { watermarkChanged(from: oldValue) } }
@@ -306,6 +309,7 @@ final class AppState {
     }
 
     func startAnalysis(hint: (frame: Int, point: V2)? = nil, fresh: Bool = false) {
+        pendingCustomBox=nil;sourceTool = .none
         analysisTask?.cancel(); cancelFlag.cancel()
         stop()
         let flag = CancelFlag(); cancelFlag = flag
@@ -326,9 +330,11 @@ final class AppState {
                 let manifest = try AircraftModelManifest.load(directory: directory,verifyWeights: false)
                 partsDirectory = directory
                 fpNow = Analyzer.fingerprint(fr,aircraftModelIdentity: manifest.analysisIdentity)
-            } else { partsDirectory = nil;fpNow = Analyzer.fingerprint(fr) }
+            } else { partsDirectory = nil;fpNow = Analyzer.fingerprint(fr,aircraftModelIdentity:nil,custom:kind == .custom) }
         } catch { phase = .failed(error.localizedDescription);return }
         let keptShots = analysis?.fingerprint == fpNow ? analysis?.closeups : nil
+        let keptEyeSelections = analysis?.fingerprint == fpNow ? analysis?.eyeSelections : nil
+        let keptCustomSeeds = analysis?.fingerprint == fpNow ? analysis?.customSeeds : nil
         // "重新识别" of the same photos keeps the user's corrections; picking another bird starts clean
         let keep: (eyes: [Int: V2], excluded: Set<Int>)? = (hint == nil && analysis?.fingerprint == fpNow)
             ? (analysis!.manualEye, analysis!.excluded) : nil
@@ -361,7 +367,13 @@ final class AppState {
                     }
                 }
                 var a: SequenceAnalysis
-                if kind == .aircraft, let partsDirectory {
+                if kind == .custom {
+                    a = try CustomTracking.prepare(frames:fr,fps:fps,clips:clips,isCancelled:{ flag.isCancelled },progress:{ p in
+                        Task { @MainActor in if !flag.isCancelled,case .analyzing = self?.phase { self?.phase = .analyzing(stage:"准备跟踪照片",progress:p) } }
+                    })
+                    a.customSeeds=keptCustomSeeds
+                    if !(a.customSeeds ?? []).isEmpty { a = try CustomTracking.retrack(a,isCancelled:{ flag.isCancelled }) }
+                } else if kind == .aircraft, let partsDirectory {
                     let az = try AircraftAnalyzer(detectorFactory: {
                         guard let url = ModelStore.locate(ModelStore.detectorName) else { throw ModelError.notFound(ModelStore.detectorName) }
                         return try YOLOModel(url: url,keypointCount: 0)
@@ -380,7 +392,8 @@ final class AppState {
                 a.excluded = edits?.excluded ?? []
                 a.clips = clips
                 a.closeups = shots
-                if !a.manualEye.isEmpty || !clips.isEmpty { a.track = TrackBuilder.build(a) }
+                a.eyeSelections=keptEyeSelections ?? a.eyeSelections
+                a.track = TrackBuilder.build(a)
                 ProxyCache.shared.saveAnalysis(a)
                 Diagnostics.record("analysis complete seconds=\(Date().timeIntervalSince(started)) photos=\(a.count)")
                 await self?.finishAnalysis(a, flag: flag)
@@ -405,6 +418,7 @@ final class AppState {
         projectDirty=true;projectCloseApproved=false
         subjectRollback = nil
         phase = .ready
+        if a.analysisSubject == .custom && (a.customSeeds ?? []).isEmpty { viewMode = .source;sourceZoom=1;sourceTool = .customBox }
         selection.trimEnd = nil
         selection.trimStart = 0
         rebuildJob(immediate: true)
@@ -450,7 +464,7 @@ final class AppState {
         if subjectRollback?.subject == next { restoreSubjectTransition();return }
         subject = next
         if subjectProfiles[next.rawValue] == nil {
-            subjectProfiles[next.rawValue] = next == .aircraft ? .initialAircraft(from: subjectProfiles["bird"] ?? currentProfile) : currentProfile
+            subjectProfiles[next.rawValue] = next == .aircraft ? .initialAircraft(from: subjectProfiles["bird"] ?? currentProfile) : .initialCustom(from:currentProfile)
         }
         applyProfile(subjectProfiles[next.rawValue]!)
         models = nil;analysis = nil;job = nil;previewImage = nil;sourceImage = nil;sourceDetail = nil
@@ -515,7 +529,98 @@ final class AppState {
 
     // MARK: - Edits
 
+    func beginPickingEye() {
+        guard phase == .ready,subject == .bird else { return }
+        stop();viewMode = .source;sourceTool = .pickEye
+        if sourceZoom<2 { sourceZoom=4 };refreshPreview()
+    }
+
+    func pickEye(at p: V2) {
+        guard var a=analysis,subject == .bird,phase == .ready else { return }
+        let i=currentFrame
+        let choices=["left_eye","right_eye"].compactMap { side -> (String,V2)? in
+            guard let index=a.poseSchema.keypoints.firstIndex(of:side),a.perFrame[i].keypoints.indices.contains(index),a.perFrame[i].keypoints[index].conf>=0.35 else { return nil }
+            return (side,a.perFrame[i].keypoints[index].p)
+        }
+        guard let nearest=choices.min(by: { ($0.1-p).length<($1.1-p).length }),
+              (nearest.1-p).length<max(12,(a.track?.frames[i].headLength ?? 30)*0.7) else {
+            timelineMessage="未找到可靠的眼睛候选，请换一张清晰照片点选。";return
+        }
+        eyeUndo=(a.fingerprint,a.eyeSelections ?? [])
+        let range=a.clipRange(containing:i)
+        a.eyeSelections=(a.eyeSelections ?? []).filter { !range.contains($0.frame) }+[EyeSelection(frame:i,side:nearest.0)]
+        a.track=TrackBuilder.build(a);analysis=a;sourceTool = .none
+        timelineMessage=a.manualEye.isEmpty ? "本组已固定同一只眼；遮挡时显示推算或待修正。" : "本组已固定同一只眼；已有手动修正仍优先生效。"
+        scheduleSave();rebuildJob(immediate:true)
+    }
+
+    func automaticEye() {
+        guard var a=analysis,subject == .bird,phase == .ready else { return }
+        eyeUndo=(a.fingerprint,a.eyeSelections ?? [])
+        let range=a.clipRange(containing:currentFrame)
+        a.eyeSelections=(a.eyeSelections ?? []).filter { !range.contains($0.frame) }
+        a.track=TrackBuilder.build(a);analysis=a;sourceTool = .none;scheduleSave();rebuildJob(immediate:true)
+    }
+
+    func undoEyeSelection() {
+        guard var a=analysis,let undo=eyeUndo,undo.fingerprint==a.fingerprint,phase == .ready else { return }
+        a.eyeSelections=undo.selections;eyeUndo=nil;a.track=TrackBuilder.build(a);analysis=a;scheduleSave();rebuildJob(immediate:true)
+    }
+
+    func beginCustomBox() {
+        guard isCustom,phase == .ready else { return }
+        stop();pendingCustomBox=nil;viewMode = .source;sourceZoom=1;sourceTool = .customBox;refreshPreview()
+    }
+
+    func setCustomBox(from first: V2, to last: V2) {
+        guard let a=analysis,isCustom,phase == .ready else { return }
+        let f=a.frames[currentFrame]
+        let x=clamp(min(first.x,last.x),0,Double(f.pixelWidth)),y=clamp(min(first.y,last.y),0,Double(f.pixelHeight))
+        let x1=clamp(max(first.x,last.x),0,Double(f.pixelWidth)),y1=clamp(max(first.y,last.y),0,Double(f.pixelHeight))
+        guard x1-x>=4,y1-y>=4 else { timelineMessage="请框选稍大的稳定纹理区域。";return }
+        pendingCustomBox=(currentFrame,BoxD(x:x,y:y,w:x1-x,h:y1-y,score:1));sourceTool = .customAnchor
+        timelineMessage="在框内点击要固定的位置；点击中心即可按中心跟踪。"
+    }
+
+    func setCustomAnchor(_ p: V2) {
+        guard var a=analysis,isCustom,phase == .ready else { return }
+        let i=currentFrame
+        let b=pendingCustomBox.flatMap { $0.frame==i ? $0.box : nil } ?? a.perFrame[i].custom?.box
+        guard let b,b.rect.contains(CGPoint(x:p.x,y:p.y)) else { timelineMessage="请先在当前照片框选区域，再在框内点选锁定位置。";return }
+        let seed=CustomSeed(frame:i,box:b,anchor:p)
+        guard CustomTracking.valid(seed,frames:a.frames) else { return }
+        a.customSeeds=(a.customSeeds ?? []).filter { $0.frame != i }+[seed]
+        a.manualEye[i]=nil;pendingCustomBox=nil;sourceTool = .none
+        retrackCustom(a,span:a.clipRange(containing:i))
+    }
+
+    func removeCustomSeed() {
+        guard var a=analysis,isCustom,phase == .ready else { return }
+        let i=currentFrame;a.customSeeds=(a.customSeeds ?? []).filter { $0.frame != i }
+        retrackCustom(a,span:a.clipRange(containing:i))
+    }
+
+    private func retrackCustom(_ a: SequenceAnalysis, span: Range<Int>) {
+        stop();cancelFlag.cancel();let flag=CancelFlag();cancelFlag=flag
+        phase = .analyzing(stage:"跟踪自定义目标",progress:0);analysisStarted=Date()
+        analysisTask=Task.detached(priority:.userInitiated) { [weak self] in
+            let operation=CachePolicy.beginOperation(root:ProxyCache.shared.root);defer { CachePolicy.endOperation(operation) }
+            do {
+                let result=try CustomTracking.retrack(a,span:span,isCancelled:{ flag.isCancelled },progress:{ p in
+                    Task { @MainActor in if !flag.isCancelled,case .analyzing = self?.phase { self?.phase = .analyzing(stage:"跟踪自定义目标",progress:p) } }
+                })
+                await MainActor.run {
+                    guard let self,flag === self.cancelFlag,!flag.isCancelled else { return }
+                    self.analysis=result;self.phase = .ready;self.timelineMessage="已跟踪；失锁处可重新框选，短距推算会标黄。"
+                    self.scheduleSave();self.rebuildJob(immediate:true)
+                }
+            } catch is CancellationError { }
+            catch { await MainActor.run { if !flag.isCancelled { self?.phase = .ready;self?.timelineMessage=error.localizedDescription } } }
+        }
+    }
+
     func setManualEye(_ p: V2, frame: Int? = nil) {
+        if isCustom { setCustomAnchor(p);return }
         guard var a = analysis else { return }
         let i = frame ?? currentFrame
         guard a.frames.indices.contains(i) else { return }
@@ -692,6 +797,9 @@ final class AppState {
     func seek(_ i: Int) {
         guard let a = analysis, a.count > 0 else { return }
         currentFrame = clamp(i, 0, a.count - 1)
+        if let pending=pendingCustomBox,pending.frame != currentFrame {
+            pendingCustomBox=nil;if isCustom { sourceTool = .customBox }
+        }
         if isPlaying, let job, let k = job.outputFrames.firstIndex(where: { $0.a >= currentFrame }) { playheadOutput = k }
         refreshPreview()
     }

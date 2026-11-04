@@ -21,6 +21,8 @@ def reorder(analysis, order):
     a.frames=[replace(analysis.frames[i],id=n) for n,i in enumerate(indices)]
     a.perFrame=[replace(analysis.perFrame[i],index=n) for n,i in enumerate(indices)]
     a.manualEye={remap[k]:v for k,v in analysis.manualEye.items()};a.excluded={remap[k] for k in analysis.excluded}
+    a.eyeSelections=[dict(s,frame=remap[s['frame']]) for s in analysis.eyeSelections]
+    a.customSeeds=[dict(s,frame=remap[s['frame']]) for s in analysis.customSeeds]
     a.closeups=[replace(s,frame=remap[s.frame],endFrame=remap[s.endFrame]) for s in analysis.closeups]
     a.clips=[];cursor=0
     for k in order:

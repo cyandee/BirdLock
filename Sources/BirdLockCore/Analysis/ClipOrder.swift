@@ -31,13 +31,15 @@ public enum ClipOrder {
         a.perFrame = indices.enumerated().map { i, old in var p = analysis.perFrame[old]; p.index = i; return p }
         a.manualEye = Dictionary(uniqueKeysWithValues: analysis.manualEye.compactMap { i, value in remap[i].map { ($0,value) } })
         a.excluded = Set(analysis.excluded.compactMap { remap[$0] })
+        a.eyeSelections = analysis.eyeSelections?.compactMap { s in remap[s.frame].map { EyeSelection(frame:$0,side:s.side) } }
+        a.customSeeds = analysis.customSeeds?.compactMap { s in remap[s.frame].map { CustomSeed(frame:$0,box:s.box,anchor:s.anchor) } }
         a.closeups = (analysis.closeups ?? []).map { shot in
             var s = shot; s.frame = remap[shot.frame]!; s.endFrame = remap[shot.endFrame]!; return s
         }
         cursor = 0
         a.clips = order.map { i in defer { cursor += clips[i].count }; return BurstClip(start: cursor,count: clips[i].count,fps: clips[i].fps) }
         for clip in a.clips! { a.perFrame[clip.start].link = nil }
-        a.fingerprint = Analyzer.fingerprint(a.frames, aircraftModelIdentity: a.analysisSubject == .aircraft ? a.modelIdentity : nil)
+        a.fingerprint = Analyzer.fingerprint(a.frames, aircraftModelIdentity: a.analysisSubject == .aircraft ? a.modelIdentity : nil,custom:a.analysisSubject == .custom)
         a.track = TrackBuilder.build(a)
         return (a,indices)
     }

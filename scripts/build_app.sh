@@ -48,7 +48,7 @@ cp Models/*.json "$APP/Contents/Resources/Models/" 2>/dev/null || true
 # Bundled documents: agreement, licenses, manual (HTML + PDF)
 DOCS="$APP/Contents/Resources/Docs"
 mkdir -p "$DOCS"
-cp docs/用户协议.md docs/第三方许可.md docs/使用说明.md docs/自动更新.md docs/视频导入与镜头配置.md docs/工程与缓存管理.md docs/更新说明-1.9.0.md LICENSE "$DOCS/"
+cp docs/用户协议.md docs/第三方许可.md docs/使用说明.md docs/自动更新.md docs/视频导入与镜头配置.md docs/工程与缓存管理.md docs/更新说明-1.10.0.md docs/自定义目标与固定选眼.md LICENSE "$DOCS/"
 python3 -I scripts/md2html.py docs/使用说明.md "$DOCS/使用说明.html"
 HTML2PDF="$ROOT/.build/html2pdf"
 [ "$HTML2PDF" -nt scripts/html2pdf.swift ] || swiftc -O scripts/html2pdf.swift -o "$HTML2PDF"

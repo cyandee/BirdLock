@@ -219,9 +219,9 @@ struct FrameTimeline: View {
             ctx.draw(Text(label).font(.system(size: 9)).foregroundColor(color), at: CGPoint(x: labelX, y: size.height - 8), anchor: .leading)
         }
         // Eye motion in the source frame (camera shake + flight) – horizontal & vertical
-        curve(t.frames.map { $0.eye.x }, color: Theme.eye.opacity(0.85), label: state.isAircraft ? "机头 X" : "鸟眼 X", labelX: pad)
-        curve(t.frames.map { $0.eye.y }, color: Theme.eye.opacity(0.45), label: state.isAircraft ? "机头 Y" : "鸟眼 Y", labelX: pad + 52)
-        curve(t.frames.map { $0.headLength }, color: Theme.accent.opacity(0.8), label: state.isAircraft ? "机头大小" : "鸟头大小", labelX: pad + 104)
+        curve(t.frames.map { $0.eye.x }, color: Theme.eye.opacity(0.85), label: state.isCustom ? "锁定点 X" : state.isAircraft ? "机头 X" : "鸟眼 X", labelX: pad)
+        curve(t.frames.map { $0.eye.y }, color: Theme.eye.opacity(0.45), label: state.isCustom ? "锁定点 Y" : state.isAircraft ? "机头 Y" : "鸟眼 Y", labelX: pad + 52)
+        curve(t.frames.map { $0.headLength }, color: Theme.accent.opacity(0.8), label: state.isCustom ? "区域大小" : state.isAircraft ? "机头大小" : "鸟头大小", labelX: pad + 104)
         curve(a.perFrame.map { $0.sharpness ?? .nan }, color: Color.white.opacity(0.35), label: "清晰度", labelX: pad + 168)
 
         // trim shading
@@ -235,8 +235,8 @@ struct FrameTimeline: View {
         ctx.fill(Path(CGRect(x: px - 0.75, y: 2, width: 1.5, height: size.height - 4)), with: .color(Theme.accent))
         ctx.fill(Path(ellipseIn: CGRect(x: px - 4, y: 2, width: 8, height: 8)), with: .color(Theme.accent))
         // legend right
-        let legend = Text(state.isAircraft ? "" : "●").foregroundColor(Theme.ok) + Text(state.isAircraft ? "" : " 鸟眼   ").foregroundColor(.secondary)
-            + Text("●").foregroundColor(Theme.warn) + Text(state.isAircraft ? " 机头定位   " : " 鸟头推算   ").foregroundColor(.secondary)
+        let legend = Text(state.isAircraft ? "" : "●").foregroundColor(Theme.ok) + Text(state.isAircraft ? "" : (state.isCustom ? " 可靠跟踪   " : " 鸟眼   ")).foregroundColor(.secondary)
+            + Text("●").foregroundColor(Theme.warn) + Text(state.isCustom ? " 短距推算   " : state.isAircraft ? " 机头定位   " : " 鸟头推算   ").foregroundColor(.secondary)
             + Text("●").foregroundColor(Theme.manual) + Text(" 手动修正   ").foregroundColor(.secondary)
             + Text("●").foregroundColor(Theme.bad) + Text(" 未识别/模糊").foregroundColor(.secondary)
         ctx.draw(legend.font(.system(size: 9)), at: CGPoint(x: size.width - pad, y: size.height - 8), anchor: .trailing)

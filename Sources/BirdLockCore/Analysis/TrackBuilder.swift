@@ -20,6 +20,8 @@ public enum TrackBuilder {
                 sub.frames = Array(a.frames[range]); sub.perFrame = Array(a.perFrame[range]); sub.clips = nil; sub.track = nil
                 sub.manualEye = Dictionary(uniqueKeysWithValues: a.manualEye.filter { range.contains($0.key) }.map { ($0.key - clip.start, $0.value) })
                 sub.excluded = Set(a.excluded.filter(range.contains).map { $0 - clip.start })
+                sub.eyeSelections = a.eyeSelections?.filter { range.contains($0.frame) }.map { EyeSelection(frame:$0.frame-clip.start,side:$0.side) }
+                sub.customSeeds = a.customSeeds?.filter { range.contains($0.frame) }.map { CustomSeed(frame:$0.frame-clip.start,box:$0.box,anchor:$0.anchor) }
                 return build(sub, options: o)
             }
             let frames = tracks.flatMap(\.frames)
@@ -28,6 +30,7 @@ public enum TrackBuilder {
         }
         let n = a.count
         if a.analysisSubject == .aircraft { return AircraftTrackBuilder.build(a) }
+        if a.analysisSubject == .custom { return CustomTrackBuilder.build(a) }
         // Decide which labelled eye (left/right) is the visible one, smoothed over time so the anchor never
         // hops between the two eyes from frame to frame (the far eye is often also predicted).
         let schema = a.poseSchema
@@ -41,7 +44,8 @@ public enum TrackBuilder {
             let sm = Signal.gaussian(Signal.median(diff, radius: 7), sigma: 6)
             let globalSide = (diff.filter { $0.isFinite }.reduce(0, +)) >= 0
             for i in 0..<n where !a.perFrame[i].keypoints.isEmpty {
-                let leftSide = sm[i].isFinite ? sm[i] >= 0 : globalSide
+                let fixed = a.selectedEye(at:i)
+                let leftSide = fixed.map { $0 == "left_eye" } ?? (sm[i].isFinite ? sm[i] >= 0 : globalSide)
                 obs[i] = HeadObservation.from(keypoints: a.perFrame[i].keypoints, schema: schema, minConf: 0.35,
                                               eyeSide: leftSide ? .leftEye : .rightEye)
             }
@@ -147,6 +151,10 @@ public enum TrackBuilder {
         for i in stride(from: n - 1, through: 0, by: -1) {
             if eyeM[i].value != nil && eyeM[i].sigma < h(hl, i) { lastSeen = i }
             hasData[i] = hasData[i] || lastSeen - i <= 8
+        }
+        if a.selectedEye(at:0) != nil {
+            let actual=(0..<n).filter { eyeVisible[$0] || a.manualEye[$0] != nil }
+            for i in 0..<n { hasData[i] = hasData[i] && actual.contains { abs($0-i)<=8 } }
         }
 
         var frames: [TrackFrame] = []

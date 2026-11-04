@@ -41,7 +41,7 @@ public enum WorkspaceError: LocalizedError {
 public struct WorkspaceDocument: Codable, Sendable {
     public var format = "BirdLockProject"
     public var schema = 1
-    public var creatorVersion = "1.9.0"
+    public var creatorVersion = "1.10.0"
     public var subject: AnalysisSubject
     public var frames: [SourceFrame]
     public var segments: [ProjectSegment]
@@ -155,6 +155,8 @@ public struct WorkspaceDocument: Codable, Sendable {
             guard segment.start>=0,segment.count>0,segment.start+segment.count<=frames.count,segment.fps>0,segment.fps<=1000 else { throw WorkspaceError.invalid("工程分组范围无效。") }
         }
         for a in analyses {
+            guard (a.eyeSelections ?? []).allSatisfy({ a.frames.indices.contains($0.frame) && ["left_eye","right_eye"].contains($0.side) }),
+                  (a.customSeeds ?? []).allSatisfy({ CustomTracking.valid($0,frames:a.frames) }) else { throw WorkspaceError.invalid("工程跟踪参考记录无效。") }
             let master=Set(frames.map(\.url))
             guard a.frames.allSatisfy({ master.contains($0.url) }) else { throw WorkspaceError.invalid("工程识别记录引用了其他素材。") }
             for (index,frame) in a.perFrame.enumerated() {
@@ -208,7 +210,7 @@ public struct WorkspaceDocument: Codable, Sendable {
         guard document.frames.allSatisfy({ FileManager.default.fileExists(atPath:$0.url.path) }) else { throw WorkspaceError.invalid("工程素材无法读取，请重新定位原片。") }
         for i in document.analyses.indices {
             document.analyses[i].frames=analyses[i].frames.map(mapped)
-            document.analyses[i].fingerprint=Analyzer.fingerprint(document.analyses[i].frames,aircraftModelIdentity:analyses[i].analysisSubject == .aircraft ? analyses[i].modelIdentity : nil)
+            document.analyses[i].fingerprint=Analyzer.fingerprint(document.analyses[i].frames,aircraftModelIdentity:analyses[i].analysisSubject == .aircraft ? analyses[i].modelIdentity : nil,custom:analyses[i].analysisSubject == .custom)
             document.analyses[i].track=TrackBuilder.build(document.analyses[i]);cache.saveAnalysis(document.analyses[i])
         }
         return document

@@ -94,7 +94,7 @@ struct ExportSheet: View {
 
     private func defaultName() -> String {
         let base = sourceURL?.deletingPathExtension().lastPathComponent ?? "BirdLock"
-        return "\(base)_\(state.subject == .aircraft ? "机头锁定" : "鸟眼锁定")"
+        return "\(base)_\(state.isCustom ? "目标锁定" : (state.subject == .aircraft ? "机头锁定" : "鸟眼锁定"))"
     }
 
     private func choose() {

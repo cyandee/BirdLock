@@ -392,7 +392,7 @@ class ExportDialog(QDialog):
         a = self.state.analysis
         from ..core.video_source import original_path
         base = Path(original_path(a.frames) or a.frames[0].path).stem if a and a.frames else "BirdLock"
-        return f"{base}_{'机头锁定' if self.state.is_aircraft else '鸟眼锁定'}"
+        return f"{base}_{'目标锁定' if self.state.subject=='custom' else ('机头锁定' if self.state.is_aircraft else '鸟眼锁定')}"
 
     def _start_dir(self) -> str:
         a = self.state.analysis
@@ -465,6 +465,7 @@ class MainWindow(ProjectActions,QMainWindow):
         tb.addWidget(imp)
         self.subject_combo = QComboBox()
         self.subject_combo.addItem("鸟类","bird");self.subject_combo.addItem("飞机（试验）","aircraft")
+        self.subject_combo.addItem("自定义目标","custom")
         self.subject_combo.setToolTip("飞机自动识别机头和机身；复杂视角请检查，可逐帧修正。首次分析较慢。")
         self.subject_combo.currentIndexChanged.connect(lambda k: self.state.change_subject(self.subject_combo.itemData(k)) if k >= 0 else None)
         tb.addWidget(self.subject_combo)
@@ -503,7 +504,7 @@ class MainWindow(ProjectActions,QMainWindow):
         tb.addWidget(self.support_btn)
 
     def show_release_notes(self):
-        DocDialog("BirdLock 1.9.0 更新说明",doc_text("更新说明-1.9.0.md"),self).exec()
+        DocDialog("BirdLock 1.10.0 更新说明",doc_text("更新说明-1.10.0.md"),self).exec()
         notice=getattr(self,"release_notice",None)
         if notice is not None:notice.acknowledge()
 

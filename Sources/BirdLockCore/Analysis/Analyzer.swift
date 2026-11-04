@@ -42,10 +42,11 @@ public final class Analyzer: @unchecked Sendable {
     public static func fingerprint(_ frames: [SourceFrame]) -> String { fingerprint(frames, aircraftModelIdentity: nil) }
 
     /// Aircraft observations are isolated by the actual model and algorithm identity; bird keys stay unchanged.
-    public static func fingerprint(_ frames: [SourceFrame], aircraftModelIdentity: String?) -> String {
+    public static func fingerprint(_ frames: [SourceFrame], aircraftModelIdentity: String?, custom: Bool = false) -> String {
         var h = SHA256()
         for f in frames { h.update(data: Data("\(f.url.path)|\(f.fileSize)|\(f.modified)\n".utf8)) }
         if let identity = aircraftModelIdentity { h.update(data: Data("subject=aircraft|model=\(identity)\n".utf8)) }
+        if custom { h.update(data:Data("subject=custom|tracker=1\n".utf8)) }
         return h.finalize().prefix(12).map { String(format: "%02x", $0) }.joined()
     }
 

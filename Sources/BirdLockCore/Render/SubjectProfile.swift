@@ -33,10 +33,21 @@ public struct SubjectProfile: Codable, Sendable {
         profile.export.focusMark.showEye = false;profile.export.focusMark.showHead = true;profile.export.focusMark.showBody = true
         return profile
     }
+    public static func initialCustom(from previous: SubjectProfile) -> SubjectProfile {
+        var p=previous.untrimmed;p.composition=CompositionPreset.custom[0].composition;p.presetID="custom-center"
+        p.export.focusMark.enabled=false;p.export.focusMark.headWhenHidden=false;p.selection.dropUntracked=true;return p
+    }
 }
 
 public extension CompositionPreset {
-    static func forSubject(_ subject: AnalysisSubject) -> [CompositionPreset] { subject == .bird ? all : aircraft }
+    static func forSubject(_ subject: AnalysisSubject) -> [CompositionPreset] { subject == .bird ? all : (subject == .aircraft ? aircraft : custom) }
+    static let custom: [CompositionPreset] = {
+        var c=Composition();c.lockPoint = .eye;c.autoLeadRoom=false;c.anchorX=0.5;c.anchorY=0.5;c.framing=4;c.sizeMode = .fixedCrop;c.rotationMode = .none
+        var result=[CompositionPreset(id:"custom-center",name:"目标居中",detail:"锁定所选局部位置",composition:c)]
+        c.framing=7;result.append(.init(id:"custom-wide",name:"宽松取景",detail:"保留周围环境",composition:c))
+        c.framing=4;c.followSoftness=0.45;result.append(.init(id:"custom-follow",name:"柔和跟随",detail:"平缓跟随所选位置",composition:c))
+        return result
+    }()
 
     static let aircraft: [CompositionPreset] = {
         func base() -> Composition {

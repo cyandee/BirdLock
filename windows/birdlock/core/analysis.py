@@ -12,6 +12,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
+from copy import deepcopy
 from pathlib import Path
 from typing import Callable
 
@@ -67,24 +68,25 @@ class FrameAnalysis:
     sharpness: float | None = None
     link: dict | None = None                           # {"delta": [dx, dy], "quality": q, "patchScale": s}
     aircraft: AircraftFrameObservation | None = None
+    custom: dict | None = None
 
     @property
     def target_box(self) -> Box | None:
         if self.target is None or self.target >= len(self.birds):
-            return None
+            return Box(**self.custom['box']) if self.custom else None
         return self.birds[self.target]
 
     def to_dict(self):
         return {"index": self.index, "birds": [b.__dict__ for b in self.birds], "target": self.target,
                 "keypoints": [list(k) for k in self.keypoints], "poseScore": self.poseScore, "head": self.head.to_dict(),
                 "bgLinear": self.bgLinear, "sharpness": self.sharpness, "link": self.link,
-                "aircraft": None if self.aircraft is None else self.aircraft.to_dict()}
+                "aircraft": None if self.aircraft is None else self.aircraft.to_dict(), "custom": self.custom}
 
     @staticmethod
     def from_dict(d):
         return FrameAnalysis(d["index"], [Box(**b) for b in d["birds"]], d["target"], [tuple(k) for k in d["keypoints"]],
                              d["poseScore"], HeadObservation.from_dict(d["head"]), d["bgLinear"], d["sharpness"], d["link"],
-                             None if d.get("aircraft") is None else AircraftFrameObservation.from_dict(d["aircraft"]))
+                             None if d.get("aircraft") is None else AircraftFrameObservation.from_dict(d["aircraft"]), d.get("custom"))
 
 
 @dataclass
@@ -122,6 +124,8 @@ class SequenceAnalysis:
     groupedDetection: bool = False
     subject: str = "bird"
     modelIdentity: str | None = None
+    eyeSelections: list = field(default_factory=list)
+    customSeeds: list = field(default_factory=list)
 
     @property
     def count(self) -> int:
@@ -132,7 +136,8 @@ class SequenceAnalysis:
                 "fps": self.fps, "clips": self.clips, "closeups": [s.to_dict() for s in self.closeups], "groupedDetection": self.groupedDetection, "proxyLongSide": self.proxyLongSide, "perFrame": [p.to_dict() for p in self.perFrame],
                 "poseSchema": {"keypoints": self.poseSchema.keypoints, "inputCropExpand": self.poseSchema.inputCropExpand},
                 "manualEye": {str(k): list(v) for k, v in self.manualEye.items()}, "excluded": sorted(self.excluded),
-                "subject": self.subject, "modelIdentity": self.modelIdentity}
+                "subject": self.subject, "modelIdentity": self.modelIdentity,
+                "eyeSelections": self.eyeSelections, "customSeeds": self.customSeeds}
 
     @staticmethod
     def from_dict(d) -> "SequenceAnalysis":
@@ -145,25 +150,39 @@ class SequenceAnalysis:
         a.closeups = [Closeup.from_dict(s) for s in d.get("closeups", [])]
         a.groupedDetection = d.get("groupedDetection", False)
         a.subject = d.get("subject", "bird")
-        if a.subject not in ("bird", "aircraft"):
+        if a.subject not in ("bird", "aircraft", "custom"):
             raise ValueError("分析缓存主体类型无效。")
         a.modelIdentity = d.get("modelIdentity")
+        a.eyeSelections = d.get("eyeSelections") or []
+        a.customSeeds = d.get("customSeeds") or []
         return a
 
     def copy_edits(self) -> "SequenceAnalysis":
         """Shallow copy with independent user edits (manual eyes, exclusions)."""
         return replace(self, manualEye=dict(self.manualEye), excluded=set(self.excluded), clips=list(self.clips),
-                       closeups=[s.copy() for s in self.closeups])
+                       closeups=[s.copy() for s in self.closeups],eyeSelections=deepcopy(self.eyeSelections),customSeeds=deepcopy(self.customSeeds))
+
+    def clip_range(self, frame):
+        for clip in self.clips:
+            if clip['start'] <= frame < clip['start']+clip['count']:
+                return range(clip['start'],clip['start']+clip['count'])
+        return range(self.count)
+
+    def selected_eye(self, frame):
+        span=self.clip_range(frame)
+        return next((v['side'] for v in reversed(self.eyeSelections) if v['frame'] in span and v['side'] in ('left_eye','right_eye')),None)
 
 
 def fingerprint(frames: list, subject="bird", model_identity: str | None = None) -> str:
-    if subject not in ("bird", "aircraft") or (subject == "aircraft" and not model_identity):
+    if subject not in ("bird", "aircraft", "custom") or (subject == "aircraft" and not model_identity):
         raise ValueError("飞机分析需要明确的独立模型标识。")
     h = hashlib.sha256()
     for f in frames:
         h.update(f"{f.path}|{f.fileSize}|{f.modified}\n".encode())
     if subject == "aircraft":
         h.update(f"subject=aircraft|model={model_identity}\n".encode())
+    if subject == "custom":
+        h.update(b"subject=custom|tracker=1\n")
     return h.hexdigest()[:24]
 
 
@@ -321,7 +340,9 @@ def build_track(a: SequenceAnalysis, eye_sigma_hl=0.05, predicted_eye_sigma_hl=0
             start, stop = clip["start"], clip["start"] + clip["count"]
             sub = replace(a, frames=a.frames[start:stop], perFrame=a.perFrame[start:stop], clips=[], track=None,
                           manualEye={i-start:v for i,v in a.manualEye.items() if start <= i < stop},
-                          excluded={i-start for i in a.excluded if start <= i < stop})
+                          excluded={i-start for i in a.excluded if start <= i < stop},
+                          eyeSelections=[dict(v,frame=v['frame']-start) for v in a.eyeSelections if start<=v['frame']<stop],
+                          customSeeds=[dict(v,frame=v['frame']-start) for v in a.customSeeds if start<=v['frame']<stop])
             parts.append(build_track(sub, eye_sigma_hl, predicted_eye_sigma_hl, center_sigma_hl, link_min_quality, link_sigma_patch_px, use_registration))
         names = ("eye", "head_center", "head_length", "angle", "eye_visible", "has_data", "confidence")
         values = {name:np.concatenate([getattr(p, name) for p in parts]) for name in names}
@@ -333,6 +354,9 @@ def build_track(a: SequenceAnalysis, eye_sigma_hl=0.05, predicted_eye_sigma_hl=0
     if a.subject == "aircraft":
         from .aircraft_analysis import build_aircraft_track
         return build_aircraft_track(a)
+    if a.subject == "custom":
+        from .custom_tracking import build_custom_track
+        return build_custom_track(a)
     schema = a.poseSchema
     li, ri = schema.index("left_eye"), schema.index("right_eye")
     obs = [p.head for p in a.perFrame]
@@ -344,7 +368,8 @@ def build_track(a: SequenceAnalysis, eye_sigma_hl=0.05, predicted_eye_sigma_hl=0
         global_left = fin.sum() >= 0 if fin.size else True
         for i in range(n):
             if a.perFrame[i].keypoints:
-                left = sm[i] >= 0 if math.isfinite(sm[i]) else global_left
+                fixed = a.selected_eye(i)
+                left = fixed == 'left_eye' if fixed else (sm[i] >= 0 if math.isfinite(sm[i]) else global_left)
                 obs[i] = HeadObservation.from_keypoints(a.perFrame[i].keypoints, schema, 0.35,
                                                         "left_eye" if left else "right_eye")
     template = HeadTemplate.estimate(obs)
@@ -443,6 +468,9 @@ def build_track(a: SequenceAnalysis, eye_sigma_hl=0.05, predicted_eye_sigma_hl=0
         if good[i]:
             last = i
         has[i] = has[i] or last - i <= 8
+    if a.selected_eye(0):
+        actual=np.flatnonzero(visible | np.array([i in a.manualEye for i in range(n)]))
+        has &= np.array([bool(np.any(np.abs(actual-i)<=8)) for i in range(n)])
 
     conf = np.zeros(n)
     for i in range(n):
