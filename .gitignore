@@ -43,3 +43,15 @@ SharedResources/Audio/originals/
 # Native updater build output (public source/config only in Git)
 windows/updater/dist/
 windows/telemetry/
+
+# Local credentials and user projects (may contain absolute media paths)
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p8
+*.p12
+*.pfx
+*.ppk
+*.birdlock
