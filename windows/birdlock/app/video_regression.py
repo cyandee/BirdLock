@@ -9,6 +9,7 @@ from unittest.mock import patch
 from PySide6.QtWidgets import QApplication, QComboBox
 
 from . import theme
+from .regression_support import close_regression_window
 from .main_window import MainWindow
 from .state import AppState
 from .video_import import VideoImportDialog
@@ -19,8 +20,11 @@ from ..core.settings import AspectRatio, AudioTrack, EdgeFill, LockPoint, VideoC
 def main(argv):
     if not os.environ.get('BIRDLOCK_DATA'):
         raise SystemExit('Video regression requires a disposable BIRDLOCK_DATA directory')
+    argv = list(argv)
+    allow_untracked = bool(argv and argv[-1] == '--allow-untracked')
+    if allow_untracked: argv.pop()
     if len(argv) != 3:
-        raise SystemExit('Usage: --video-regression bird-video aircraft-video output')
+        raise SystemExit('Usage: --video-regression bird-video aircraft-video output [--allow-untracked]')
     sources, out = argv[:2], Path(argv[2])
     out.mkdir(parents=True, exist_ok=True)
     app = QApplication([])
@@ -48,6 +52,7 @@ def main(argv):
         for subject, source in zip(('bird', 'aircraft'), sources):
             state.frames = []; state.segments = []; state.analysis = state.job = None; state.phase = 'empty'
             window.subject_combo.setCurrentIndex(window.subject_combo.findData(subject))
+            if allow_untracked: state.selection.dropUntracked = False
             settle()
             dialog = VideoImportDialog(source, state, window)
             dialog.show()
@@ -70,7 +75,8 @@ def main(argv):
             wait(lambda: state.phase == 'ready' and state.job is not None)
             settle()
             expected = max(1, math.ceil(seconds * fps - 1e-6))
-            assert state.analysis.count == expected and state.analysis.track.has_data.all()
+            assert state.analysis.count == expected
+            if not allow_untracked: assert state.analysis.track.has_data.all()
             state.export.aspect = AspectRatio(16,9,'16:9'); state.export.shortSide = 720; state.export.codec = VideoCodec.H264
             state.composition.framing = 14 if subject == 'bird' else 8
             state.composition.edgeFill = EdgeFill.AUTO_ZOOM; state.composition.autoLeadRoom = False
@@ -105,8 +111,8 @@ def main(argv):
             state.import_video(source, seconds=seconds, fps=fps, profile=str(profile))
             state.cancel_analysis(); settle()
             assert state.phase == 'ready' and state.analysis is previous
-        (out / 'video-regression.json').write_text(json.dumps(dict(cases=reports, cache_edits=True,
+        (out / 'video-regression.json').write_text(json.dumps(dict(cases=reports, cache_edits=True, allow_untracked=allow_untracked,
             cancel_preserves_previous=True, failure_preserves_previous=True, closeup_mix=True), indent=2), encoding='utf-8')
         print(reports)
     finally:
-        state.close(); window.close(); app.processEvents()
+        close_regression_window(window); app.processEvents()

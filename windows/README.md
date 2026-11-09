@@ -83,6 +83,21 @@ $aircraftVideo = 'D:\BirdLock-Test\aircraft.mp4'
 
 依次检查退出码、对应报告目录的 JSON、窗口截图、输出视频以及数据目录的回归日志。四个入口以 CPU 识别，分别覆盖布局/编码、分组/工程/混音、主体切换/飞机、视频导入/镜头配置/导出。已有源码回归入口也支持成品 `BirdLock.exe`。成品测试以 `Start-Process -Wait -PassThru` 取得退出码，路径含空格时给各个参数保留引号。回归只读源照片，报告、导出和原始日志留在本机。
 
+### 一条命令生成本地验收报告
+
+环境准备完成后，从仓库根目录运行：
+
+```powershell
+.\windows\.venv\Scripts\python.exe windows/acceptance.py --mode quick
+.\windows\.venv\Scripts\python.exe windows/acceptance.py --mode full
+```
+
+快速模式检查环境、依赖、模型文件、单测、设备、FFmpeg、CLI 自检及离屏启动。完整模式在 Windows 桌面另做原生窗口自检、GUI 布局及缩放回归、工程保存重开、主体和视频回归、导出解码检查，以及同批输入的 CPU/DirectML 实际推理。首次编译 DirectML 模型和后续重跑可能差异很大；报告分开记录初始化和分析。节点执行次数用于确认后端，不能代表利用率。
+
+完整模式默认生成测试照片及带声音的短视频；可用 `--birds`、`--aircraft`、`--birds-video`、`--aircraft-video` 指定获准读取的本机素材。鸟图至少 12 张，飞机图至少 20 张。合成素材只验证能够独立于识别精度的流程；合成布局、工程和视频流程保留未跟踪帧，报告保留跟踪数。主体回归仍要求检测到飞机机头；素材不满足判据时应查看日志，补合格素材重测。真实素材质量、正常交互验收和双端互开仍按第 5 节记录。
+
+每次运行在已忽略的 `local-tests/windows-acceptance/` 下生成独立目录。以 `report.json` 为入口查看提交、命令、退出码、单测计数、错误和证据。步骤失败时程序以非零状态退出。每一步使用独立的设置、缓存和临时目录。原始报告、截图、素材、项目和导出文件留在本机。
+
 ## 5. 实体显卡与真实素材
 
 1. 在实体 Windows x64 桌面记录被测 SHA、系统版本、GPU 型号、驱动版本和 `devices` 的摘要。首次复测 1.10 后续改动时优先覆盖 RTX 3080。
@@ -112,6 +127,8 @@ foreach ($check in @('--selftest', '--smoketest')) {
 ```
 
 复核 `selftest.log`、`smoketest.log` 和新生成的 `smoketest.png`。托管的 [Windows 完整工作流](../.github/workflows/windows.yml)还编译并执行独立更新器的 C# 单测和集成测试。发布及签名步骤由维护者授权。[构建与发布](../docs/构建与发布.md) · [自动更新](../docs/自动更新.md)
+
+在登录的 Windows 桌面也可对源码或解压后的成品执行 `--desktop-smoketest`。设置新的 `BIRDLOCK_DATA` 目录；该模式会确认原生窗口确已显示，记录实际 Qt 显示缩放，保存截图并退出。
 
 ## 7. 提交与交接
 

@@ -1,8 +1,11 @@
 """Exercise cancellation through the real dialog, then export again without restarting."""
 from pathlib import Path
+from threading import Event
 import time
+from unittest.mock import patch
 
 from .main_window import ExportDialog
+from ..core.exporter import VideoExporter
 from ..core.settings import VideoCodec, VideoQuality, AspectRatio
 from PySide6.QtWidgets import QComboBox
 
@@ -35,13 +38,28 @@ def check_export_recovery(state,window,wait,settle,out):
         state.settings_changed();settle(.15)
         dialog=ExportDialog(state,window);dialog.show();settle(.05)
         cancelled=out/(action+'.mp4');cancelled.write_bytes(b'previous video must survive cancellation')
-        state.export_to('video',str(cancelled))
-        wait(lambda:state.export_progress>.015 or not state.export_running,limit=60)
-        assert state.export_running,'Fixture completed before reaching cancellation'
-        started=time.monotonic()
-        if action=='cancel-button':dialog.cancel_btn.click()
-        else:dialog.reject()
-        wait(lambda:not state.export_running,limit=10)
+        reached,release=Event(),Event()
+        export_video=VideoExporter.export_video
+
+        def pause_before_commit(exporter,job,path,audio,progress,is_cancelled):
+            def observe(value):
+                progress(value)
+                if value>.015 and not reached.is_set():
+                    reached.set()
+                    if not release.wait(60):raise TimeoutError('Export cancellation checkpoint was not released')
+            return export_video(exporter,job,path,audio,observe,is_cancelled)
+
+        with patch.object(VideoExporter,'export_video',pause_before_commit):
+            state.export_to('video',str(cancelled))
+            try:
+                wait(lambda:reached.is_set() or not state.export_running,limit=60)
+                assert reached.is_set() and state.export_running,'Export never reached an active frame'
+                started=time.monotonic()
+                if action=='cancel-button':dialog.cancel_btn.click()
+                else:dialog.reject()
+                assert state._export_cancel.cancelled
+            finally:release.set()
+            wait(lambda:not state.export_running,limit=10)
         elapsed=time.monotonic()-started
         assert state.export_message=='已取消',state.export_message
         assert cancelled.read_bytes()==b'previous video must survive cancellation'
