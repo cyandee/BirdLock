@@ -1,63 +1,121 @@
-# BirdLock Windows 版
+# BirdLock Windows 开发与验收
 
-Windows 版使用 Python 3.12 x64、Qt/PySide6 和 ONNX Runtime。日常使用请看[使用说明](../docs/windows/使用说明.md)，这里放开发和打包的方法。
+Windows 版面向 Windows 10 / 11 x64，使用 Python 3.12 x64、PySide6、ONNX Runtime 和 FFmpeg。日常使用与下载见[Windows 使用说明](../docs/windows/使用说明.md)及 [GitHub Releases](https://github.com/cyandee/BirdLock/releases)。当前任务、提交和待测项见[双端开发交接](../docs/development/HANDOFF.md)。
 
-[下载 1.10.0](https://github.com/cyandee/BirdLock/releases/tag/v1.10.0) · 联系我：cyanodee@gmail.com
+## 1. 安装环境
 
-## 从源码运行
-
-在项目根目录打开 PowerShell：
+1. 安装 Git for Windows。在安装器中保留 Git Credential Manager，首次推送时用有仓库写权限的 GitHub 账号登录。只有读取权限时可先克隆，提交用自己的 fork 开 PR。[Git for Windows](https://git-scm.com/install/windows)
+2. 安装 Python 3.12 的 64 位 Windows 发行版，确保 `py` 可用。重新打开 PowerShell 后检查版本和架构，应看到 Python 3.12 及 AMD64。[Python 安装说明](https://docs.python.org/3.12/using/windows.html)
+3. 实机 GPU 验收使用支持 DirectX 12 的显卡及其厂商驱动。打包或测试原生遥测组件时，再按第 6 节安装构建工具。[ONNX Runtime DirectML](https://onnxruntime.ai/docs/execution-providers/DirectML-ExecutionProvider.html)
 
 ```powershell
-py -3.12 -m venv windows/.venv
-windows/.venv/Scripts/python -m pip install -r windows/requirements.txt -c windows/constraints-release.txt pyinstaller
-windows/.venv/Scripts/python windows/BirdLock.pyw
-$env:PYTHONPATH = "windows"
-windows/.venv/Scripts/python -c "from build_windows import fetch_ffmpeg; fetch_ffmpeg()"
-windows/.venv/Scripts/python -m unittest discover -s windows/tests -p "test_*.py"
-windows/.venv/Scripts/python -m birdlock.cli selftest
-windows/.venv/Scripts/python windows/build_windows.py
+git --version
+py -3.12 -c "import platform, sys; print(sys.version, platform.machine())"
 ```
 
-版本读取根目录的 [VERSION](../VERSION)，Mac 与 Windows 均为1.10.0，显式传入的 `--version` 必须与 VERSION 相同。打包输出为 `windows/dist/BirdLock/` 和 `BirdLock-1.10.0-Windows-x64.zip`。更新机制见[自动更新](../docs/自动更新.md)。首次构建会下载依赖、FFmpeg 和固定飞机权重，成品运行时不用下载模型。
+## 2. 克隆并选择分支
 
-本轮[视频导入、原声与增稳](../docs/视频导入与镜头配置.md)会自动加入随剪辑排列的原声轨；「画面 → 视频防抖」提供自动融合、图像防抖和陀螺仪，主体锁定或平滑相机运动取景，强度、平滑时间、最高 8× 附加裁切、固定裁切、强力预设和方法悬浮说明，以及自动同步和手动毫秒偏移。可导入 GCSV、含 IMU 或本地源引用的 Gyroflow 工程、含陀螺仪的原片。383 份离线镜头配置在同一可编辑下拉框内搜索和选择，核对过的组合按型号、镜头、焦距和模式匹配，其余手选；索尼 XML 读取身份信息，不会凭空生成标定或采样。SDR、120 秒 / 3600 帧限制保留，不承诺完整 Gyroflow、动态镜头、滚动快门或 HDR。
+```powershell
+git clone https://github.com/cyandee/BirdLock.git
+Set-Location BirdLock
+git fetch origin
+git switch main
+git pull --ff-only origin main
+```
 
-1.10.0 发布包复用已核验的1.6.0原生运行库，重新编入当前程序与资源并核对归档、源码、PE版本及许可；本轮Windows实体运行由用户测试。标准构建仍使用上方的 `build_windows.py`，本地组装说明见[构建说明](../docs/构建与发布.md)。固定选眼和自定义目标的操作见[新功能指南](../docs/自定义目标与固定选眼.md)。
+接手现有任务时，从交接记录或 PR 复制分支名和 SHA。第一次检出远程任务分支可用下列命令，已有同名本地分支时用 `git switch $branch` 后 `git pull --ff-only`。核对 `git rev-parse HEAD` 与交接 SHA。接手写入前先在 PR 中与 Mac 端确认。并行开发从约定 SHA 创建各自的分支。
 
-## 显卡加速
+```powershell
+$branch = 'codex/example-task'  # 按本次交接替换
+git fetch origin
+git switch --track "origin/$branch"
+git status --short --branch
+git rev-parse HEAD
+```
 
-- 鸟类识别使用 ONNX Runtime DirectML，支持 DirectX 12 的 NVIDIA / AMD / Intel 设备，不可用时回退 CPU。
-- 图像重采样可以使用 OpenCL；视频编码优先 NVENC / AMF / Quick Sync，失败时回退 x264 / x265。
-- 1.10.0 的飞机机头遵循现有设备选择，优先 DirectML，失败时回退 CPU；按首轮实际节点分配记录状态，RTX 3080 等设备仍需实机复测。鸟类姿态模型保持不变，复杂角度的机头仍需要检查和手动修正。
+新任务用 `git switch -c codex/<任务名> origin/main` 创建分支。仅验证某次交接时，可以用 `git switch --detach <交接SHA>` 检出该提交。切换前检查工作区是否干净。用 Windows Codex 打开克隆后的仓库根目录，读取 `AGENTS.md` 和交接记录后再开始工作。
 
-目标环境是 Windows 10 / 11 x64。测试中也用过 Parallels Windows ARM 的 x64 模拟，但不同实体显卡还需要继续测试。
+## 3. 准备源码环境并启动
 
-## 开发测试
+以下命令在仓库根目录执行。以后每次新开 PowerShell，从设置 `$python` 开始恢复环境，为验收创建新的临时目录。直接调用虚拟环境中的解释器即可。
 
-先把 `BIRDLOCK_DATA` 指向临时目录，避免改到平时的设置和缓存。项目与主体回归没有设置这个目录时会拒绝运行。
+```powershell
+py -3.12 -m venv windows\.venv
+$python = (Resolve-Path .\windows\.venv\Scripts\python.exe).Path
+& $python -m pip install -r windows/requirements.txt -c windows/constraints-release.txt
+$env:PYTHONPATH = (Resolve-Path .\windows).Path
+$env:PYTHONUTF8 = '1'
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) ("birdlock-" + [guid]::NewGuid())
+$env:BIRDLOCK_DATA = Join-Path $testRoot 'data'
+New-Item -ItemType Directory -Force $env:BIRDLOCK_DATA | Out-Null
+& $python -c "from build_windows import fetch_ffmpeg; fetch_ffmpeg()"
+& $python .\windows\BirdLock.pyw
+```
 
-| 命令 | 检查内容 |
-|---|---|
-| `BirdLock.exe --selftest` | 算法、模型、音效和赞赏资源 |
-| `BirdLock.exe --smoketest` | 离屏启动 |
-| `BirdLock.exe --gui-regression <照片目录> <报告目录> --export` | 窗口布局和编码导出 |
-| `BirdLock.exe --project-regression <照片目录> <报告目录>` | 分组、排序、编辑、缓存、特写、音轨等，至少 12 张照片 |
-| `BirdLock.exe --subject-regression <鸟类目录> <飞机目录> <报告目录>` | 主体切换、取消、独立设置和飞机导出 |
-| `BirdLock.exe --video-regression <鸟类视频> <飞机视频> <报告目录>` | 真实视频导入面板、镜头 JSON、鸟眼/鸟头/机头导出、特写混音与缓存恢复（使用短受控素材） |
+`fetch_ffmpeg()` 准备导出所需的 `windows\ffmpeg\ffmpeg.exe`。已有兼容的 FFmpeg 时，也可以将 `BIRDLOCK_FFMPEG` 指向该 exe 的绝对路径，替代下载步骤。鸟类模型随源码检出。飞机模式和对应回归需先运行 `& $python scripts/fetch_aircraft_model.py` 准备固定权重，再启动程序。保留日常设置和缓存，用上面的临时数据目录接收测试日志。
 
-测试只读照片，分组时间在内存里构造。结束后记得关闭测试程序及它留下的控制台，避免虚拟机一直占用资源。
+## 4. 单测、源码自检与 GUI 回归
 
-1.4.3 本地 Windows 89 项测试和成品回归已通过，详细结果见[测试记录](../docs/整批功能验收清单.md)。Qt 源码也可以在 Mac 上用于开发，发布的 Mac 版则使用 SwiftUI / Core ML。
+```powershell
+& $python -m unittest discover -v -s windows/tests -p 'test_*.py'
+& $python -m birdlock.cli devices
+& $python -m birdlock.cli selftest
+& $python .\windows\BirdLock.pyw --smoketest
+Get-Content (Join-Path $env:BIRDLOCK_DATA 'smoketest.log')
+Test-Path (Join-Path $env:BIRDLOCK_DATA 'smoketest.png')
+```
 
-## 自动构建
+检查每条命令的 `$LASTEXITCODE`、单测跳过项和离屏截图。没有遥测辅助程序时，调用原生进程的单测会跳过。源码自检包含算法、资源、空白图推理和 FFmpeg 编码。`devices` 用于枚举适配器、执行提供器与编码器。真实识别和 GPU 验收见下节。
 
-[统一 workflow](../.github/workflows/release.yml)复用 [Windows workflow](../.github/workflows/windows.yml)，配置为双平台、源码和校验值汇总到一个 Release 草稿。单独运行 Windows workflow 只产生 Windows 产物。
+GUI 回归在登录到 Windows 的桌面会话执行。用获准在本机使用的素材，替换以下示例路径。鸟类连拍目录至少准备 12 张，另备飞机照片和各一段短 SDR 鸟类、飞机视频。用独立报告目录保留每次运行结果。
 
-1.4.0 云端构建曾因隔离子进程的中文输出编码失败，当前脚本已显式使用 UTF-8。1.4.3 云端运行已越过该步骤，但在飞机许可文件校验处停止；本地受测安装包已单独发布。当前状态和 Mac 问题见[构建说明](../docs/构建与发布.md)。
+```powershell
+Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
+$birds = 'D:\BirdLock-Test\birds'
+$aircraft = 'D:\BirdLock-Test\aircraft'
+$birdVideo = 'D:\BirdLock-Test\bird.mp4'
+$aircraftVideo = 'D:\BirdLock-Test\aircraft.mp4'
+& $python .\windows\BirdLock.pyw --gui-regression $birds (Join-Path $testRoot 'gui') --export
+& $python .\windows\BirdLock.pyw --project-regression $birds (Join-Path $testRoot 'project')
+& $python .\windows\BirdLock.pyw --subject-regression $birds $aircraft (Join-Path $testRoot 'subject')
+& $python .\windows\BirdLock.pyw --video-regression $birdVideo $aircraftVideo (Join-Path $testRoot 'video')
+```
 
-## 1.4.2 本地测试
+依次检查退出码、对应报告目录的 JSON、窗口截图、输出视频以及数据目录的回归日志。四个入口以 CPU 识别，分别覆盖布局/编码、分组/工程/混音、主体切换/飞机、视频导入/镜头配置/导出。已有源码回归入口也支持成品 `BirdLock.exe`。成品测试以 `Start-Process -Wait -PassThru` 取得退出码，路径含空格时给各个参数保留引号。回归只读源照片，报告、导出和原始日志留在本机。
 
-修复 Qt 下拉框将字符串枚举转成普通字符串，导致切换编码或质量后不能导出的问题。色彩增益改用小查表，减少高分辨率的临时数组。帮助菜单新增导出诊断日志。这些修复已包含在公开的 1.4.3 测试包中。
+## 5. 实体显卡与真实素材
 
-1.4.3 与 Mac 同步版本号，Windows 功能沿用 1.4.2 的修复；新增的长序列光流进程回收在 Mac 版。
+1. 在实体 Windows x64 桌面记录被测 SHA、系统版本、GPU 型号、驱动版本和 `devices` 的摘要。首次复测 1.10 后续改动时优先覆盖 RTX 3080。
+2. 启动源码或成品。用同一批鸟类照片、再用同一批飞机照片分别比较两种设置。先在「输出 → 硬件加速 → AI 识别」选「仅用 CPU」，再选目标显卡。每次点击「重新识别」，确认发生真实推理并计时。保持同批素材、分析选项和范围，分别记录首轮加载与后续完整分析耗时。
+3. 检查当前识别设备和数据目录的 `birdlock.log`。记录模型实际使用的 provider，飞机机头检查 `aircraft inference summary` 的节点分配、调用耗时及 `fallback`。单独记录 GPU、混合或 CPU 回退。无法确认执行分配时记待验证。显卡枚举、软件模拟、OpenCL 重采样和硬件编码各有独立含义。可从「帮助 → 导出诊断日志」取证，交接时仅记录脱敏摘要。[固定选眼、跟踪与飞机加速](../docs/自定义目标与固定选眼.md)
+4. 用真实鸟类连拍检查导入、分组、识别、固定选眼、撤销及预览。用飞机素材检查机身和机头定位。用真实动物或昆虫连续照片手动框选、点锁定位置并给失锁处加参考帧。保存工程，重开并检查编辑和定位，最后用 H.264 / HEVC 导出并回放，核对帧序、构图、时长、声画及回退提示。
+5. 用短 SDR 视频检查抽帧、镜头配置、原声混音和清理后的缓存重建。涉及陀螺仪改动时，用确认含有效 IMU 的原片或本地 GCSV，检查同步与回退。双端工程验证用同一套获准素材在两端互开和导出，必要时重新定位原片。[视频和镜头](../docs/视频导入与镜头配置.md) · [工程与缓存](../docs/工程与缓存管理.md)
+6. 将环境、提交、操作、素材类型和数量、通过/失败/跳过/未执行及原因写进[测试矩阵](../docs/development/TEST_MATRIX.md)。托管 Windows、Mac Qt、ARM 模拟、离屏或 mock 结果各自记录。
+
+## 6. 本地成品构建
+
+安装支持 Rust 2024 edition 的 x64 MSVC Rust 工具链、Visual Studio Build Tools 的「使用 C++ 的桌面开发」工作负载与 Windows SDK。确认 `rustc -vV` 的 host 为 `x86_64-pc-windows-msvc`，且可访问系统 `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`。原生更新器运行需要 .NET Framework 4.8。已有符合清单和校验要求的原生遥测组件时可按工具文档复用。[Rust 安装](https://rust-lang.org/tools/install/) · [MSVC 安装](https://learn.microsoft.com/en-us/cpp/build/vscpp-step-0-installation) · [遥测构建](../tools/telemetry/README.md)
+
+```powershell
+& $python -m pip install -r windows/requirements.txt -c windows/constraints-release.txt pyinstaller
+& $python .\windows\build_windows.py
+```
+
+脚本会准备遥测组件、飞机模型、FFmpeg、手册与更新器。输出为 `windows/dist/BirdLock/` 和 `windows/dist/BirdLock-<VERSION>-Windows-x64.zip`。版本读取根目录的 [VERSION](../VERSION)，显式传入的 `--version` 必须匹配。也可从目标 SHA 的完整 Actions 运行下载 `package-windows` 产物，解压其中的 ZIP，并在独立临时数据目录执行同一套成品验收。报告注明运行链接和 SHA。
+
+```powershell
+$exe = (Resolve-Path .\windows\dist\BirdLock\BirdLock.exe).Path  # 下载的成品请替换路径
+foreach ($check in @('--selftest', '--smoketest')) {
+    $process = Start-Process -FilePath $exe -ArgumentList $check -Wait -PassThru
+    if ($process.ExitCode -ne 0) { throw "$check failed ($($process.ExitCode))" }
+}
+```
+
+复核 `selftest.log`、`smoketest.log` 和新生成的 `smoketest.png`。托管的 [Windows 完整工作流](../.github/workflows/windows.yml)还编译并执行独立更新器的 C# 单测和集成测试。发布及签名步骤由维护者授权。[构建与发布](../docs/构建与发布.md) · [自动更新](../docs/自动更新.md)
+
+## 7. 提交与交接
+
+1. 修改对应平台的代码。涉及共享契约时核对两端实现并在 PR 中说明。同步远端后先看 `git status`，有分歧或另一端仍在写入时先协调。
+2. 运行相关测试，更新[交接记录](../docs/development/HANDOFF.md)和[测试矩阵](../docs/development/TEST_MATRIX.md)。分开列出 Windows 实机、云端、离屏和其他环境结果。
+3. 用 `git add -- <改动文件>` 显式暂存，检查 `git diff --cached` 与 `git diff --cached --check` 后执行 `git commit`。获交接写入权后，用 `git -c push.followTags=false push -u origin HEAD:refs/heads/<分支名>` 推送该分支。fork 协作者推送到自己的远端。
+4. 创建或更新 PR，注明范围、环境、结果和未完成验证。跨平台并行子分支先进入约定的任务分支，由维护者审核最终 PR。[项目规范](../AGENTS.md)

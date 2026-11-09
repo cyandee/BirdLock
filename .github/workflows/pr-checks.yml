@@ -1,0 +1,70 @@
+name: Pull request checks
+
+on: pull_request
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS checks
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Swift unit tests
+        env:
+          # Use the same hosted-runner allowance as the full package workflow.
+          BIRDLOCK_ALLOW_VIRTUALIZED_FLOW_SKIP: "1"
+        run: swift test
+      - name: Swift CLI self-test
+        run: swift run birdlock-cli selftest
+      - name: Packaging and update-tool tests
+        run: |
+          python3 -m pip install -r scripts/requirements-updates.txt
+          python3 -m unittest discover -v -s scripts/tests
+
+  windows:
+    name: Windows checks
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONPATH: windows
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: x64
+      - name: Install runtime dependencies
+        run: python -m pip install -r windows/requirements.txt -c windows/constraints-release.txt
+      - name: Prepare FFmpeg for export tests
+        run: python -c "from build_windows import fetch_ffmpeg; fetch_ffmpeg()"
+      - name: Python unit tests
+        run: python -m unittest discover -v -s windows/tests -p "test_*.py"
+      - name: Source self-test
+        run: python -m birdlock.cli selftest
+      - name: Offscreen startup from source
+        env:
+          BIRDLOCK_DATA: ${{ runner.temp }}/birdlock-pr
+        run: |
+          python windows/BirdLock.pyw --smoketest
+          if ($LASTEXITCODE -ne 0) { throw "Source smoketest failed ($LASTEXITCODE)" }
+          if (-not (Test-Path (Join-Path $env:BIRDLOCK_DATA 'smoketest.png') -PathType Leaf)) {
+            throw 'Source smoketest produced no screenshot'
+          }

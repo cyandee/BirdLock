@@ -3,6 +3,7 @@ name: Unified macOS and Windows packages
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ["v*"]
 
 permissions:
