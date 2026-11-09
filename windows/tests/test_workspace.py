@@ -24,6 +24,11 @@ def example(root,count=6):
 class WorkspaceTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name);self.cache=self.root/'cache';self.cache.mkdir()
+    def make_junction(self,link,target):
+        # Unlike symlinks, NTFS junctions need no Developer Mode or extra privilege.
+        subprocess.run(['cmd.exe','/d','/c','mklink','/J',str(link),str(target)],
+                       check=True,capture_output=True)
+        self.assertTrue(link.is_junction())
     def test_optional_empty_strings_stay_absent_in_shared_audio_and_watermark(self):
         audio=AudioSettings(tracks=[AudioTrack(assetID='sony-20')])
         wire=workspace.native_audio(audio)
@@ -39,9 +44,14 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(wire['perFrame'][1]['link']['delta'],[1.25,-2.5])
         self.assertEqual(workspace.local_analysis(wire).perFrame[1].link['delta'],[1.25,-2.5])
     def test_project_survives_proxy_cleanup_and_preserves_all_edits(self):
-        d=example(self.root/'素材');file=self.root/'工程.birdlock';workspace.save(d,file,self.cache)
+        media=self.root/'素材'
+        if os.name=='nt':
+            target=self.root/'actual media';target.mkdir()
+            self.make_junction(media,target)
+        d=example(media);file=self.root/'工程.birdlock';workspace.save(d,file,self.cache)
         restored=workspace.restore_media(workspace.read(file),self.cache);a=restored['_analyses'][0]
         self.assertEqual(a.fingerprint,d['analyses'][0]['fingerprint'])
+        self.assertEqual(Path(a.frames[0].path).parent,media)
         self.assertEqual(a.manualEye,{2:(26.25,21.5)});self.assertEqual(a.excluded,{1});self.assertEqual(a.closeups[0].endFrame,4)
         p=workspace.local_profile(restored['profile']);self.assertEqual(p.selection.trimEnd,5);self.assertEqual(p.look.stabilization.maxZoom,6)
         cache=ProxyCache(self.cache);cache.save_analysis(a);self.assertIsNotNone(cache.load_proxy(a.fingerprint,2))
@@ -131,10 +141,7 @@ class WorkspaceTests(unittest.TestCase):
         link=self.cache/'video-imports'/('d'*32)
         size_without_link=cache_policy.total_size(self.cache)
         if os.name=='nt':
-            # Junctions need no Developer Mode or SeCreateSymbolicLinkPrivilege.
-            subprocess.run(['cmd.exe','/d','/c','mklink','/J',str(link),str(external)],
-                           check=True,capture_output=True)
-            self.assertTrue(link.is_junction())
+            self.make_junction(link,external)
         else:
             link.symlink_to(external,target_is_directory=True)
         size_with_link=cache_policy.total_size(self.cache)

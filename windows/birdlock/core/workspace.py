@@ -151,7 +151,11 @@ def read(path, relocation=None):
         candidates=[Path(original),path.parent/loc['relative'].replace('\\','/')]
         if relocation:candidates.extend([Path(relocation)/name,Path(relocation)/loc['relative']])
         candidate=next((p for p in candidates if p.is_file() and (loc.get('bytes') is None or p.stat().st_size==loc['bytes'])),None)
-        if candidate:mapping[original]=str(candidate.resolve())
+        if candidate:
+            # Keep the original Windows spelling when the original file is still
+            # valid; resolving a short path or junction changes the cache key.
+            if os.name!='nt' or candidate!=candidates[0]:
+                mapping[original]=str(candidate.resolve())
         elif loc.get('required',True):missing.append(original)
         else:warnings.append(name)
     if missing:raise MissingMedia(missing)
