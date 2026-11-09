@@ -33,7 +33,7 @@ git status --short --branch
 git rev-parse HEAD
 ```
 
-新任务用 `git switch -c codex/<任务名> origin/main` 创建分支。仅验证某次交接时，可以用 `git switch --detach <交接SHA>` 检出该提交。切换前检查工作区是否干净。
+新任务用 `git switch -c codex/<任务名> origin/main` 创建分支。仅验证某次交接时，可以用 `git switch --detach <交接SHA>` 检出该提交。切换前检查工作区是否干净。用 Windows Codex 打开克隆后的仓库根目录，读取 `AGENTS.md` 和交接记录后再开始工作。
 
 ## 3. 准备源码环境并启动
 
@@ -101,10 +101,10 @@ $aircraftVideo = 'D:\BirdLock-Test\aircraft.mp4'
 & $python .\windows\build_windows.py
 ```
 
-脚本会准备遥测组件、飞机模型、FFmpeg、手册与更新器。输出为 `windows/dist/BirdLock/` 和 `windows/dist/BirdLock-<VERSION>-Windows-x64.zip`。版本读取根目录的 [VERSION](../VERSION)，显式传入的 `--version` 必须匹配。可在独立临时数据目录用成品执行同一套验收。
+脚本会准备遥测组件、飞机模型、FFmpeg、手册与更新器。输出为 `windows/dist/BirdLock/` 和 `windows/dist/BirdLock-<VERSION>-Windows-x64.zip`。版本读取根目录的 [VERSION](../VERSION)，显式传入的 `--version` 必须匹配。也可从目标 SHA 的完整 Actions 运行下载 `package-windows` 产物，解压其中的 ZIP，并在独立临时数据目录执行同一套成品验收。报告注明运行链接和 SHA。
 
 ```powershell
-$exe = (Resolve-Path .\windows\dist\BirdLock\BirdLock.exe).Path
+$exe = (Resolve-Path .\windows\dist\BirdLock\BirdLock.exe).Path  # 下载的成品请替换路径
 foreach ($check in @('--selftest', '--smoketest')) {
     $process = Start-Process -FilePath $exe -ArgumentList $check -Wait -PassThru
     if ($process.ExitCode -ne 0) { throw "$check failed ($($process.ExitCode))" }

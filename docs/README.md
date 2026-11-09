@@ -6,7 +6,7 @@
 - [Windows 使用说明](windows/使用说明.md)
 - [下载 1.10.0](https://github.com/cyandee/BirdLock/releases/tag/v1.10.0)
 
-Mac 与 Windows 均为1.10.0，可在软件内检查更新。新增固定鸟眼、自定义目标框选跟踪与 Windows 飞机 DirectML 后端，见[新功能指南](自定义目标与固定选眼.md)及[更新说明](更新说明-1.10.0.md)。Windows 实体显卡与真实动物/昆虫素材仍需复测；视频功能的既有实验限制保留。
+Mac 与 Windows 均为 1.10.0，可在软件内检查更新。固定鸟眼、自定义目标框选跟踪与 Windows 飞机 DirectML 后端见[新功能指南](自定义目标与固定选眼.md)及[更新说明](更新说明-1.10.0.md)。视频功能及其适用范围见[视频导入与镜头配置](视频导入与镜头配置.md)。
 
 其他内容放在这里，方便查找。
 
@@ -25,7 +25,9 @@ Mac 与 Windows 均为1.10.0，可在软件内检查更新。新增固定鸟眼�
 
 早期测试记录：[1.1](第一批测试说明.md)、[1.2](第二批测试说明.md)、[1.3](第三批测试说明.md)。其中的菜单和音效可能与现在不同，日常使用请看上面的最新版说明。
 
-开发入口：[Codex 项目规范](../AGENTS.md) · [双平台架构](development/ARCHITECTURE.md) · [当前交接](development/HANDOFF.md) · [当前测试矩阵](development/TEST_MATRIX.md) · [Windows 开发与验收](../windows/README.md)
+## 双端开发
+
+[Codex 项目规范](../AGENTS.md) · [双平台架构](development/ARCHITECTURE.md) · [当前交接](development/HANDOFF.md) · [当前测试矩阵](development/TEST_MATRIX.md) · [Windows 开发与验收](../windows/README.md)
 
 有问题欢迎联系我：[cyanodee@gmail.com](mailto:cyanodee@gmail.com)。
 

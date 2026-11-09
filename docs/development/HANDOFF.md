@@ -8,8 +8,9 @@
 |---|---|
 | 任务 | 建立 Mac / Windows Codex 协作和分层 CI |
 | 分支与基线 | `codex/dual-platform-development`，基于 `origin/main` 的 `3610102` |
+| 评审与检出 | 从 [PR #2](https://github.com/cyandee/BirdLock/pull/2) 获取当前分支 HEAD。要复现已登记的验证时按矩阵检出对应 SHA |
 | 分支写入负责人 | Mac Codex 提交改造，等待维护者审核。Windows 端可检出同一 SHA 验证，回填结果前按下述方式交接或建子分支 |
-| 已完成 | 项目规范、模块映射、Windows 操作说明、PR 源码检查、main 完整构建触发、数据忽略规则 |
+| 已完成 | 项目规范、模块映射、Windows 操作说明、PR 源码检查、main 完整构建触发、数据忽略规则。任务分支的完整构建和首轮 PR 检查已通过，详见测试矩阵 |
 | 技术决策 | PR 复用现有单测及自检。完整构建沿用统一工作流和 Windows 打包工作流。项目进度和历史验收保留原入口 |
 | 下一步 | 维护者审核 PR。Windows 端在实体 x64 电脑按指南执行源码与成品回归，补齐 RTX 3080、固定选眼、动物/昆虫真实素材与双端工程互开记录 |
 

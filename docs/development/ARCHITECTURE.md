@@ -1,6 +1,6 @@
 # BirdLock 双平台架构
 
-两个桌面程序各自构建和运行，面向同一套 BirdLock 工作流。Mac 版最低 macOS 14，分发 arm64 / x86_64 通用包。Windows 版面向 Windows 10 / 11 x64，Python 3.12 x64 + PySide6，经 PyInstaller 生成便携目录和 ZIP。版本统一读取 [VERSION](../../VERSION)，具体工具链、打包和依赖见 [构建与发布](../构建与发布.md)。
+两个桌面程序各自构建和运行，面向同一套 BirdLock 工作流。Mac 版最低 macOS 14，分发 arm64 / x86_64 通用包。Windows 版面向 Windows 10 / 11 x64，Python 3.12 x64 + PySide6，经 PyInstaller 生成便携目录和 ZIP。构建版本以根目录的 [VERSION](../../VERSION) 为准。[工具链、打包与依赖](../构建与发布.md)
 
 ## 模块映射
 

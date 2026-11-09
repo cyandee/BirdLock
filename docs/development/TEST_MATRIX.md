@@ -21,6 +21,11 @@
 | 2026-11-09 · `3610102` 源码 | 实体 Mac arm64，macOS 27.2，Xcode 27.2 | `swift test`、`swift run birdlock-cli selftest` | 通过，96 项、0 跳过，CLI 自检通过。核验并复用既有原生遥测辅助程序，两项光流颜色测试通过 |
 | 2026-11-09 · `3610102` 源码 | 同一实体 Mac，Python 3.12 | `python -m unittest discover -v -s scripts/tests` | 通过，28 项、0 跳过 |
 | 2026-11-09 · `3610102` 源码 | Mac 上的 Qt，Python 3.12，FFmpeg 和原生 Mac 遥测辅助程序 | `windows/tests`、`birdlock.cli selftest`、源码 `--smoketest` | 通过，158 项、0 跳过，源码自检和离屏截图检查通过 |
+| 2026-11-09 · `d33860b`（PR 头提交） | GitHub 托管 macOS 15 | PR 快速检查首轮 | Swift 91 项通过，5 项跳过（2 项光流硬件、3 项需遥测辅助程序）。CLI 自检与打包工具 28 项通过。[首轮运行](https://github.com/cyandee/BirdLock/actions/runs/42544350396) |
+| 2026-11-09 · `d33860b`（PR 头提交） | GitHub 托管 Windows x64 | PR 快速检查首轮 | Python 154 项通过，4 项需遥测辅助程序而跳过。CPU 源码自检和离屏启动通过。[首轮运行](https://github.com/cyandee/BirdLock/actions/runs/42544350396) |
+| 2026-11-09 · `d33860b` | GitHub 托管 Mac / Windows，任务分支手动运行 | 完整构建与产物汇总 | 通过。Mac Swift 91 项、跳过 5 项（同上），打包工具 28 项、通用 DMG 与应用签名校验通过。Windows Python 158 项、0 跳过，C# 更新器单测和集成测试、源程序及成品自检通过。源码归档、SHA256 汇总通过，Release 草稿任务跳过。[完整构建](https://github.com/cyandee/BirdLock/actions/runs/42544366246) |
+
+PR 检查使用 GitHub 生成的合并引用。后续推送以 [PR #2 的当前检查](https://github.com/cyandee/BirdLock/pull/2/checks) 为准。
 
 ## 实体设备验收
 
