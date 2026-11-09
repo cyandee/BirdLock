@@ -2,6 +2,17 @@
 
 这里记录当前任务和下一步。版本历史、已上线状态和历史验收沿用原文档。当前开发验证集中在 [测试矩阵](TEST_MATRIX.md)。[版本记录](../迭代记录.md) · [项目近况](../工作进度.md) · [历史验收](../整批功能验收清单.md)
 
+## Windows 实机接力 · 2026-11-09
+
+| 字段 | 内容 |
+|---|---|
+| 分支与负责人 | `codex/windows-local-acceptance`，Windows Codex；基于 `origin/main` 的 `411f6c4`（1.10.0，PR #2 已合并） |
+| 被测提交 | 源码完整验收 `90ddbf9`；仅新增 ICU 打包修复后的成品 `7944e30`。 |
+| 已完成 | 原生 x64 开发环境、源码运行、单测、Windows 桌面与高 DPI 回归、合成素材回归、RTX 3060 实际 DirectML 推理、便携 ZIP 打包。具体被测提交、计数和覆盖范围见[测试矩阵](TEST_MATRIX.md)。 |
+| 已修复 | 缓存扫描和清理不再进入 NTFS 目录联接；打开未迁移的 Windows 工程时保留本机路径和缓存键；打包排除会遮蔽系统 ICU 的同名 DLL。回归测试不会卡在临时工程的保存对话框，并在真实编码进行中触发取消。 |
+| 接力 | Windows 获得授权素材后继续验收真实鸟眼、飞机与动物/昆虫跟踪、真实 SDR 视频和有效 IMU。Mac Codex 用同一获准素材与 Windows 互开工程，核对原片重定位、手动编辑、固定选眼、音轨、裁切和导出。工程 schema 未改，实机互开仍未执行。 |
+| 并行 PR | [PR #3](https://github.com/cyandee/BirdLock/pull/3) 检查时仍开放，[Mac/Windows CI 均通过](https://github.com/cyandee/BirdLock/actions/runs/42549821635)。Windows 任务没有接管该分支。 |
+
 ## 当前任务
 
 | 字段 | 内容 |
