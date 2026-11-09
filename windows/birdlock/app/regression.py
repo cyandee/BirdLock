@@ -4,6 +4,7 @@ Run with a disposable BIRDLOCK_DATA directory. No offscreen platform is used.
 """
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 from birdlock.app import theme
 from birdlock.app.main_window import MainWindow
 from birdlock.app.state import AppState
+from .regression_support import close_regression_window
 
 
 def main(argv=None):
@@ -18,12 +20,17 @@ def main(argv=None):
     parser.add_argument("photos")
     parser.add_argument("output", type=Path)
     parser.add_argument("--export", action="store_true", help="Also render H.264 and portrait HEVC")
+    parser.add_argument("--allow-untracked", action="store_true", help="Keep untracked frames for synthetic export checks")
     args = parser.parse_args(argv)
+    if not os.environ.get("BIRDLOCK_DATA"):
+        parser.error("GUI regression requires a disposable BIRDLOCK_DATA directory")
     args.output.mkdir(parents=True, exist_ok=True)
     app = QApplication([])
     theme.apply(app)
     state = AppState()
     state.device = "cpu"
+    if args.allow_untracked:
+        state.selection.dropUntracked = False
     window = MainWindow(state)
     window.show()
 
@@ -97,7 +104,8 @@ def main(argv=None):
     output_tab.verticalScrollBar().setValue(0)
     result = {"photos": state.analysis.count, "cycles": 10, "layout_checks": len(measurements),
               "all_layout_checks_passed": True, "frames_rendered": state.preview_image is not None, "audio_tracks": len(state.audio.arranged_tracks),
-              "sound_library": len(assets()), "flash_rate": state.export.focusMark.flashRate}
+              "sound_library": len(assets()), "flash_rate": state.export.focusMark.flashRate,
+              "tracked_frames": int(state.analysis.track.has_data.sum()), "allow_untracked": args.allow_untracked}
     if not result["frames_rendered"]:
         raise AssertionError("No preview frame was rendered")
     if args.export:
@@ -121,7 +129,7 @@ def main(argv=None):
                                       "bytes": output.stat().st_size})
     (args.output / "ui-regression.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result), flush=True)
-    window.close()
+    close_regression_window(window)
 
 
 if __name__ == "__main__":

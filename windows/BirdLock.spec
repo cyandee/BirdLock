@@ -40,6 +40,13 @@ a = Analysis(
               "PySide6.QtQuick", "PySide6.QtQml", "PySide6.QtPdf", "PySide6.QtCharts"],
     noarchive=False,
 )
+# Qt links to Windows' ICU exports. A generic DLL picked up from PATH (for
+# example Poppler's ICU) can have the same filename with incompatible symbols.
+# Keep Windows' system ICU out of the portable application directory.
+if os.name == "nt":
+    system_icu = {"icu.dll", "icuuc.dll", "icuin.dll", "icudt.dll"}
+    a.binaries = [entry for entry in a.binaries
+                  if os.path.basename(entry[0]).casefold() not in system_icu]
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="BirdLock", console=False,
           icon=os.path.join(here, "assets", "BirdLock.ico"), version=os.path.join(here, "version_info.txt"))

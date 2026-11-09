@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication,QCheckBox,QComboBox,QPushButton,QDoub
 from .state import AppState
 from .main_window import MainWindow
 from . import theme
+from .regression_support import close_regression_window
 from ..core import frames as F
 from ..core.analysis import Cancelled
 from ..core.aircraft_analysis import AircraftAnalyzer
@@ -110,7 +111,7 @@ def main(argv):
         (out/'subject-regression.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
         print(json.dumps(result),flush=True)
     finally:
-        state.close();window.close();settle(.1)
+        close_regression_window(window);settle(.1)
 
 
 if __name__=='__main__':

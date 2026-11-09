@@ -28,6 +28,11 @@ def path_from_url(value):
 
 def uri(path):return Path(path).absolute().as_uri()
 
+def _local_path(value):
+    path=path_from_url(value)
+    # Match paths returned by the Windows importer; URI slashes change cache keys.
+    return str(Path(path)) if os.name=='nt' and path else path
+
 def native_analysis(a):
     d=copy.deepcopy(a.to_dict());d.pop('track',None)
     for f in d['frames']:f['url']=uri(f.pop('path'))
@@ -42,7 +47,7 @@ def native_analysis(a):
 
 def local_analysis(data):
     d=copy.deepcopy(data);d.pop('track',None)
-    for f in d['frames']:f['path']=path_from_url(f.pop('url'));f.setdefault('orientation',1)
+    for f in d['frames']:f['path']=_local_path(f.pop('url'));f.setdefault('orientation',1)
     for p in d['perFrame']:
         p['keypoints']=[(k['x'],k['y'],k['conf']) for k in p.get('keypoints',[])]
         p['head']['points']=[([v['x'],v['y']] if isinstance(v,dict) else v) if v is not None else None for v in p['head']['points']]
@@ -146,7 +151,11 @@ def read(path, relocation=None):
         candidates=[Path(original),path.parent/loc['relative'].replace('\\','/')]
         if relocation:candidates.extend([Path(relocation)/name,Path(relocation)/loc['relative']])
         candidate=next((p for p in candidates if p.is_file() and (loc.get('bytes') is None or p.stat().st_size==loc['bytes'])),None)
-        if candidate:mapping[original]=str(candidate.resolve())
+        if candidate:
+            # Keep the original Windows spelling when the original file is still
+            # valid; resolving a short path or junction changes the cache key.
+            if os.name!='nt' or candidate!=candidates[0]:
+                mapping[original]=str(candidate.resolve())
         elif loc.get('required',True):missing.append(original)
         else:warnings.append(name)
     if missing:raise MissingMedia(missing)
@@ -218,8 +227,8 @@ def restore_media(document, cache_root, cancelled=lambda:False):
                 replacements[p]=new.path;metadata[new.path]=new
     d=replace_paths(d,replacements)
     for f in d['frames']+[f for a in d['analyses'] for f in a['frames']]:
-        if path_from_url(f['url']) in metadata:
-            new=metadata[path_from_url(f['url'])];f['fileSize']=new.fileSize;f['modified']=new.modified
+        new=metadata.get(_local_path(f['url']))
+        if new is not None:f['fileSize']=new.fileSize;f['modified']=new.modified
     orientations={}
     for f in d['frames']+[f for a in d['analyses'] for f in a['frames']]:
         if 'orientation' not in f:
@@ -232,7 +241,7 @@ def restore_media(document, cache_root, cancelled=lambda:False):
             f['orientation']=orientations[path]
     frames=[]
     for f in d['frames']:
-        f=dict(f);f['path']=path_from_url(f.pop('url'));f.setdefault('orientation',1);frames.append(SourceFrame.from_dict(f))
+        f=dict(f);f['path']=_local_path(f.pop('url'));f.setdefault('orientation',1);frames.append(SourceFrame.from_dict(f))
     analyses=[local_analysis(a) for a in d['analyses']]
     for a in analyses:a.fingerprint=fingerprint(a.frames,a.subject,a.modelIdentity)
     d['_frames']=frames;d['_analyses']=analyses

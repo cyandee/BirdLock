@@ -1,4 +1,4 @@
-import json, tempfile, unittest, os
+import json, tempfile, unittest, os, subprocess
 from pathlib import Path
 from unittest.mock import patch
 import cv2
@@ -24,6 +24,11 @@ def example(root,count=6):
 class WorkspaceTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name);self.cache=self.root/'cache';self.cache.mkdir()
+    def make_junction(self,link,target):
+        # Unlike symlinks, NTFS junctions need no Developer Mode or extra privilege.
+        subprocess.run(['cmd.exe','/d','/c','mklink','/J',str(link),str(target)],
+                       check=True,capture_output=True)
+        self.assertTrue(link.is_junction())
     def test_optional_empty_strings_stay_absent_in_shared_audio_and_watermark(self):
         audio=AudioSettings(tracks=[AudioTrack(assetID='sony-20')])
         wire=workspace.native_audio(audio)
@@ -39,8 +44,14 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(wire['perFrame'][1]['link']['delta'],[1.25,-2.5])
         self.assertEqual(workspace.local_analysis(wire).perFrame[1].link['delta'],[1.25,-2.5])
     def test_project_survives_proxy_cleanup_and_preserves_all_edits(self):
-        d=example(self.root/'素材');file=self.root/'工程.birdlock';workspace.save(d,file,self.cache)
+        media=self.root/'素材'
+        if os.name=='nt':
+            target=self.root/'actual media';target.mkdir()
+            self.make_junction(media,target)
+        d=example(media);file=self.root/'工程.birdlock';workspace.save(d,file,self.cache)
         restored=workspace.restore_media(workspace.read(file),self.cache);a=restored['_analyses'][0]
+        self.assertEqual(a.fingerprint,d['analyses'][0]['fingerprint'])
+        self.assertEqual(Path(a.frames[0].path).parent,media)
         self.assertEqual(a.manualEye,{2:(26.25,21.5)});self.assertEqual(a.excluded,{1});self.assertEqual(a.closeups[0].endFrame,4)
         p=workspace.local_profile(restored['profile']);self.assertEqual(p.selection.trimEnd,5);self.assertEqual(p.look.stabilization.maxZoom,6)
         cache=ProxyCache(self.cache);cache.save_analysis(a);self.assertIsNotNone(cache.load_proxy(a.fingerprint,2))
@@ -94,8 +105,8 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(restored['mergeGroups'],[1,0]);self.assertEqual(len(restored['_analyses']),3)
         self.assertEqual(Path(restored['_analyses'][0].frames[0].path).resolve(),Path(workspace.path_from_url(d['frames'][6]['url'])).resolve())
         self.assertEqual(restored['_analyses'][2].manualEye[2],(26.25,21.5))
-    def group(self,token,size,stamp):
-        video=self.cache/'video-imports'/token;video.mkdir(parents=True)
+    def group(self,token,size,stamp,directory=None):
+        video=directory or self.cache/'video-imports'/token;video.mkdir(parents=True)
         source=self.root/(token+'.mp4');source.write_bytes(b'original')
         recipe=dict(sourcePath=str(source),bytes=8,modified=stamp,width=64,height=48,start=0,seconds=1,fps=1,count=1,lensJSON=None)
         (video/'video-recipe.json').write_text(json.dumps(recipe));os.utime(video/'video-recipe.json',(stamp,stamp))
@@ -116,9 +127,26 @@ class WorkspaceTests(unittest.TestCase):
         try:self.assertEqual(cache_policy.clean(self.cache,0)['removed'],0)
         finally:cache_policy.protect('test-owner',[])
         self.assertGreater(cache_policy.clean(self.cache,0)['removed'],0)
-    def test_protected_over_limit_reports_and_unknown_or_symlink_is_never_deleted(self):
+    def test_protected_over_limit_reports_and_unknown_is_never_deleted(self):
         current,_=self.group('c'*32,1000,1)
-        external=self.root/'outside';external.mkdir();(external/'video-000000.jpg').write_bytes(b'keep')
-        (self.cache/'video-imports'/('d'*32)).symlink_to(external,target_is_directory=True)
+        unknown=self.cache/'video-imports'/'unknown'
+        unknown.mkdir();(unknown/'video-000000.jpg').write_bytes(b'keep')
         report=cache_policy.clean(self.cache,0,{str(current)})
-        self.assertTrue(report['overLimit']);self.assertTrue((current/'video-000000.jpg').is_file());self.assertEqual((external/'video-000000.jpg').read_bytes(),b'keep')
+        self.assertTrue(report['overLimit']);self.assertTrue((current/'video-000000.jpg').is_file())
+        self.assertEqual((unknown/'video-000000.jpg').read_bytes(),b'keep')
+
+    def test_cache_cleanup_does_not_follow_linked_video_directory(self):
+        current,_=self.group('c'*32,1000,1)
+        external,_=self.group('d'*32,1000,2,directory=self.root/'outside')
+        link=self.cache/'video-imports'/('d'*32)
+        size_without_link=cache_policy.total_size(self.cache)
+        if os.name=='nt':
+            self.make_junction(link,external)
+        else:
+            link.symlink_to(external,target_is_directory=True)
+        size_with_link=cache_policy.total_size(self.cache)
+        report=cache_policy.clean(self.cache,0,{str(current)})
+        self.assertTrue((external/'video-000000.jpg').is_file())
+        self.assertFalse((external/'.evicted.json').exists())
+        self.assertEqual(size_with_link,size_without_link)
+        self.assertEqual(report['removed'],0)
