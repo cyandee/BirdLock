@@ -25,7 +25,7 @@
 | 2026-11-09 · `d33860b`（PR 头提交） | GitHub 托管 Windows x64 | PR 快速检查首轮 | Python 154 项通过，4 项需遥测辅助程序而跳过。CPU 源码自检和离屏启动通过。[首轮运行](https://github.com/cyandee/BirdLock/actions/runs/42544350396) |
 | 2026-11-09 · `d33860b` | GitHub 托管 Mac / Windows，任务分支手动运行 | 完整构建与产物汇总 | 通过。Mac Swift 91 项、跳过 5 项（同上），打包工具 28 项、通用 DMG 与应用签名校验通过。Windows Python 158 项、0 跳过，C# 更新器单测和集成测试、源程序及成品自检通过。源码归档、SHA256 汇总通过，Release 草稿任务跳过。[完整构建](https://github.com/cyandee/BirdLock/actions/runs/42544366246) |
 
-PR 检查使用 GitHub 生成的合并引用。后续推送以 [PR #2 的当前检查](https://github.com/cyandee/BirdLock/pull/2/checks) 为准。
+PR 检查使用 GitHub 生成的合并引用。PR #2 最终头提交 `2ef6647` 的两项快速检查均通过，合并后 `main` 在 `411f6c4` 触发完整构建。[最终 PR 检查](https://github.com/cyandee/BirdLock/actions/runs/42545620989) · [main 完整构建](https://github.com/cyandee/BirdLock/actions/runs/42549567108)
 
 ## 实体设备验收
 
