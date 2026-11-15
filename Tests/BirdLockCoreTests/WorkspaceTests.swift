@@ -79,4 +79,58 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertGreaterThan(cleanup.removed,0);XCTAssertTrue(FileManager.default.fileExists(atPath:video.appendingPathComponent(".evicted.json").path))
         XCTAssertEqual(try Data(contentsOf:source),Data("original".utf8));XCTAssertEqual(try Data(contentsOf:outside.appendingPathComponent("video-000000.jpg")),Data("keep".utf8))
     }
+    func testWindowsRelocationPreservesGroupAudioAndRAWFields() throws {
+        let root = try temporary(), originals = root.appendingPathComponent("素材")
+        let file = root.appendingPathComponent("工程.birdlock"), cache = root.appendingPathComponent("cache")
+        var document = try example(originals)
+        document.segments[0].name = "连拍 🐦"
+        document.frames[0].raw = RawFrame(mode: .camera, source: .embedded, fullWidth: 640, fullHeight: 480)
+        document.analyses[0].frames[0].raw = document.frames[0].raw
+        var track = AudioTrack(); track.enabled = false; track.muted = false; track.assetID = "sony-a1m2-30"; track.timelineStart = 0.2
+        document.audio.enabled = false; document.audio.tracks = [track]
+        try document.save(to: file, cacheRoot: cache)
+        var wire = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        func foreign(_ frame: [String: Any]) -> [String: Any] {
+            var result = frame
+            let name = URL(string: frame["url"] as! String)!.lastPathComponent
+            result["url"] = URL(string: "file:///C:/Media/")!.appendingPathComponent(name).absoluteString
+            return result
+        }
+        wire["frames"] = (wire["frames"] as! [[String: Any]]).map(foreign)
+        var analyses = wire["analyses"] as! [[String: Any]]
+        analyses[0]["frames"] = (analyses[0]["frames"] as! [[String: Any]]).map(foreign)
+        wire["analyses"] = analyses
+        var locations = wire["locations"] as! [[String: Any]]
+        for i in locations.indices {
+            let name = URL(fileURLWithPath: locations[i]["path"] as! String).lastPathComponent
+            locations[i]["path"] = "C:\\Media\\" + name
+            locations[i]["relative"] = "素材\\" + name
+        }
+        wire["locations"] = locations
+        try JSONSerialization.data(withJSONObject: wire).write(to: file)
+        let reopened = try WorkspaceDocument.read(from: file)
+        XCTAssertEqual(reopened.segments[0].groupID, document.segments[0].groupID)
+        XCTAssertEqual(reopened.segments[0].name, "连拍 🐦")
+        XCTAssertEqual(reopened.frames.map(\.url), document.frames.map(\.url))
+        XCTAssertEqual(reopened.frames[0].raw, document.frames[0].raw)
+        XCTAssertEqual(reopened.audio, document.audio)
+        XCTAssertTrue(reopened.audio.arrangedTracks.isEmpty)
+        let saved = root.appendingPathComponent("往返.birdlock")
+        try reopened.save(to: saved, cacheRoot: cache)
+        let roundTrip = try WorkspaceDocument.read(from: saved)
+        XCTAssertEqual(roundTrip.analyses[0].frames[0].raw, document.frames[0].raw)
+        XCTAssertEqual(roundTrip.audio.tracks, [track])
+    }
+
+    func testLegacyGroupAndAudioDefaults() throws {
+        let decoder = JSONDecoder()
+        let segment = try decoder.decode(ProjectSegment.self, from: Data(#"{"start":3,"count":5,"fps":20}"#.utf8))
+        XCTAssertEqual(segment.groupID, "legacy-3-5")
+        XCTAssertEqual(segment.name, "")
+        let audio = try decoder.decode(AudioSettings.self, from: Data(#"{"tracks":[{"assetID":"sony-a1m2-30"}]}"#.utf8))
+        XCTAssertTrue(audio.enabled)
+        XCTAssertTrue(audio.tracks[0].enabled)
+        XCTAssertEqual(audio.arrangedTracks.count, 1)
+    }
+
 }

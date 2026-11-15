@@ -632,6 +632,9 @@ struct MusicCard: View {
     var body: some View {
         @Bindable var state = state
         InspectorCard(title: "背景音乐", icon: "music.note") {
+            if state.audio.hasPrimarySource {
+                Toggle("启用背景音乐", isOn: $state.audio.enabled)
+            }
             if let url = state.audio.url {
                 HStack {
                     Text(url.lastPathComponent).font(.callout).lineLimit(1).truncationMode(.middle)

@@ -118,7 +118,7 @@ private struct AudioTrackLane: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Image(systemName: track.muted ? "speaker.slash" : "waveform").frame(width: 52)
+            Image(systemName: (!track.enabled || track.muted) ? "speaker.slash" : "waveform").frame(width: 52)
             GeometryReader { geo in
                 let width = max(1, geo.size.width - 24)
                 let total = max(0.001, duration)
@@ -127,7 +127,7 @@ private struct AudioTrackLane: View {
                 ZStack(alignment: .topLeading) {
                     Color.black.opacity(0.12)
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(Theme.accent.opacity(track.muted ? 0.12 : 0.35))
+                        .fill(Theme.accent.opacity((!track.enabled || track.muted) ? 0.12 : 0.35))
                         .frame(width: max(1, width * span / total), height: 26)
                         .overlay(alignment: .leading) {
                             Text(track.title).font(.caption2).lineLimit(1).padding(.horizontal, 5)

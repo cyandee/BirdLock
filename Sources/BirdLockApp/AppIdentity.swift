@@ -34,25 +34,37 @@ enum AppIdentity {
         window.contentView = NSHostingView(rootView: CoffeeSupportView())
         window.center(); window.makeKeyAndOrderFront(nil); supportWindow = window
     }
-    static var supportImage: URL? {
-        var candidates = [URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("SharedResources/Support/alipay-coffee.jpg")]
-        if let resources = Bundle.main.resourceURL { candidates.insert(resources.appendingPathComponent("Support/alipay-coffee.jpg"), at: 0) }
+    static func supportImage(_ file: String) -> URL? {
+        var candidates = [URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("SharedResources/Support/\(file)")]
+        if let resources = Bundle.main.resourceURL { candidates.insert(resources.appendingPathComponent("Support/\(file)"), at: 0) }
         var root = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.deletingLastPathComponent()
-        for _ in 0..<8 { candidates.append(root.appendingPathComponent("SharedResources/Support/alipay-coffee.jpg")); root.deleteLastPathComponent() }
+        for _ in 0..<8 { candidates.append(root.appendingPathComponent("SharedResources/Support/\(file)")); root.deleteLastPathComponent() }
         return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
     }
 }
 
 private struct CoffeeSupportView: View {
     var body: some View {
-        VStack(spacing: 14) {
-            Text("请作者喝杯咖啡 ☕").font(.title2.bold())
-            Text("如果 BirdLock 帮到了你，欢迎自愿赞赏。\n5 元、10 元、20 元或任意金额，心意随意。\n所有功能均可免费使用，赞赏不影响使用。")
-                .multilineTextAlignment(.center).font(.callout)
-            if let url = AppIdentity.supportImage, let image = NSImage(contentsOf: url) {
-                Image(nsImage: image).resizable().scaledToFit().frame(maxHeight: 460)
-            } else { Text("暂时找不到赞赏二维码，可通过邮箱联系作者。") }
-            Text("支付宝扫码 · 自愿支持").font(.caption).foregroundStyle(.secondary)
-        }.padding(20).frame(width: 390,height: 650).background(Color.white).preferredColorScheme(.light)
+        VStack(spacing: 16) {
+            Text("如果 BirdLock 帮到了你，欢迎自愿赞赏。\n所有功能均可免费使用，赞赏不影响使用。")
+                .multilineTextAlignment(.center)
+            HStack(spacing: 24) {
+                code("支付宝", file: "alipay-coffee.jpg")
+                code("微信", file: "wechat-coffee.png")
+            }
+            Button("关闭") { AppIdentity.supportWindow?.close() }.keyboardShortcut(.cancelAction)
+        }.padding(24).frame(width: 620, height: 500)
+    }
+
+    private func code(_ title: String, file: String) -> some View {
+        VStack {
+            if let url = AppIdentity.supportImage(file), let image = NSImage(contentsOf: url) {
+                Image(nsImage: image).resizable().scaledToFit().frame(width: 258, height: 325)
+                    .accessibilityLabel(title + "二维码")
+            } else {
+                Text("暂时找不到二维码").frame(width: 258, height: 325)
+            }
+            Text(title + "扫码 · 自愿支持").foregroundStyle(.secondary)
+        }
     }
 }

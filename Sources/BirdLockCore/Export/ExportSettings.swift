@@ -199,6 +199,12 @@ public struct WatermarkSettings: Codable, Hashable, Sendable {
 /// Background music muxed into exported videos.
 public struct AudioSettings: Codable, Hashable, Sendable {
     public var tracks: [AudioTrack] = []
+    public var enabled = true
+    public var muted = false
+    public var assetID: String?
+    public var timelineStart = 0.0
+    public var duration = 0.0
+    public var muteRanges: [[Double]] = []
     public var url: URL? = nil
     /// Position in the music file (seconds) that lines up with the start of the video
     public var startOffset: Double = 0
@@ -212,6 +218,12 @@ public struct AudioSettings: Codable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = AudioSettings()
+        enabled = c.value(.enabled, d.enabled)
+        muted = c.value(.muted, d.muted)
+        assetID = c.value(.assetID, d.assetID)
+        timelineStart = c.value(.timelineStart, d.timelineStart)
+        duration = c.value(.duration, d.duration)
+        muteRanges = c.value(.muteRanges, d.muteRanges)
         url = c.value(.url, d.url)
         startOffset = c.value(.startOffset, d.startOffset)
         volume = c.value(.volume, d.volume)
@@ -223,15 +235,18 @@ public struct AudioSettings: Codable, Hashable, Sendable {
 
     public var arrangedTracks: [AudioTrack] {
         var result = tracks
-        if let url {
+        if hasPrimarySource {
             var primary = AudioTrack()
-            primary.url = url; primary.volume = volume; primary.startOffset = startOffset
+            primary.enabled = enabled; primary.muted = muted
+            primary.url = url; primary.assetID = assetID; primary.volume = volume; primary.startOffset = startOffset
+            primary.timelineStart = timelineStart; primary.duration = duration; primary.muteRanges = muteRanges
             primary.fadeIn = fadeIn; primary.fadeOut = fadeOut; primary.loop = loop
             result.insert(primary, at: 0)
         }
         return result.filter(\.isActive)
     }
-    public var isActive: Bool { (url != nil && volume > 0.001) || tracks.contains(where: \.isActive) }
+    public var hasPrimarySource: Bool { url != nil || assetID != nil }
+    public var isActive: Bool { (enabled && !muted && hasPrimarySource && volume > 0.001) || tracks.contains(where: \.isActive) }
 }
 
 public struct ExportSettings: Codable, Hashable, Sendable {

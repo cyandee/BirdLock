@@ -46,6 +46,8 @@ public struct SourceFrame: Codable, Hashable, Identifiable, Sendable {
     public var fileSize: Int
     public var modified: Double
     public var exif: ExifInfo
+    public var orientation: Int? = nil
+    public var raw: RawFrame? = nil
 
     public var fileName: String { url.lastPathComponent }
     public var size: V2 { V2(Double(pixelWidth), Double(pixelHeight)) }
@@ -54,11 +56,16 @@ public struct SourceFrame: Codable, Hashable, Identifiable, Sendable {
 public struct BurstSegment: Hashable, Sendable {
     public var range: Range<Int>
     public var fps: Double
-    public init(range: Range<Int>, fps: Double) { self.range = range; self.fps = fps }
+    public var groupID: String
+    public var name: String
+    public init(range: Range<Int>, fps: Double, groupID: String = UUID().uuidString, name: String = "") {
+        self.range = range; self.fps = fps; self.groupID = groupID; self.name = name
+    }
 }
 
 public enum FrameImporter {
-    public static let supportedExtensions: Set<String> = ["jpg", "jpeg", "heic", "heif", "hif", "png", "tif", "tiff"]
+    public static let rawExtensions = RawPhoto.extensions
+    public static let supportedExtensions: Set<String> = Set(["jpg", "jpeg", "heic", "heif", "hif", "png", "tif", "tiff"]).union(RawPhoto.extensions)
 
     /// Expand dropped URLs (files or folders, non-recursive into sub-folders) to image files.
     public static func collectImageURLs(_ urls: [URL]) -> [URL] {
@@ -77,13 +84,27 @@ public enum FrameImporter {
         return out
     }
 
-    public static func readFrame(url: URL, id: Int) -> SourceFrame? {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
-              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] else { return nil }
+    public static func readFrame(url: URL, id: Int, rawMode: RawMode = .camera) -> SourceFrame? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] ?? [:]
         var w = props[kCGImagePropertyPixelWidth] as? Int ?? 0
         var h = props[kCGImagePropertyPixelHeight] as? Int ?? 0
         let orientation = props[kCGImagePropertyOrientation] as? Int ?? 1
         if orientation >= 5 { swap(&w, &h) }
+        var raw: RawFrame?
+        let ext = url.pathExtension.lowercased()
+        if RawPhoto.extensions.contains(ext) {
+            let rotation = CGImagePropertyOrientation(rawValue: UInt32(clamping: orientation)) ?? .up
+            guard let result = RawPhoto.inspect(url, source: src, mode: rawMode, orientation: rotation) else { return nil }
+            raw = result.raw; w = result.width; h = result.height
+        } else if ext == "jpg" || ext == "jpeg" {
+            // A damaged JPEG must not suppress a usable RAW in a pair.
+            let options = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                           kCGImageSourceThumbnailMaxPixelSize: 64,
+                           kCGImageSourceShouldCacheImmediately: true] as [CFString: Any]
+            guard CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) != nil,
+                  CGImageSourceGetStatusAtIndex(src, 0) == .statusComplete else { return nil }
+        }
         guard w > 0, h > 0 else { return nil }
 
         let exifD = props[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
@@ -106,7 +127,7 @@ public enum FrameImporter {
             f.timeZone = TimeZone(secondsFromGMT: 0)
             f.dateFormat = "yyyy:MM:dd HH:mm:ss"
             if let d = f.date(from: dto) {
-                t = d.timeIntervalSinceReferenceDate
+                t = d.timeIntervalSince1970
                 if let sub = (exifD[kCGImagePropertyExifSubsecTimeOriginal] as? String) ?? (exifD[kCGImagePropertyExifSubsecTime] as? String) {
                     let digits = sub.trimmingCharacters(in: .whitespaces)
                     if let v = Double("0." + digits) { t! += v }
@@ -115,24 +136,44 @@ public enum FrameImporter {
         }
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
-        let mod = (attrs?[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate ?? 0
+        let mod = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
         return SourceFrame(id: id, url: url, pixelWidth: w, pixelHeight: h, captureTime: t,
-                           fileSize: size, modified: mod, exif: exif)
+                           fileSize: size, modified: mod, exif: exif, orientation: orientation, raw: raw)
     }
 
     /// Read metadata for all files (in parallel), sort by capture time then file name.
-    public static func importFrames(_ urls: [URL]) -> [SourceFrame] {
-        let files = collectImageURLs(urls)
+    public static func importFrames(_ urls: [URL], rawMode: RawMode = .camera, pairPolicy: RawPairPolicy = .jpeg) -> [SourceFrame] {
+        importFiles(collectImageURLs(urls), rawMode: rawMode, pairPolicy: pairPolicy)
+    }
+
+    public static func importFiles(_ urls: [URL], rawMode: RawMode, pairPolicy: RawPairPolicy) -> [SourceFrame] {
+        var seen = Set<URL>()
+        let files = urls.map(\.standardizedFileURL).filter { seen.insert($0).inserted }
         var frames = [SourceFrame?](repeating: nil, count: files.count)
         let lock = NSLock()
         DispatchQueue.concurrentPerform(iterations: files.count) { i in
-            let f = readFrame(url: files[i], id: i)
+            let f = autoreleasepool { readFrame(url: files[i], id: i, rawMode: rawMode) }
             lock.lock(); frames[i] = f; lock.unlock()
         }
         var list = frames.compactMap { $0 }
+        if pairPolicy != .both {
+            let preferRaw = pairPolicy == .raw
+            func key(_ frame: SourceFrame) -> String {
+                frame.url.deletingLastPathComponent().appendingPathComponent(frame.url.deletingPathExtension().lastPathComponent.lowercased()).path
+            }
+            let preferred = Dictionary(grouping: list.filter { preferRaw ? $0.raw != nil : ["jpg", "jpeg"].contains($0.url.pathExtension.lowercased()) }, by: key)
+            list.removeAll { frame in
+                let isAlternative = preferRaw ? ["jpg", "jpeg"].contains(frame.url.pathExtension.lowercased()) : frame.raw != nil
+                return isAlternative && (preferred[key(frame)] ?? []).contains { other in
+                    guard let a = frame.captureTime, let b = other.captureTime else { return true }
+                    return abs(a - b) < 0.51
+                }
+            }
+        }
         list.sort { a, b in
-            if let ta = a.captureTime, let tb = b.captureTime, abs(ta - tb) > 1e-4 { return ta < tb }
-            return a.fileName.localizedStandardCompare(b.fileName) == .orderedAscending
+            if a.captureTime != b.captureTime { return (a.captureTime ?? .infinity) < (b.captureTime ?? .infinity) }
+            let order = a.fileName.localizedStandardCompare(b.fileName)
+            return order == .orderedSame ? a.url.path < b.url.path : order == .orderedAscending
         }
         for i in list.indices { list[i].id = i }
         return list

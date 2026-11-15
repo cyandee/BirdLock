@@ -147,7 +147,7 @@ public final class RenderJob: @unchecked Sendable {
         }
         let longSide = max(f.pixelWidth, f.pixelHeight)
         let maxPixel: Int? = scale < 0.999 ? Int((Double(longSide) * scale).rounded(.up)) : nil
-        guard let cg = ImageLoader.load(f.url, maxPixel: maxPixel) else { return nil }
+        guard let cg = ImageLoader.load(f, maxPixel: maxPixel) else { return nil }
         return (CIImage(cgImage: cg), Double(cg.width) / Double(f.pixelWidth))
     }
 

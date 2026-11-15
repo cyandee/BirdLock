@@ -18,7 +18,7 @@ public enum CustomTracking {
         var per:[FrameAnalysis]=[]
         for (i,f) in frames.enumerated() {
             if isCancelled() { throw CancellationError() }
-            guard let image=ImageLoader.load(f.url,maxPixel:2560) else { throw ModelError.badOutput("无法读取跟踪照片") }
+            guard let image=ImageLoader.load(f,maxPixel:2560) else { throw ModelError.badOutput("无法读取跟踪照片") }
             guard ImageLoader.writeJPEG(image,to:cache.proxyURL(fingerprint:fp,index:i),quality:0.95) else { throw ModelError.badOutput("无法保存跟踪预览") }
             var p=FrameAnalysis(index:i);p.bgLinear=Analyzer.backgroundStats(image,exclude:nil);per.append(p)
             progress(Double(i+1)/Double(max(1,frames.count)))

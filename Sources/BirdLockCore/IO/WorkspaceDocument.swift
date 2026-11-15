@@ -21,7 +21,22 @@ public struct ProjectSegment: Codable, Sendable {
     public var start: Int
     public var count: Int
     public var fps: Double
-    public init(_ segment: BurstSegment) { start=segment.range.lowerBound;count=segment.range.count;fps=segment.fps }
+    public var groupID: String
+    public var name: String
+    public init(_ segment: BurstSegment) {
+        start = segment.range.lowerBound; count = segment.range.count; fps = segment.fps
+        groupID = segment.groupID; name = segment.name
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        start = try c.decode(Int.self, forKey: .start)
+        count = try c.decode(Int.self, forKey: .count)
+        fps = try c.decode(Double.self, forKey: .fps)
+        let id = try c.decodeIfPresent(String.self, forKey: .groupID) ?? ""
+        groupID = id.isEmpty ? "legacy-\(start)-\(count)" : id
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+    }
+    public var burst: BurstSegment { BurstSegment(range: start..<(start + count), fps: fps, groupID: groupID, name: name) }
 }
 public struct ProjectLocation: Codable, Sendable {
     public var path: String
@@ -92,7 +107,12 @@ public struct WorkspaceDocument: Codable, Sendable {
         let resolved=url.resolvingSymlinksInPath().standardizedFileURL.path
         let cache=cacheRoot.resolvingSymlinksInPath().standardizedFileURL.path+"/"
         guard !resolved.hasPrefix(cache) else { throw WorkspaceError.invalid("工程文件请保存在缓存文件夹之外。") }
-        var copy=self;copy.missingAssets=nil;var paths:[String:Bool]=[:]
+        var copy = self
+        copy.missingAssets = nil
+        // A restored document has a live track. Analysis observations and edits
+        // are sufficient to rebuild it, and a track can contain non-finite angles.
+        for i in copy.analyses.indices { copy.analyses[i].track = nil }
+        var paths: [String:Bool] = [:]
         let videoRoots=Set(videos.map(\.cacheDirectory))
         for frame in frames where !videoRoots.contains(frame.url.deletingLastPathComponent().path) { paths[frame.url.path]=true }
         for video in videos { paths[video.recipe.sourcePath]=true }
@@ -108,17 +128,18 @@ public struct WorkspaceDocument: Codable, Sendable {
         guard data.count <= Self.maxBytes else { throw WorkspaceError.invalid("工程过大，请拆分素材后保存。") }
         try data.write(to:url,options:.atomic)
     }
-    private static func wireURI(_ path: String) -> String {
-        if path.replacingOccurrences(of:"\\",with:"/").hasPrefix("//") { return "file:"+path.replacingOccurrences(of:"\\",with:"/").addingPercentEncoding(withAllowedCharacters:.urlPathAllowed)! }
-        if path.count>2, path[path.index(after:path.startIndex)]==":" {
-            return "file:///" + path.replacingOccurrences(of:"\\",with:"/").addingPercentEncoding(withAllowedCharacters:.urlPathAllowed)!
+    private static func replace(_ value: Any, mapping: [String:URL]) -> Any {
+        if let text = value as? String {
+            if let url = URL(string: text), url.isFileURL,
+               let file = mapping[comparable(mediaPath(url))] { return file.absoluteString }
+            return mapping[comparable(text)]?.path ?? text
         }
-        return URL(fileURLWithPath:path).absoluteString
-    }
-    private static func replace(_ value: Any, mapping: [String:String]) -> Any {
-        if let text=value as? String { return mapping[text] ?? text }
-        if let array=value as? [Any] { return array.map { replace($0,mapping:mapping) } }
-        if let object=value as? [String:Any] { return object.mapValues { replace($0,mapping:mapping) } }
+        if let array = value as? [Any] { return array.map { replace($0, mapping: mapping) } }
+        if let object = value as? [String:Any] {
+            return Dictionary(uniqueKeysWithValues: object.map { key, value in
+                (key, ["groupID", "name", "raw"].contains(key) ? value : replace(value, mapping: mapping))
+            })
+        }
         return value
     }
     public static func read(from url: URL, relocation: URL? = nil) throws -> WorkspaceDocument {
@@ -127,7 +148,7 @@ public struct WorkspaceDocument: Codable, Sendable {
         guard let raw=try JSONSerialization.jsonObject(with:data) as? [String:Any],raw["format"] as? String == "BirdLockProject",raw["schema"] as? Int == 1 else {
             throw WorkspaceError.invalid("不支持的工程格式或版本。")
         }
-        let locations=raw["locations"] as? [[String:Any]] ?? [];var missing:[String]=[],optionalMissing:[String]=[],mapping:[String:String]=[:]
+        let locations=raw["locations"] as? [[String:Any]] ?? [];var missing:[String]=[],optionalMissing:[String]=[],mapping:[String:URL]=[:]
         for location in locations {
             guard let old=location["path"] as? String,let savedRelative=location["relative"] as? String else { throw WorkspaceError.invalid("工程素材引用无效。") }
             let relative=savedRelative.replacingOccurrences(of:"\\",with:"/")
@@ -140,7 +161,7 @@ public struct WorkspaceDocument: Codable, Sendable {
                 guard let size=try? file.resourceValues(forKeys:[.fileSizeKey,.isRegularFileKey]),size.isRegularFile==true else { return false }
                 return expected == nil || size.fileSize==expected
             }) {
-                mapping[old]=file.standardizedFileURL.path;mapping[wireURI(old)]=file.standardizedFileURL.absoluteString
+                mapping[comparable(old)] = file.standardizedFileURL
             } else if location["required"] as? Bool != false { missing.append(old) } else { optionalMissing.append(old) }
         }
         if !missing.isEmpty { throw WorkspaceError.missing(missing) }
@@ -151,14 +172,28 @@ public struct WorkspaceDocument: Codable, Sendable {
     }
     public func validate() throws {
         guard !frames.isEmpty,frames.count<=100000,!analyses.isEmpty else { throw WorkspaceError.invalid("工程缺少有效画面或识别记录。") }
+        var groupIDs = Set<String>()
         for segment in segments {
-            guard segment.start>=0,segment.count>0,segment.start+segment.count<=frames.count,segment.fps>0,segment.fps<=1000 else { throw WorkspaceError.invalid("工程分组范围无效。") }
+            guard segment.start >= 0, segment.start < frames.count, segment.count > 0,
+                  segment.count <= frames.count - segment.start, segment.fps > 0, segment.fps <= 1000 else {
+                throw WorkspaceError.invalid("工程分组范围无效。")
+            }
+            guard segment.groupID.unicodeScalars.count <= 96, groupIDs.insert(segment.groupID).inserted,
+                  segment.name.unicodeScalars.count <= 256 else { throw WorkspaceError.invalid("工程分组名称或标识无效。") }
+        }
+        let master = Dictionary(frames.map { ($0.url, $0) }, uniquingKeysWith: { first, _ in first })
+        for frame in frames {
+            guard frame.pixelWidth > 0, frame.pixelHeight > 0,
+                  frame.raw == nil || (frame.raw!.fullWidth >= 0 && frame.raw!.fullHeight >= 0)
+            else { throw WorkspaceError.invalid("工程画面尺寸无效。") }
         }
         for a in analyses {
             guard (a.eyeSelections ?? []).allSatisfy({ a.frames.indices.contains($0.frame) && ["left_eye","right_eye"].contains($0.side) }),
                   (a.customSeeds ?? []).allSatisfy({ CustomTracking.valid($0,frames:a.frames) }) else { throw WorkspaceError.invalid("工程跟踪参考记录无效。") }
-            let master=Set(frames.map(\.url))
-            guard a.frames.allSatisfy({ master.contains($0.url) }) else { throw WorkspaceError.invalid("工程识别记录引用了其他素材。") }
+            guard a.frames.allSatisfy({ f in
+                guard let original = master[f.url] else { return false }
+                return original.raw == f.raw && original.pixelWidth == f.pixelWidth && original.pixelHeight == f.pixelHeight
+            }) else { throw WorkspaceError.invalid("工程识别记录引用了其他素材。") }
             for (index,frame) in a.perFrame.enumerated() {
                 guard frame.index==index,frame.head.points.count==6,frame.head.conf.count==6,
                       frame.target == nil || (frame.target!>=0 && frame.target!<frame.birds.count) else { throw WorkspaceError.invalid("工程主体或头部记录无效。") }
@@ -207,6 +242,12 @@ public struct WorkspaceDocument: Codable, Sendable {
             var frame=frame;frame.url=new.url;frame.fileSize=new.fileSize;frame.modified=new.modified;return frame
         }
         document.frames=frames.map(mapped)
+        for frame in document.frames where frame.raw != nil {
+            if isCancelled() { throw CancellationError() }
+            guard autoreleasepool(invoking: { ImageLoader.load(frame, maxPixel: 128) != nil }) else {
+                throw WorkspaceError.invalid("无法使用工程中保存的 RAW 渲染来源：\(frame.fileName)。请在支持此来源的系统打开，或从原片重新导入。")
+            }
+        }
         guard document.frames.allSatisfy({ FileManager.default.fileExists(atPath:$0.url.path) }) else { throw WorkspaceError.invalid("工程素材无法读取，请重新定位原片。") }
         for i in document.analyses.indices {
             document.analyses[i].frames=analyses[i].frames.map(mapped)

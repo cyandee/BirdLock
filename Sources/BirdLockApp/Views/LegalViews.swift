@@ -155,7 +155,6 @@ enum LegalWindow {
                                       : AppDocs.text(AppDocs.notices) + "\n\n" + AppDocs.text(AppDocs.license)
         let view = ScrollView { MarkdownDocView(text: text).padding(24) }
             .frame(minWidth: 560, minHeight: 480)
-            .preferredColorScheme(.dark)
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 640), styleMask: [.titled, .closable, .resizable, .miniaturizable],
                          backing: .buffered, defer: false)
         w.title = kind == .agreement ? "用户协议" : "许可与第三方组件"

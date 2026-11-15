@@ -72,7 +72,7 @@ public final class AircraftAnalyzer: @unchecked Sendable {
                     let photo = frames[i], url = cache.proxyURL(fingerprint: fingerprint,index: i)
                     var image = read(i)
                     if image == nil {
-                        image = ImageLoader.load(photo.url,maxPixel: proxyLongSide)
+                        image = ImageLoader.load(photo,maxPixel: proxyLongSide)
                         if let image, !ImageLoader.writeJPEG(image,to: url,quality: 0.9) {
                             throw ModelError.badOutput("无法保存分析预览，请检查剩余空间")
                         }

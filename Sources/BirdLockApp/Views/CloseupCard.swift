@@ -5,16 +5,22 @@ struct CloseupCard: View {
     @Environment(AppState.self) private var state
     var body: some View {
         InspectorCard(title: "关键帧特写", icon: "crop") {
-            if state.segments.count > 1 {
-                Text("片段播放顺序").font(.callout.bold())
-                ForEach(Array(state.mergeGroupIndices.enumerated()), id: \.element) { position, group in
+            if !state.segments.isEmpty {
+                Text("连拍分组").font(.callout.bold())
+                let groups = state.mergeGroupIndices + state.segments.indices.filter { !state.mergeGroupIndices.contains($0) }
+                ForEach(groups, id: \.self) { group in
+                    let position = state.mergeGroupIndices.firstIndex(of: group)
                     HStack {
-                        Text("\(position + 1). 第 \(group + 1) 组")
+                        Text(state.groupName(group)).lineLimit(1)
                         Spacer()
+                        Button { state.renameGroup(group) } label: { Image(systemName: "pencil") }
+                            .disabled(state.phase != .ready).help("重命名连拍组")
+                        Button { state.revealOriginals(group: group) } label: { Image(systemName: "folder") }
+                            .help("在访达中选中组内原片")
                         Button { state.moveGroup(group, by: -1) } label: { Image(systemName: "arrow.up") }
-                            .disabled(position == 0 || state.phase != .ready).help("提前播放")
+                            .disabled(position == nil || position == 0 || state.phase != .ready).help("提前播放")
                         Button { state.moveGroup(group, by: 1) } label: { Image(systemName: "arrow.down") }
-                            .disabled(position == state.mergeGroupIndices.count - 1 || state.phase != .ready).help("延后播放")
+                            .disabled(position == nil || position == state.mergeGroupIndices.count - 1 || state.phase != .ready).help("延后播放")
                     }.controlSize(.small)
                 }
                 Text("在合并模式下按此顺序成片；也可先排好顺序再合并。").font(.caption).foregroundStyle(.secondary)

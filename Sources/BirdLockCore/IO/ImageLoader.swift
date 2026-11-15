@@ -4,6 +4,11 @@ import CoreGraphics
 import UniformTypeIdentifiers
 
 public enum ImageLoader {
+    public static func load(_ frame: SourceFrame, maxPixel: Int? = nil) -> CGImage? {
+        if frame.raw != nil { return RawPhoto.load(frame, maxPixel: maxPixel) }
+        return load(frame.url, maxPixel: maxPixel)
+    }
+
     /// Decode an image with EXIF orientation applied. If maxPixel is given, ImageIO decodes at reduced
     /// size (fast DCT-domain downscale for JPEG).
     public static func load(_ url: URL, maxPixel: Int? = nil) -> CGImage? {

@@ -6,9 +6,11 @@ import ImageIO
 import UniformTypeIdentifiers
 
 public enum ExportError: Error, LocalizedError {
+    case rawPreviewLimit
     case noFrames, writer(String), cancelled
     public var errorDescription: String? {
         switch self {
+        case .rawPreviewLimit: return "所选画面包含较小的 RAW 机内预览。请关闭完整分辨率渲染，或重新导入并选择高分辨率 RAW。"
         case .noFrames: return "没有可导出的帧"
         case .writer(let s): return "视频写入失败：\(s)"
         case .cancelled: return "已取消"
@@ -98,6 +100,7 @@ public final class VideoExporter {
     public func export(job: RenderJob, to url: URL, audio: AudioSettings? = nil, progress: @escaping (Double) -> Void,
                        isCancelled: @escaping () -> Bool) throws {
         warning = nil
+        try checkRawQuality(job)
         let audio = job.mixedAudio(audio)
         guard audio.isActive else {
             try exportVideo(job: job, to: url, progress: progress, isCancelled: isCancelled)
@@ -268,6 +271,7 @@ public final class VideoExporter {
     /// Export aligned frames as an image sequence (PNG / JPEG / HEIC) – one per used source frame.
     public func exportImages(job: RenderJob, to dir: URL, type: UTType, progress: @escaping (Double) -> Void,
                              isCancelled: @escaping () -> Bool) throws {
+        try checkRawQuality(job)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let pre = SourcePrefetcher(job: job, proxy: !job.export.useFullResolution, scale: job.exportDecodeScale)
         let used = job.used
@@ -286,6 +290,12 @@ public final class VideoExporter {
             }
             pre.evict(keeping: Set(used[k..<min(used.count, k + 6)]))
             progress(Double(k + 1) / Double(used.count))
+        }
+    }
+
+    private func checkRawQuality(_ job: RenderJob) throws {
+        if job.export.useFullResolution && job.used.contains(where: { job.analysis.frames[$0].hasRawPreviewLimit }) {
+            throw ExportError.rawPreviewLimit
         }
     }
 

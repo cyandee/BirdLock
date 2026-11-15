@@ -171,7 +171,7 @@ public enum VideoStabilization {
         for (i, frame) in frames.enumerated() {
             if isCancelled() { throw CancellationError() }
             try autoreleasepool {
-                guard let image = ImageLoader.load(frame.url, maxPixel: 960) else { throw VideoImportError.invalid("无法读取视频帧进行防抖分析") }
+                guard let image = ImageLoader.load(frame, maxPixel: 960) else { throw VideoImportError.invalid("无法读取视频帧进行防抖分析") }
                 if let previous {
                     let (matrix, quality) = imagePair(previous: previous, current: image), s = Double(image.width) / Double(w)
                     steps.append([matrix.v[2] / s, matrix.v[5] / s, atan2(matrix.v[3], matrix.v[0]), log(hypot(matrix.v[0], matrix.v[3])), quality])

@@ -43,6 +43,7 @@ private struct AudioTrackEditor: View {
             if track.assetID != nil {
                 CameraSoundPicker(assetID: Binding(get: { track.assetID ?? "" }, set: { track.assetID = $0 }))
             }
+            Toggle("启用音轨", isOn: $track.enabled)
             Toggle("静音", isOn: $track.muted)
             if !track.videoOriginal { Toggle("循环播放", isOn: $track.loop) }
             LabeledSlider(title: "音量", value: $track.volume, range: 0...1.5, format: { String(format: "%.0f%%", $0 * 100) })

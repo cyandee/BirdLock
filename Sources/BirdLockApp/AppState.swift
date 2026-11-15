@@ -14,6 +14,16 @@ enum Phase: Equatable {
     case failed(String)
 }
 
+enum AppAppearance: String, CaseIterable {
+    case system, light, dark
+    var title: String {
+        switch self { case .system: "跟随系统"; case .light: "浅色"; case .dark: "深色" }
+    }
+    var native: NSAppearance? {
+        switch self { case .system: nil; case .light: NSAppearance(named: .aqua); case .dark: NSAppearance(named: .darkAqua) }
+    }
+}
+
 enum ViewMode: String, CaseIterable, Identifiable {
     case output, source
     var id: String { rawValue }
@@ -64,6 +74,14 @@ final class AppState {
     var analysisStarted = Date()
     var timelineMessage: String?
     var videoImportURL: URL?
+    var rawMode = RawMode.camera { didSet { defaults.set(rawMode.rawValue, forKey: "photos.rawMode") } }
+    var rawPairPolicy = RawPairPolicy.jpeg { didSet { defaults.set(rawPairPolicy.rawValue, forKey: "photos.rawPairPolicy") } }
+    var appearance = AppAppearance.dark {
+        didSet { defaults.set(appearance.rawValue, forKey: "appearance"); NSApp?.appearance = appearance.native }
+    }
+    private var editHistory = EditHistory()
+    var canUndoEdit: Bool { phase == .ready && !exportState.running && editHistory.canUndo }
+    var canRedoEdit: Bool { phase == .ready && !exportState.running && editHistory.canRedo }
     var importMessage = "正在读取照片…"
     private var jobGeneration = 0
 
@@ -136,6 +154,9 @@ final class AppState {
         self.defaults = defaults
         self.releaseNotice=ReleaseNotice(defaults:defaults,current:AppDocs.appVersion)
         loadSettings()
+        rawMode = defaults.string(forKey: "photos.rawMode").flatMap(RawMode.init(rawValue:)) ?? .camera
+        rawPairPolicy = defaults.string(forKey: "photos.rawPairPolicy").flatMap(RawPairPolicy.init(rawValue:)) ?? .jpeg
+        appearance = defaults.string(forKey: "appearance").flatMap(AppAppearance.init(rawValue:)) ?? .dark
         cacheLimitGB=defaults.object(forKey:"cache.limitGB") == nil ? 20 : max(0,min(4096,defaults.integer(forKey:"cache.limitGB")))
         askCleanupAfterExport=defaults.object(forKey:"cache.askAfterExport") == nil ? true : defaults.bool(forKey:"cache.askAfterExport")
     }
@@ -152,13 +173,18 @@ final class AppState {
         analysisTask?.cancel(); cancelFlag.cancel()
         importGeneration += 1
         let generation = importGeneration
+        let mode = rawMode, pairs = rawPairPolicy
+        editHistory.reset(to: nil)
+        eyeUndo = nil; pendingCustomBox = nil
         phase = .importing
         importMessage = "正在读取照片…"
         analysis = nil; job = nil; previewImage = nil; sourceImage = nil; sourceDetail = nil
         Task.detached(priority: .userInitiated) {
             let cacheOperation=CachePolicy.beginOperation(root:ProxyCache.shared.root)
             defer { CachePolicy.endOperation(cacheOperation);Task { @MainActor [weak self] in self?.trimCache() } }
-            let all = FrameImporter.importFrames(urls)
+            let candidates = FrameImporter.collectImageURLs(urls)
+            let all = FrameImporter.importFiles(candidates, rawMode: mode, pairPolicy: pairs)
+            let hasRaw = candidates.contains { FrameImporter.rawExtensions.contains($0.pathExtension.lowercased()) }
             let segs = FrameImporter.segments(all)
             await MainActor.run {
                 // a newer import started meanwhile
@@ -172,7 +198,11 @@ final class AppState {
                 let saved = self.defaults.array(forKey: "groupOrder." + Analyzer.fingerprint(all)) as? [Int] ?? []
                 self.mergeGroupIndices = !saved.isEmpty && Set(saved).count == saved.count && saved.allSatisfy(segs.indices.contains) ? saved : Array(segs.indices)
                 self.currentFrame = 0
-                guard !all.isEmpty else { self.phase = .failed("没有找到 JPG / HEIF 图片"); return }
+                guard !all.isEmpty else {
+                    self.phase = .failed(hasRaw ? "无法读取这些 RAW 文件。可尝试相机直出 JPEG 或转为 DNG。" : "没有找到可读取的照片。")
+                    return
+                }
+                self.timelineMessage = nil
                 self.audio.tracks.removeAll { $0.videoOriginal }
                 // choose the longest burst by default
                 self.segmentIndex = merge && segs.count > 1 ? -1 : (segs.indices.max { segs[$0].range.count < segs[$1].range.count } ?? 0)
@@ -295,9 +325,10 @@ final class AppState {
         }
     }
 
-    func rememberGroupOrder() {
+    func rememberGroupOrder(record: Bool = true) {
         guard !frames.isEmpty else { return }
         if !loading,analysis != nil { projectDirty=true;projectCloseApproved=false }
+        if record { recordEdit() }
         defaults.set(mergeGroupIndices, forKey: "groupOrder." + Analyzer.fingerprint(frames))
     }
 
@@ -309,7 +340,8 @@ final class AppState {
     }
 
     func startAnalysis(hint: (frame: Int, point: V2)? = nil, fresh: Bool = false) {
-        pendingCustomBox=nil;sourceTool = .none
+        editHistory.reset(to: nil)
+        eyeUndo = nil; pendingCustomBox=nil;sourceTool = .none
         analysisTask?.cancel(); cancelFlag.cancel()
         stop()
         let flag = CancelFlag(); cancelFlag = flag
@@ -417,10 +449,11 @@ final class AppState {
         analysis = a
         projectDirty=true;projectCloseApproved=false
         subjectRollback = nil
-        phase = .ready
         if a.analysisSubject == .custom && (a.customSeeds ?? []).isEmpty { viewMode = .source;sourceZoom=1;sourceTool = .customBox }
         selection.trimEnd = nil
         selection.trimStart = 0
+        phase = .ready
+        resetEdits()
         rebuildJob(immediate: true)
         trimCache()
     }
@@ -436,6 +469,54 @@ final class AppState {
         } else {
             phase = .ready
         }
+    }
+
+    private func editSnapshot() -> EditHistory.Snapshot? {
+        analysis.map { EditHistory.Snapshot(analysis: $0, profile: currentProfile, audio: audio,
+                                           watermark: watermark, segments: segments, order: mergeGroupIndices) }
+    }
+
+    private func resetEdits() { editHistory.reset(to: editSnapshot()) }
+
+    func endEditGesture() { editHistory.endGesture() }
+
+    func recordEdit() {
+        guard !loading, phase == .ready, !exportState.running, let snapshot = editSnapshot() else { return }
+        editHistory.record(snapshot)
+    }
+
+    func undoEdit() {
+        guard canUndoEdit, let snapshot = editHistory.undo() else { return }
+        restoreEdit(snapshot)
+    }
+
+    func redoEdit() {
+        guard canRedoEdit, let snapshot = editHistory.redo() else { return }
+        restoreEdit(snapshot)
+    }
+
+    func resetTrimForGroupReorder() {
+        loading = true
+        selection.trimStart = 0; selection.trimEnd = nil
+        loading = false
+        scheduleSettingsSave()
+    }
+
+    private func restoreEdit(_ snapshot: EditHistory.Snapshot) {
+        stop()
+        let photo = analysis.flatMap { $0.frames.indices.contains(currentFrame) ? $0.frames[currentFrame].url : nil }
+        loading = true
+        analysis = snapshot.analysis
+        segments = snapshot.segments; mergeGroupIndices = snapshot.order
+        applyProfile(snapshot.profile, resetTrim: false)
+        audio = snapshot.audio; watermark = snapshot.watermark
+        currentFrame = snapshot.analysis.frames.firstIndex(where: { $0.url == photo }) ?? 0
+        sourceTool = .none; eyeUndo = nil; pendingCustomBox = nil; sourceDetail = nil; timelineMessage = nil
+        loading = false
+        rememberGroupOrder(record: false)
+        scheduleSettingsSave()
+        scheduleSave(record: false)
+        rebuildJob(immediate: true)
     }
 
     // MARK: - Settings -> RenderJob
@@ -480,12 +561,14 @@ final class AppState {
         analysis = old.analysis;currentFrame = old.frame;viewMode = old.view;sourceZoom = old.zoom
         if let profile = subjectProfiles[subject.rawValue] { applyProfile(profile,resetTrim: false) }
         sourceTool = .none;sourceDetail = nil;phase = .ready
+        resetEdits()
         scheduleSettingsSave();rebuildJob(immediate: true)
     }
 
     private func settingsChanged() {
         guard !loading else { return }
         if analysis != nil { projectDirty=true;projectCloseApproved=false }
+        recordEdit()
         scheduleSettingsSave()
         rebuildJob(immediate: false)
     }
@@ -661,7 +744,8 @@ final class AppState {
         startAnalysis(hint: (currentFrame, p))
     }
 
-    func scheduleSave() {
+    func scheduleSave(record: Bool = true) {
+        if record { recordEdit() }
         if !loading,analysis != nil { projectDirty=true;projectCloseApproved=false }
         saveWork?.cancel()
         guard let a = analysis else { return }
@@ -750,6 +834,23 @@ final class AppState {
     func endCropEdit() { cropEdit = nil }
 
     // MARK: - Preview & playback
+
+    var rawQualityNotice: String? {
+        guard let analysis else { return nil }
+        var limited = 0, fallbacks = 0
+        var first: SourceFrame?
+        for frame in analysis.frames {
+            guard let raw = frame.raw else { continue }
+            if frame.hasRawPreviewLimit { limited += 1; if first == nil { first = frame } }
+            if (raw.mode == .camera) != (raw.source == .embedded) { fallbacks += 1 }
+        }
+        var notices: [String] = []
+        if fallbacks > 0 { notices.append("\(fallbacks) 张 RAW 已改用可用的渲染来源。") }
+        if let first {
+            notices.append("\(limited) 张 RAW 使用较小或完整尺寸未知的机内预览（首张 \(first.pixelWidth)×\(first.pixelHeight)）。")
+        }
+        return notices.isEmpty ? nil : notices.joined(separator: " ")
+    }
 
     var outputFrameCount: Int { job?.outputFrames.count ?? 0 }
 
@@ -868,12 +969,16 @@ final class AppState {
 
     func setAudio(_ url: URL) {
         var a = audio
-        a.url = url
+        a.url = url; a.assetID = nil; a.enabled = true
         a.startOffset = 0
         audio = a
     }
 
-    func removeAudio() { audio.url = nil }
+    func removeAudio() {
+        var updated = audio
+        updated.url = nil; updated.assetID = nil
+        audio = updated
+    }
 
     func addAudioTracks() {
         let p = NSOpenPanel()
@@ -881,9 +986,9 @@ final class AppState {
         p.allowsMultipleSelection = true
         p.message = "添加独立音轨，可与背景音乐和快门声同时播放"
         if p.runModal() == .OK {
-            for url in p.urls {
+            audio.tracks += p.urls.map { url in
                 var track = AudioTrack(); track.url = url
-                audio.tracks.append(track)
+                return track
             }
         }
     }
@@ -897,6 +1002,7 @@ final class AppState {
     private func audioChanged(from old: AudioSettings) {
         guard old != audio else { return }
         if !loading,analysis != nil { projectDirty=true;projectCloseApproved=false }
+        recordEdit()
         if let d = try? JSONEncoder().encode(audio) { defaults.set(d, forKey: "audio.v1") }
         if old.url != audio.url { loadAudioOverview() }
         rebuildAudioPlayer()
@@ -1024,7 +1130,7 @@ final class AppState {
         // a fresh job with the latest settings plus the watermark (the preview job draws it separately)
         let job = RenderJob(analysis: a, composition: composition, look: look, export: exportSettings,
                             selection: selection, watermark: watermark)
-        let music: AudioSettings? = kind == .video && audio.isActive ? audio : nil
+        let music: AudioSettings? = kind == .video ? audio : nil
         exportState = ExportState(running: true, progress: 0, message: "正在导出…", outputURL: url)
         let flag = CancelFlag(); exportCancel = flag
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -1210,7 +1316,7 @@ extension AppState {
                 await MainActor.run {
                     guard let self,generation==self.importGeneration,!flag.isCancelled else { return }
                     self.loading=true;self.jobGeneration+=1;self.rebuildWork?.cancel();self.saveWork?.cancel()
-                    self.job=nil;self.frames=restored.frames;ProxyCache.shared.retainRecords(frames:restored.frames);self.segments=restored.segments.map { BurstSegment(range:$0.start..<($0.start+$0.count),fps:$0.fps) }
+                    self.job=nil;self.frames=restored.frames;ProxyCache.shared.retainRecords(frames:restored.frames);self.segments=restored.segments.map(\.burst)
                     self.segmentIndex=restored.segmentIndex;self.mergeGroupIndices=restored.mergeGroups
                     self.analysis=restored.analyses[0];self.subject=restored.subject;self.subjectProfiles=restored.profiles
                     self.applyProfile(restored.profile,resetTrim:false);self.audio=restored.audio;self.watermark=restored.watermark
@@ -1219,6 +1325,7 @@ extension AppState {
                     self.previewImage=nil;self.sourceImage=nil;self.sourceDetail=nil;self.engine.clear()
                     self.phase = .ready;self.projectURL=url;self.projectDirty=false;self.projectCloseApproved=false
                     self.timelineMessage="工程已恢复，可继续编辑。"+((restored.missingAssets ?? []).isEmpty ? "" : "部分音频或水印素材缺失，请重新选择。");self.loading=false
+                    self.eyeUndo=nil;self.pendingCustomBox=nil;self.resetEdits()
                     self.scheduleSettingsSave();self.rebuildJob(immediate:true);self.trimCache()
                 }
             } catch {
@@ -1234,7 +1341,7 @@ extension AppState {
         loading=true
         frames=[];segments=[];mergeGroupIndices=[];analysis=nil;job=nil;previewImage=nil;sourceImage=nil;sourceDetail=nil
         audio.tracks.removeAll { $0.videoOriginal };engine.clear();phase = .empty;projectURL=nil;projectDirty=false;subjectRollback=nil
-        loading=false;ProxyCache.shared.retainRecords(frames:[]);CachePolicy.protect(owner:cacheOwner,roots:[])
+        loading=false;resetEdits();ProxyCache.shared.retainRecords(frames:[]);CachePolicy.protect(owner:cacheOwner,roots:[])
     }
     var protectedCache: Set<String> {
         var roots=Set(frames.map { $0.url.deletingLastPathComponent().path })

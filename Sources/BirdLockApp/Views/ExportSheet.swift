@@ -47,6 +47,10 @@ struct ExportSheet: View {
                 .font(.callout)
                 Toggle("以完整分辨率渲染（推荐，较慢）", isOn: $state.exportSettings.useFullResolution)
                     .disabled(state.exportState.running)
+                if let job = state.job, job.used.contains(where: { job.analysis.frames[$0].hasRawPreviewLimit }) {
+                    Text("所选画面含较小的 RAW 机内预览。关闭完整分辨率渲染可继续导出。")
+                        .font(.caption).foregroundStyle(Theme.warn)
+                }
             }
 
             if state.exportState.running || state.exportState.progress > 0 || !state.exportState.message.isEmpty {

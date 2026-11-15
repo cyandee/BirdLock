@@ -88,7 +88,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
       <key>CFBundleTypeName</key><string>照片</string>
       <key>CFBundleTypeRole</key><string>Viewer</string>
       <key>LSHandlerRank</key><string>Alternate</string>
-      <key>LSItemContentTypes</key><array><string>public.jpeg</string><string>public.heic</string><string>public.heif</string><string>public.png</string><string>public.tiff</string></array>
+      <key>LSItemContentTypes</key><array><string>public.jpeg</string><string>public.heic</string><string>public.heif</string><string>public.png</string><string>public.tiff</string><string>public.camera-raw-image</string></array>
     </dict>
   </array>
 </dict>
