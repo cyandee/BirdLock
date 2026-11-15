@@ -13,7 +13,7 @@
 | 已完成 | Mac：单独拖入音频的误报、跟踪参考 patch 重复重采样、EXIF 时间解析共享格式化器、音效库重复读盘、工程重定位对 Windows 路径不匹配、若干未使用符号与未使用参数、音频时长非有限时的崩溃路径、视频轨道缺失的强制解包。工具：`md2html` 转换 Markdown 链接（含单测）。文档：README 更新段、交接、测试矩阵、Windows 使用说明的机头设备表述、版本标注、Windows 许可页音频章节。资源：镜头清单 Fujifilm 品牌拼写 |
 | 已知限制 | Windows 代码（`windows/birdlock/`、`windows/updater/`、CI）只做只读审计，未在本机执行 Windows 单测或实机验证；`swift test` 未运行（本机离线无法解析 Sparkle 与 onnxruntime 依赖） |
 | 剩余验证 | 在 Mac 与 Windows 上分别跑完整 `swift test`、`windows/tests` 与成品自检；跨平台工程互开（Windows 保存、Mac 重新定位）需实机确认；打包后文档链接可用性需检查 |
-| 下一步 | 推送分支并提交 PR 供维护者审核。Windows 端按审查清单处理 `windows/` 下的问题（源码运行时更新配置路径、打包脚本版本、更新器缓存清理等） |
+| 下一步 | 分支已推送，PR #7 待维护者审核。本分支未改的问题已逐条登记为上游 issue #8–#66（带 [高]/[中]/[低] 重要性前缀），由对应端的负责人按 issue 处理 |
 
 此前任务：多更新源（`codex/update-sources`）已随 PR #5 于 `96e047d` 合入 `main`，其剩余实机验收仍见[测试矩阵](TEST_MATRIX.md)。
 
