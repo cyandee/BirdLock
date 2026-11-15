@@ -115,10 +115,25 @@ public struct WorkspaceDocument: Codable, Sendable {
         }
         return URL(fileURLWithPath:path).absoluteString
     }
-    private static func replace(_ value: Any, mapping: [String:String]) -> Any {
-        if let text=value as? String { return mapping[text] ?? text }
-        if let array=value as? [Any] { return array.map { replace($0,mapping:mapping) } }
-        if let object=value as? [String:Any] { return object.mapValues { replace($0,mapping:mapping) } }
+    /// Comparison key for asset references: decodes percent escapes and drops the
+    /// `file:` scheme and the leading slash, so a path (`C:\a\b.jpg`, `/a/b.jpg`)
+    /// and the same asset written as a URL (`file:///C:/a/b.jpg`) compare equal.
+    /// Windows projects written by the Python side use the URL form, macOS projects
+    /// this side; without this a relocated Windows project never matches its frames.
+    private static func canonicalKey(_ text: String) -> String {
+        var t = (text.removingPercentEncoding ?? text).replacingOccurrences(of: "\\", with: "/")
+        for prefix in ["file:///", "file://"] where t.hasPrefix(prefix) { t = String(t.dropFirst(prefix.count)); break }
+        while t.hasPrefix("/") { t.removeFirst() }
+        return t
+    }
+    private static func replace(_ value: Any, mapping: [String:String], canonical: [String:(path:String,url:String)]) -> Any {
+        if let text=value as? String {
+            if let hit=mapping[text] { return hit }
+            if let hit=canonical[canonicalKey(text)] { return text.hasPrefix("file:") ? hit.url : hit.path }
+            return text
+        }
+        if let array=value as? [Any] { return array.map { replace($0,mapping:mapping,canonical:canonical) } }
+        if let object=value as? [String:Any] { return object.mapValues { replace($0,mapping:mapping,canonical:canonical) } }
         return value
     }
     public static func read(from url: URL, relocation: URL? = nil) throws -> WorkspaceDocument {
@@ -127,7 +142,8 @@ public struct WorkspaceDocument: Codable, Sendable {
         guard let raw=try JSONSerialization.jsonObject(with:data) as? [String:Any],raw["format"] as? String == "BirdLockProject",raw["schema"] as? Int == 1 else {
             throw WorkspaceError.invalid("不支持的工程格式或版本。")
         }
-        let locations=raw["locations"] as? [[String:Any]] ?? [];var missing:[String]=[],optionalMissing:[String]=[],mapping:[String:String]=[:]
+        let locations=raw["locations"] as? [[String:Any]] ?? [];var missing:[String]=[],optionalMissing:[String]=[]
+        var mapping:[String:String]=[:],canonical:[String:(path:String,url:String)]=[:]
         for location in locations {
             guard let old=location["path"] as? String,let savedRelative=location["relative"] as? String else { throw WorkspaceError.invalid("工程素材引用无效。") }
             let relative=savedRelative.replacingOccurrences(of:"\\",with:"/")
@@ -140,11 +156,12 @@ public struct WorkspaceDocument: Codable, Sendable {
                 guard let size=try? file.resourceValues(forKeys:[.fileSizeKey,.isRegularFileKey]),size.isRegularFile==true else { return false }
                 return expected == nil || size.fileSize==expected
             }) {
-                mapping[old]=file.standardizedFileURL.path;mapping[wireURI(old)]=file.standardizedFileURL.absoluteString
+                let path=file.standardizedFileURL.path,link=file.standardizedFileURL.absoluteString
+                mapping[old]=path;mapping[wireURI(old)]=link;canonical[canonicalKey(old)]=(path:path,url:link)
             } else if location["required"] as? Bool != false { missing.append(old) } else { optionalMissing.append(old) }
         }
         if !missing.isEmpty { throw WorkspaceError.missing(missing) }
-        let translated=try JSONSerialization.data(withJSONObject:replace(raw,mapping:mapping))
+        let translated=try JSONSerialization.data(withJSONObject:replace(raw,mapping:mapping,canonical:canonical))
         var document=try JSONDecoder().decode(WorkspaceDocument.self,from:translated)
         document.missingAssets=optionalMissing
         try document.validate();return document
