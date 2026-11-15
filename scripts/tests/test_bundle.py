@@ -76,5 +76,15 @@ class BundleTests(unittest.TestCase):
             info.update(SUFeedURL='https://example.test/mac.xml',SUPublicEDKey=base64.b64encode(bytes(32)).decode())
             with self.assertRaisesRegex(ValueError,'签名'):verify_updater(app,'1.5.0',info)
             info.update(SURequireSignedFeed=True,SUVerifyUpdateBeforeExtraction=True);verify_updater(app,'1.5.0',info)
+            info.update(BirdLockUpdateSources=[{'id':'github','name':'GitHub'},{'name':'m','url':'https://mirror.test/u/'}],BirdLockReleaseDownloadPrefix='https://github.com/o/r/releases/download/')
+            verify_updater(app,'1.5.0',info)
+            info['BirdLockUpdateSources'][1]['url']='http://mirror.test/u/'
+            with self.assertRaisesRegex(ValueError,'更新源'):verify_updater(app,'1.5.0',info)
+            info['BirdLockUpdateSources'][1]['url']='https://mirror.test/u/';prefix=info.pop('BirdLockReleaseDownloadPrefix')
+            with self.assertRaisesRegex(ValueError,'下载前缀'):verify_updater(app,'1.5.0',info)
+            info['BirdLockReleaseDownloadPrefix']=prefix
+            info['BirdLockUpdateSources'].pop();info['BirdLockReleaseDownloadPrefix']='https://u:p@github.com/'
+            with self.assertRaisesRegex(ValueError,'更新源'):verify_updater(app,'1.5.0',info)
+            info.pop('BirdLockReleaseDownloadPrefix');verify_updater(app,'1.5.0',info)
             info['CFBundleVersion']='999'
             with self.assertRaisesRegex(ValueError,'版本号'):verify_updater(app,'1.5.0',info)

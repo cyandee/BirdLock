@@ -17,7 +17,9 @@ public class Package : FileSpec { public string url; public string prefix = ""; 
 public class Manifest { public int schema; public string version; public string channel; public string notes; public Dictionary<string,FileSpec> files; public Package full; public Package delta; }
 public class Envelope { public string payload; public string signature; }
 public class WindowsConfig { public string feed_url; public string stable_feed_url; public string rsa_modulus; public string rsa_exponent; }
-public class Config { public WindowsConfig windows; }
+// "github" uses the configured feeds and the signed URLs; any other source is an HTTPS base URL with the shared layout.
+public class Source { public string id; public string name; public string url; }
+public class Config { public WindowsConfig windows; public Source[] sources; public string release_download_prefix; }
 public sealed class HttpReply : IDisposable {
     public int status; public string finalUrl; public string range; public Stream body; public Action close;
     public void Dispose(){if(body!=null)body.Dispose();if(close!=null)close();}
@@ -78,6 +80,56 @@ public static class Engine {
         if(!System.Text.RegularExpressions.Regex.IsMatch(value??"", @"^\d+\.\d+\.\d+$")) throw new Exception("版本号无效");
         return new Version(value);
     }
+    // Sources only relay bytes: the feed signature and package hashes are checked the same way for every host.
+    public static string SourceBase(string value) {
+        var u=Https((value??"").Trim());
+        if(!String.IsNullOrEmpty(u.Query)) throw new Exception("更新源地址不能带查询参数");
+        return u.AbsoluteUri.EndsWith("/") ? u.AbsoluteUri : u.AbsoluteUri+"/";
+    }
+    public static List<Source> Sources(Config config,IList<string> requested) {
+        var items=new List<Source>();
+        if(requested!=null && requested.Count>0) foreach(var r in requested) items.Add(r=="github" ? new Source{id="github"} : new Source{url=r});
+        else if(config.sources!=null) items.AddRange(config.sources.Where(s=>s!=null).Select(s=>new Source{id=s.id,name=s.name,url=s.url}));
+        if(items.Count==0) items.Add(new Source{id="github"});
+        if(items.Count>10) throw new Exception("更新源过多");
+        var result=new List<Source>();
+        // A mistyped custom source must not take the remaining sources down with it.
+        foreach(var s in items) {
+            if(s.id=="github") { s.url=null;s.name=String.IsNullOrEmpty(s.name)?"GitHub":s.name; }
+            else { s.id=null;try{s.url=SourceBase(s.url);}catch{continue;}if(String.IsNullOrEmpty(s.name))s.name=new Uri(s.url).Host; }
+            if(!result.Any(o=>o.id==s.id && o.url==s.url)) result.Add(s);
+        }
+        if(result.Count==0) result.Add(new Source{id="github",name="GitHub"});
+        return result;
+    }
+    public static string FeedUrl(Source s,WindowsConfig config,bool beta) {
+        if(s.id=="github") return !beta && !String.IsNullOrEmpty(config.stable_feed_url) ? config.stable_feed_url : config.feed_url;
+        return s.url+(beta?"windows.json":"windows-stable.json");
+    }
+    public static string AssetUrl(Source s,string canonical,string prefix) {
+        if(s.id=="github") return canonical;
+        if(String.IsNullOrEmpty(prefix) || canonical==null || !canonical.StartsWith(prefix,StringComparison.Ordinal)) return null;
+        return s.url+"download/"+canonical.Substring(prefix.Length);
+    }
+    public static Manifest FetchFirst(List<Source> sources,WindowsConfig config,bool beta,out Source used) {
+        var errors=new List<string>();
+        foreach(var s in sources) {
+            try { var m=Verify(Fetch(FeedUrl(s,config,beta)),config);used=s;return m; }
+            catch(Exception e) { errors.Add(s.name+"："+e.Message); }
+        }
+        throw new Exception("所有更新源均不可用\n"+String.Join("\n",errors));
+    }
+    // Packages try the source that served the feed first, then the others in the user's order, then signed mirrors.
+    public static void Route(Manifest m,IEnumerable<Source> order,string prefix) {
+        foreach(var p in new[]{m.full,m.delta}) {
+            if(p==null) continue;
+            var urls=new List<string>();
+            foreach(var s in order) { var u=AssetUrl(s,p.url,prefix);if(u!=null && !urls.Contains(u))urls.Add(u); }
+            if(p.mirrors!=null) foreach(var u in p.mirrors) if(!urls.Contains(u))urls.Add(u);
+            if(urls.Count==0) urls.Add(p.url);
+            p.url=urls[0];p.mirrors=urls.Skip(1).ToArray();
+        }
+    }
     public static bool Newer(Manifest m,string current,bool beta) { return (beta || m.channel=="stable") && ParseVersion(m.version)>ParseVersion(current); }
     static HttpWebRequest Request(string url) {
         Https(url);var q=(HttpWebRequest)WebRequest.Create(url);q.UserAgent="BirdLock-Updater/1";q.Timeout=30000;q.ReadWriteTimeout=30000;q.AutomaticDecompression=DecompressionMethods.None;q.AllowAutoRedirect=false;return q;
@@ -108,7 +160,12 @@ public static class Engine {
         string original=package.url;
         var urls=new List<string>{original};if(package.mirrors!=null)urls.AddRange(package.mirrors);
         try {
-            for(int i=0;i<urls.Count;i++) { package.url=urls[i];try { return DownloadOne(package,cache); } catch(OperationCanceledException){throw;} catch {if(i==urls.Count-1)throw;} }
+            for(int i=0;i<urls.Count;i++) {
+                package.url=urls[i];
+                // Resume only within one source: bytes left by a failed source must not poison the next one.
+                if(i>0) { string partial=Path.Combine(cache,package.sha256+".zip.part");if(File.Exists(partial))File.Delete(partial); }
+                try { return DownloadOne(package,cache); } catch(OperationCanceledException){throw;} catch {if(i==urls.Count-1)throw;}
+            }
             throw new Exception("所有下载源均失败");
         } finally {package.url=original;}
     }

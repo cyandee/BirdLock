@@ -23,5 +23,6 @@
 - **模型和资源**。鸟类模型有 Core ML / ONNX 两套产物，改动权重、关键点定义或坐标转换时同时核对两端。音效及 ID、支持资源、镜头 JSON 和飞机模型来源清单位于 `SharedResources/`。飞机权重由现有脚本按清单固定的版本和 SHA256 获取。[飞机模型清单](../../SharedResources/AircraftModels/manifest.json) · [音效](../../SharedResources/Audio/README.md) · [视频和镜头](../视频导入与镜头配置.md)
 - **遥测**。两端调用 `tools/telemetry/` 中的同一 Rust 源码，通过 schema 1 JSON 接收秒、rad/s 和 IMU 到相机坐标映射。原生二进制、架构和装包路径分别校验。更改单位或字段时同时检查 `TelemetryIO.swift` 和 `telemetry_io.py`。[遥测协议](../../tools/telemetry/README.md)
 - **版本和更新**。`SharedResources/Updates/config.json` 包含公开更新配置和验签公钥。`updates/macos.xml` 是 Sparkle 清单，Windows 使用 `updates/windows.json` 和 `updates/windows-stable.json`。安装升级和签名链按平台分别验收，发布审批以维护者为准。[自动更新](../自动更新.md)
+- **更新源**。同一份 config 的 `sources` 给出默认顺序（GitHub、BirdLock 镜像），`release_download_prefix` 是签名清单里可改写的 Release 前缀。两端遵守同一[源标准](../自动更新.md#合法更新源标准)，用户的自定义列表各自保存：Mac 存在 `UserDefaults` 的 `updates.sources`（`BirdLockCore/UpdateSources.swift`、`UpdateSourceProbe.swift`，`AppUpdater` 通过 Sparkle 的 `feedURLString` 和 `willDownloadUpdate` 接入），Windows 存在 `data/updates.json` 的 `sources`（`birdlock/app/updates.py` 以 `--source` 传给 `windows/updater`）。没有自定义时字段缺省，跟随新版默认值。`scripts/stage_updater.py` 把默认值写进 Mac 的 Info.plist。
 
 对齐用户可见的输入、默认行为、工程兼容性、输出、取消和错误反馈。识别数值、系统 UI、硬件可用性与编码器随平台变化。遇到差异，用同一份获准用于本机测试的素材检查两端的导入、编辑、导出和回退，并写明差异。[测试矩阵](TEST_MATRIX.md)

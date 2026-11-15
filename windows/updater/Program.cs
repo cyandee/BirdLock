@@ -47,7 +47,7 @@ public class Program {
         Console.OutputEncoding=new UTF8Encoding(false);
         ServicePointManager.SecurityProtocol=SecurityProtocolType.Tls12;
         try {
-            var asm=Assembly.GetExecutingAssembly();WindowsConfig cfg;
+            var asm=Assembly.GetExecutingAssembly();Config config;WindowsConfig cfg;
             if(args.Length>0 && args[0]=="--install") {
                 var location=Path.GetDirectoryName(asm.Location);
                 var allowed=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"BirdLock","updates");
@@ -58,14 +58,19 @@ public class Program {
 #if UPDATE_TESTS
             TestTransport.Setup();
 #endif
-            using(var reader=new StreamReader(asm.GetManifestResourceStream("UpdateConfig"))) cfg=Engine.Json.Deserialize<Config>(reader.ReadToEnd()).windows;
+            using(var reader=new StreamReader(asm.GetManifestResourceStream("UpdateConfig"))) config=Engine.Json.Deserialize<Config>(reader.ReadToEnd());
+            cfg=config.windows;
             if(String.IsNullOrEmpty(cfg.rsa_modulus))throw new Exception("此测试包尚未配置在线更新");
             if(args.Length<2)throw new Exception("缺少更新参数");
             string version=args[1];bool beta=args.Contains("--beta");
-            var manifest=Engine.Verify(Engine.Fetch(!beta && !String.IsNullOrEmpty(cfg.stable_feed_url) ? cfg.stable_feed_url : cfg.feed_url),cfg);
+            var requested=new List<string>();
+            for(int i=2;i<args.Length-1;i++)if(args[i]=="--source")requested.Add(args[++i]);
+            var sources=Engine.Sources(config,requested);Source used;
+            var manifest=Engine.FetchFirst(sources,cfg,beta,out used);
             if(args[0]=="--check") {
-                Console.WriteLine(Engine.Json.Serialize(new{available=Engine.Newer(manifest,version,beta),version=manifest.version,notes=manifest.notes??"",channel=manifest.channel}));return 0;
+                Console.WriteLine(Engine.Json.Serialize(new{available=Engine.Newer(manifest,version,beta),version=manifest.version,notes=manifest.notes??"",channel=manifest.channel,source=used.name,source_url=used.url}));return 0;
             }
+            Engine.Route(manifest,new[]{used}.Concat(sources.Where(s=>s!=used)),config.release_download_prefix);
             if(args[0]!="--install" || args.Length<5)throw new Exception("更新参数无效");
             session=Path.GetDirectoryName(asm.Location);
             string target=Path.GetFullPath(args[2]).TrimEnd(Path.DirectorySeparatorChar),expectedExe=Path.Combine(target,"BirdLock.exe");

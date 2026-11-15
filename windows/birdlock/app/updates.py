@@ -1,13 +1,49 @@
 """Update UI. Signature checks and installation run in a separate, small Windows process."""
 from __future__ import annotations
-import json,os,shutil,subprocess,sys,time,uuid,math
+import json,os,re,shutil,subprocess,sys,time,uuid,math
 from pathlib import Path
+from urllib.parse import urlsplit,urlunsplit
 from PySide6.QtCore import QProcess,QTimer,Qt,QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QDialog,QVBoxLayout,QLabel,QPushButton,QCheckBox,QProgressBar,QApplication,QMessageBox
+from PySide6.QtWidgets import (QDialog,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QCheckBox,QProgressBar,QApplication,QMessageBox,
+                               QListWidget,QListWidgetItem,QInputDialog,QDialogButtonBox)
 from ..core.paths import resource_dir,data_dir,app_dir,FROZEN
 from .. import __version__ as VERSION
 from ..core.log import log
+
+MAX_SOURCES=10
+
+def source_base(value):
+    """A source relays the signed feeds at <base>/windows*.json and release assets at <base>/download/<tag>/<name>."""
+    u=urlsplit(str(value).strip())
+    try:
+        u.port;host=(u.hostname or '').encode('idna').decode('ascii')
+    except (ValueError,UnicodeError):host=''
+    if u.scheme.lower()!='https' or not re.fullmatch(r'[a-z0-9.-]+|[0-9a-f:.]+',host) or u.username or u.password or u.query or u.fragment or re.search(r'\s',u.path):
+        raise ValueError('更新源必须是 HTTPS 地址，且不能带账号、查询参数或 #')
+    path=u.path if u.path.endswith('/') else u.path+'/'
+    return urlunsplit(('https',u.netloc.lower(),path,'',''))
+
+def clean_sources(items):
+    result=[]
+    for item in items if isinstance(items,list) else []:
+        try:
+            if not isinstance(item,dict):raise ValueError('Invalid source')
+            if item.get('id')=='github':entry={'id':'github','name':str(item.get('name') or 'GitHub')}
+            else:
+                url=source_base(item.get('url',''));entry={'name':str(item.get('name') or urlsplit(url).hostname),'url':url}
+        except ValueError:continue
+        if not any(e.get('id')==entry.get('id') and e.get('url')==entry.get('url') for e in result):result.append(entry)
+    return result[:MAX_SOURCES]
+
+def update_config():
+    try:
+        cfg=json.loads((resource_dir()/'updates'/'config.json').read_text(encoding='utf-8'))
+        return cfg if isinstance(cfg,dict) else {}
+    except (OSError,ValueError):return {}
+
+def default_sources(cfg=None):
+    return clean_sources((update_config() if cfg is None else cfg).get('sources')) or [{'id':'github','name':'GitHub'}]
 
 def preferences():
     try:
@@ -15,8 +51,55 @@ def preferences():
         if not isinstance(result,dict):raise ValueError('Invalid update preferences')
         last=result.get('last_check',0)
         if not isinstance(last,(int,float)) or not math.isfinite(last) or not 0<=last<=time.time()+3600:last=0
-        return dict(automatic=result.get('automatic') is True,beta=result.get('beta') is not False,last_check=last)
-    except (OSError,ValueError):return {'automatic':False,'beta':True,'last_check':0}
+        # Absent sources follow the defaults shipped with each version.
+        return dict(automatic=result.get('automatic') is True,beta=result.get('beta') is not False,last_check=last,sources=clean_sources(result.get('sources')) or None)
+    except (OSError,ValueError):return {'automatic':False,'beta':True,'last_check':0,'sources':None}
+
+def source_arguments(sources):
+    return [a for s in sources for a in ('--source','github' if s.get('id')=='github' else s['url'])]
+
+def source_label(source):
+    return source['name']+('（官方）' if source.get('id')=='github' else '\n'+source['url'])
+
+class SourcesDialog(QDialog):
+    def __init__(self,sources,defaults,parent=None):
+        super().__init__(parent);self.defaults=defaults
+        self.setWindowTitle('更新源');self.resize(520,360);layout=QVBoxLayout(self)
+        note=QLabel('检查和下载更新时按顺序尝试这些源。所有源提供的内容都会用内置公钥验证签名和校验值。');note.setWordWrap(True);layout.addWidget(note)
+        row=QHBoxLayout();layout.addLayout(row)
+        self.list=QListWidget();row.addWidget(self.list,1);side=QVBoxLayout();row.addLayout(side)
+        self.buttons={}
+        for key,text,slot in (('up','上移',lambda:self.move(-1)),('down','下移',lambda:self.move(1)),('add','添加…',self.add),('remove','删除',self.remove),('reset','恢复默认',lambda:self.fill(self.defaults))):
+            b=QPushButton(text);b.clicked.connect(slot);side.addWidget(b);self.buttons[key]=b
+        side.addStretch(1)
+        box=QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel);box.button(QDialogButtonBox.Ok).setText('确定');box.button(QDialogButtonBox.Cancel).setText('取消')
+        box.accepted.connect(self.accept);box.rejected.connect(self.reject);layout.addWidget(box)
+        self.list.currentRowChanged.connect(self.refresh);self.fill(sources)
+    def fill(self,sources):
+        self.list.clear()
+        for s in sources:
+            item=QListWidgetItem(source_label(s));item.setData(Qt.UserRole,dict(s));self.list.addItem(item)
+        self.list.setCurrentRow(0);self.refresh()
+    def sources(self):
+        return [self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())]
+    def refresh(self,*_):
+        row,count=self.list.currentRow(),self.list.count()
+        self.buttons['up'].setEnabled(row>0);self.buttons['down'].setEnabled(0<=row<count-1)
+        self.buttons['remove'].setEnabled(row>=0 and count>1);self.buttons['add'].setEnabled(count<MAX_SOURCES)
+    def move(self,step):
+        row=self.list.currentRow();target=row+step
+        if row<0 or not 0<=target<self.list.count():return
+        item=self.list.takeItem(row);self.list.insertItem(target,item);self.list.setCurrentRow(target)
+    def add(self):
+        text,ok=QInputDialog.getText(self,'添加更新源','更新源地址（HTTPS）：',text='https://')
+        if not ok:return
+        try:url=source_base(text)
+        except ValueError as e:QMessageBox.warning(self,'无法添加更新源',str(e));return
+        if any(s.get('url')==url for s in self.sources()):QMessageBox.information(self,'更新源已存在',url);return
+        source={'name':urlsplit(url).hostname,'url':url};item=QListWidgetItem(source_label(source));item.setData(Qt.UserRole,source)
+        self.list.addItem(item);self.list.setCurrentRow(self.list.count()-1)
+    def remove(self):
+        if self.list.count()>1:self.list.takeItem(self.list.currentRow());self.refresh()
 
 def update_root():
     return Path(os.environ.get('LOCALAPPDATA',Path.home()))/'BirdLock'/'updates'
@@ -32,6 +115,7 @@ class UpdateDialog(QDialog):
         self.auto.toggled.connect(self.save);self.beta.toggled.connect(self.save);self.beta.toggled.connect(self.check)
         self.install=QPushButton('下载并重启安装');self.install.setEnabled(False);self.install.clicked.connect(self.begin);layout.addWidget(self.install)
         retry=QPushButton('重新检查');retry.clicked.connect(self.check);layout.addWidget(retry)
+        self.sources_button=QPushButton('更新源…');self.sources_button.clicked.connect(self.edit_sources);layout.addWidget(self.sources_button)
         download=QPushButton('打开下载页');download.clicked.connect(lambda:QDesktopServices.openUrl(QUrl('https://github.com/cyandee/BirdLock/releases')));layout.addWidget(download)
         self.query=QProcess(self);self.query.finished.connect(self.checked);self.query.errorOccurred.connect(self.query_error)
         self.helper=resource_dir()/'updater'/'BirdLockUpdater.exe'
@@ -41,19 +125,28 @@ class UpdateDialog(QDialog):
     def save(self,*_):
         self.prefs.update(automatic=self.auto.isChecked(),beta=self.beta.isChecked())
         path=data_dir()/'updates.json';tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(self.prefs));tmp.replace(path)
+    def current_sources(self):
+        return self.prefs.get('sources') or default_sources()
+    def edit_sources(self):
+        if self.installing:return
+        defaults=default_sources();dialog=SourcesDialog(self.current_sources(),defaults,self)
+        if dialog.exec()!=QDialog.Accepted:return
+        chosen=dialog.sources();self.prefs['sources']=None if chosen==defaults else chosen;self.save()
+        log.info('update sources changed count=%d custom=%s',len(chosen),chosen!=defaults)
+        if self.query.state()!=QProcess.NotRunning:self.query.kill();self.query.waitForFinished(1000)
+        self.check()
     def busy(self):
         return self.state.export_running or self.state.phase in ('importing','analyzing')
     def check(self,*_):
         if self.installing or self.query.state()!=QProcess.NotRunning:return
         self.version=None;self.install.setEnabled(False)
         if self.busy():self.message.setText('正在分析或导出，请完成后再检查更新。');return
-        try:cfg=json.loads((resource_dir()/'updates'/'config.json').read_text())
-        except (OSError,ValueError):cfg={}
+        cfg=update_config()
         if not cfg.get('enabled') or not self.helper.exists() or os.name!='nt':
             self.message.setText('此测试包尚未启用在线更新，请从下载页安装新版。');return
         self.beta.setEnabled(False)
         self.message.setText('正在检查更新…');self.prefs['last_check']=time.time();self.save()
-        self.query.start(str(self.helper),['--check',VERSION]+(['--beta'] if self.beta.isChecked() else []))
+        self.query.start(str(self.helper),['--check',VERSION]+(['--beta'] if self.beta.isChecked() else [])+source_arguments(self.current_sources()))
     def query_error(self,*_):
         self.beta.setEnabled(True);self.message.setText("无法启动更新器，请手动安装新版。")
         log.error("update helper could not start: %s",self.query.errorString())
@@ -62,9 +155,11 @@ class UpdateDialog(QDialog):
         try:
             if code:raise ValueError(bytes(self.query.readAllStandardError()).decode('utf-8',errors='replace'))
             result=json.loads(bytes(self.query.readAllStandardOutput()));self.version=result['version']
-            available=bool(result['available']);self.message.setText(('发现新版 '+self.version+'\n'+result.get('notes','')) if available else '目前没有可用的更新。')
+            available=bool(result['available']);names=[s['name'] for s in self.current_sources() if s.get('url')==result.get('source_url')]
+            source=names[0] if names and 'source_url' in result else result.get('source');origin=('（来源：'+str(source)+'）') if source else ''
+            self.message.setText(('发现新版 '+self.version+origin+'\n'+result.get('notes','')) if available else '目前没有可用的更新。'+origin)
             self.install.setEnabled(available)
-            log.info('update check available=%s version=%s channel=%s',available,self.version,result.get('channel'))
+            log.info('update check available=%s version=%s channel=%s source=%s',available,self.version,result.get('channel'),source)
             if self.background and available:self.show()
         except (ValueError,KeyError) as e:
             self.version=None;self.install.setEnabled(False)
@@ -74,17 +169,17 @@ class UpdateDialog(QDialog):
         if not FROZEN or not self.version:return
         parent=self.parent()
         if parent is not None and hasattr(parent,"can_leave_project") and not parent.can_leave_project():return
-        self.install.setEnabled(False);self.auto.setEnabled(False);self.beta.setEnabled(False)
+        self.install.setEnabled(False);self.auto.setEnabled(False);self.beta.setEnabled(False);self.sources_button.setEnabled(False)
         self.error_log=None
         try:
             self.session=update_root()/uuid.uuid4().hex;self.session.mkdir(parents=True)
             helper=self.session/'BirdLockUpdater.exe';shutil.copy2(self.helper,helper)
             self.error_log=(self.session/'error.log').open('wb')
-            self.child=subprocess.Popen([str(helper),'--install',VERSION,str(app_dir()),str(os.getpid()),self.version]+(['--beta'] if self.beta.isChecked() else []),creationflags=subprocess.CREATE_NO_WINDOW,stdout=subprocess.DEVNULL,stderr=self.error_log)
+            self.child=subprocess.Popen([str(helper),'--install',VERSION,str(app_dir()),str(os.getpid()),self.version]+(['--beta'] if self.beta.isChecked() else [])+source_arguments(self.current_sources()),creationflags=subprocess.CREATE_NO_WINDOW,stdout=subprocess.DEVNULL,stderr=self.error_log)
             self.installing=True;self.timer.start();log.info('update preparing version=%s',self.version)
         except OSError as e:
             if self.error_log:self.error_log.close()
-            self.auto.setEnabled(True);self.beta.setEnabled(True)
+            self.auto.setEnabled(True);self.beta.setEnabled(True);self.sources_button.setEnabled(True)
             self.message.setText('无法启动更新器：'+str(e));log.exception('update launch failed')
     def poll(self):
         try:
@@ -92,11 +187,11 @@ class UpdateDialog(QDialog):
             if result['status']=='ready':
                 self.committing=True;self.state._update_exit_approved=True;self.state._save_settings_now();QApplication.instance().quit()
             elif result['status']=='error':
-                self.installing=False;self.timer.stop();self.error_log.close();self.auto.setEnabled(True);self.beta.setEnabled(True)
+                self.installing=False;self.timer.stop();self.error_log.close();self.auto.setEnabled(True);self.beta.setEnabled(True);self.sources_button.setEnabled(True)
                 log.error('update failed: %s',result['message'])
         except (OSError,ValueError,KeyError):pass
         if self.child and self.child.poll() is not None and self.installing:
-            self.installing=False;self.timer.stop();self.error_log.close();self.auto.setEnabled(True);self.beta.setEnabled(True)
+            self.installing=False;self.timer.stop();self.error_log.close();self.auto.setEnabled(True);self.beta.setEnabled(True);self.sources_button.setEnabled(True)
             log.error('update helper exited without completion')
             try:self.message.setText('更新未完成：'+(self.session/'error.log').read_text(encoding='utf-8',errors='replace')[-400:])
             except OSError:self.message.setText('更新器已退出，本次没有完成更新。')

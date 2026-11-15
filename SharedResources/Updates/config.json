@@ -11,5 +11,10 @@
     "stable_feed_url": "https://raw.githubusercontent.com/cyandee/BirdLock/main/updates/windows-stable.json"
   },
   "mirror_base_url": null,
+  "release_download_prefix": "https://github.com/cyandee/BirdLock/releases/download/",
+  "sources": [
+    {"id": "github", "name": "GitHub"},
+    {"name": "BirdLock 镜像（Cloudflare）", "url": "https://3rd.0x01.page/birdlock/update-api/"}
+  ],
   "enabled": true
 }

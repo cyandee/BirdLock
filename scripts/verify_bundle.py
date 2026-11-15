@@ -87,6 +87,11 @@ def verify_updater(app: Path, version: str, info: dict):
         except ValueError:valid=False
         if not valid or info.get('SURequireSignedFeed') is not True or info.get('SUVerifyUpdateBeforeExtraction') is not True:
             raise ValueError('必须验证更新清单和更新包签名')
+        mirrors=[s for s in info.get('BirdLockUpdateSources',[]) if s.get('id')!='github']
+        if mirrors and not info.get('BirdLockReleaseDownloadPrefix','').endswith('/'):raise ValueError('更新源缺少 Release 下载前缀')
+        for source in mirrors+([{'url':info['BirdLockReleaseDownloadPrefix']}] if 'BirdLockReleaseDownloadPrefix' in info else []):
+            u=urlsplit(source.get('url',''))
+            if u.scheme!='https' or not u.hostname or u.username or u.password or u.query or u.fragment:raise ValueError('更新源必须使用 HTTPS')
 
 
 def verify(app: Path, version: str, universal: bool = False):

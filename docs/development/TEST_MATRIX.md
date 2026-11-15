@@ -24,6 +24,14 @@
 | 2026-11-09 · `d33860b`（PR 头提交） | GitHub 托管 macOS 15 | PR 快速检查首轮 | Swift 91 项通过，5 项跳过（2 项光流硬件、3 项需遥测辅助程序）。CLI 自检与打包工具 28 项通过。[首轮运行](https://github.com/cyandee/BirdLock/actions/runs/42544350396) |
 | 2026-11-09 · `d33860b`（PR 头提交） | GitHub 托管 Windows x64 | PR 快速检查首轮 | Python 154 项通过，4 项需遥测辅助程序而跳过。CPU 源码自检和离屏启动通过。[首轮运行](https://github.com/cyandee/BirdLock/actions/runs/42544350396) |
 | 2026-11-09 · `d33860b` | GitHub 托管 Mac / Windows，任务分支手动运行 | 完整构建与产物汇总 | 通过。Mac Swift 91 项、跳过 5 项（同上），打包工具 28 项、通用 DMG 与应用签名校验通过。Windows Python 158 项、0 跳过，C# 更新器单测和集成测试、源程序及成品自检通过。源码归档、SHA256 汇总通过，Release 草稿任务跳过。[完整构建](https://github.com/cyandee/BirdLock/actions/runs/42544366246) |
+| 2026-11-15 · `a0c63d4` | GitHub 托管 Mac / Windows，fork 任务分支手动运行 | 完整构建与产物汇总 | 通过。Mac Swift 101 项、跳过 5 项（同上），打包工具 32 项、0 跳过，通用 DMG 与签名校验通过。Windows Python 162 项、0 跳过，C# 更新器 80 项断言和 8 个进程集成用例（含 `source-fallback`）、源程序及成品自检通过。Release 草稿任务跳过。[完整构建](https://github.com/Liam0205/BirdLock/actions/runs/43675465062) |
+| 2026-11-15 · `a0c63d4` 源码 | Linux x64，Mono C# 编译器 | 更新器单测与进程集成测试 | 通过，80 项断言，8 个集成用例。Mono 非 Windows 目标，仅作源码佐证 |
+| 2026-11-15 · `a0c63d4` 源码 | Linux x64，Swift 6.2.1 | `UpdateSourcesTests`（BirdLockCore） | 通过，5 项。地址规则、清单及包地址映射、默认与自定义列表、探测顺序、enclosure 解析。`AppUpdater` 和界面依赖 AppKit / Sparkle，Linux 上未编译 |
+| 2026-11-15 · `a0c63d4` 源码 | Linux x64，Python 3.12，离屏 Qt | `windows/tests`、`scripts/tests` | `windows/tests` 162 项，1 项 `test_audio` 失败、4 项跳过。该失败在 `main` 基线的 Linux 上同样出现，与本改动无关，托管 Windows 上通过。`scripts/tests` 32 项通过、6 项跳过（需 macOS 签名工具 codesign 和 clang） |
+| 2026-11-15 · `a0c63d4` | Linux x64，公网 | `scripts/check_update_source.py https://3rd.0x01.page/birdlock/update-api/ --full-limit 1000000000` | 通过，23/23。三份清单验签且与 GitHub raw 逐字节一致，全部附件 HEAD 长度、尾部 Range 206、整包内容一致（含 Windows 完整包 406823041 B、macOS 完整包 246617073 B），缺失路径返回 404 |
+| 2026-11-15 · `a0c63d4` | Linux x64，Mono，公网 | CI 产物 `BirdLock-1.10.0-Windows-x64.zip` 内的 `_internal/updater/BirdLockUpdater.exe --check 1.9.0` | 通过。默认源列表取 GitHub；仅镜像、镜像优先、不可达源在前三种列表均由镜像返回 1.10.0；`/birdlock/` 根地址返回「所有更新源均不可用」 |
+| 2026-11-15 · `a0c63d4` 源码 | Linux x64，Mono，公网 | 更新器下载链路（测试夹具驱动真实更新器） | 通过。清单取自镜像，增量包路由到镜像 `download/`，中断后从 1 MiB 处 Range 续传，SHA256 一致。未执行安装 |
+| 2026-11-15 · `a0c63d4` 源码 | Linux x64，Swift 6.2.1，公网 | Core 探测逻辑对真实源 | 通过。GitHub、镜像可用；无效主机和 `/birdlock/` 根地址判为不可用。未经过 Sparkle |
 
 PR 检查使用 GitHub 生成的合并引用。后续推送以 [PR #2 的当前检查](https://github.com/cyandee/BirdLock/pull/2/checks) 为准。
 
@@ -38,6 +46,8 @@ PR 检查使用 GitHub 生成的合并引用。后续推送以 [PR #2 的当前�
 | Windows x64 实体桌面 | 真实动物或昆虫的框选、双向跟踪、失锁补关键帧、保存恢复和导出 | 未执行 · Windows Codex |
 | Windows x64 实体桌面 | 短 SDR 视频导入、镜头配置、缓存重建、原声混音和导出。改动陀螺仪功能时补带有效 IMU 的素材 | 未执行 · Windows Codex |
 | Mac / Windows 实体设备 | 同一份工程跨平台互开、定位原片、保留编辑结果并导出。使用相同设置核对可见差异 | 未执行 · 双端 Codex |
+| 实体 Mac，1.10.0 之后的测试版本 | 「更新源…」排序、添加、删除、恢复默认；把镜像排第一后检查更新，Sparkle 经镜像下载、验签、安装并重启，菜单显示当前可用源 | 未执行 · Mac Codex |
+| Windows 10 / 11 x64 实体桌面，1.10.0 之后的测试版本 | 「更新源…」对话框操作；把镜像排第一后完成增量或完整更新、健康检查通过；断网或不可达源在前时回退到下一源 | 未执行 · Windows Codex |
 | 支持光流的实体 Mac | 实际 VideoToolbox 光流的长序列成品导出、输出颜色和异常回退，涉及光流/导出变更时执行 | 未执行 · Mac Codex。源码光流颜色单测见上表 |
 
 回填示例字段为「日期 · SHA · 设备及 OS/架构 · GPU/驱动（如相关） · 源码或包 · 命令/操作 · 素材类型及数量 · 结果和证据」。Windows ARM 模拟、托管 runner、离屏 Qt 或模拟推理需要单列。证据用 Actions 链接或脱敏摘要，私有素材和原始日志留在设备上。

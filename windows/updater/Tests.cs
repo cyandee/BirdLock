@@ -32,8 +32,52 @@ public static class Tests {
    p.mirrors=new[]{"https://mirror.test/archive.zip"};int attempts=0;
    Engine.Transport=(u,start)=>{attempts++;if(u.Contains("example.test"))throw new System.Net.WebException("offline");return Reply(bytes,start,u);};
    result=Engine.Download(p,Path.Combine(root,"mirror"));Assert(Engine.Matches(result,p)&&attempts==4,"mirror fallback with same hash");
+   p.mirrors=new[]{"https://good.test/archive.zip"};var poisoned=new List<string>();
+   Engine.Transport=(u,start)=>{poisoned.Add(u+":"+start);if(u.Contains("example.test"))return new HttpReply{status=200,finalUrl=u,body=new MemoryStream(new byte[bytes.Length+10])};return Reply(bytes,start,u);};
+   result=Engine.Download(p,Path.Combine(root,"poisoned"));
+   Assert(Engine.Matches(result,p)&&poisoned.Last()=="https://good.test/archive.zip:0","bytes from a failed source are not resumed by the next");
    Engine.FreeSpace=path=>1;Reject(()=>Engine.Prepare(Fixture(),"1.0.0",Path.Combine(root,"low-disk"),Path.Combine(root,"cache")),"disk space check");Assert(!Directory.Exists(Path.Combine(root,"low-disk")),"low disk leaves app unchanged");
   } finally {Engine.Transport=network;Engine.Progress=progress;Engine.FreeSpace=free;Engine.Cancelled=false;}
+ }
+
+ static void SourceTests(RSACryptoServiceProvider rsa,WindowsConfig cfg) {
+  var network=Engine.Transport;
+  try {
+   const string prefix="https://github.com/cyandee/BirdLock/releases/download/";
+   cfg.feed_url="https://raw.example.test/updates/windows.json";cfg.stable_feed_url="https://raw.example.test/updates/windows-stable.json";
+   var config=new Config{windows=cfg,release_download_prefix=prefix,sources=new[]{new Source{id="github",name="GitHub"},new Source{name="镜像",url="https://mirror.test/birdlock/update-api"}}};
+   var defaults=Engine.Sources(config,null);
+   Assert(defaults.Count==2 && defaults[0].id=="github" && defaults[1].url=="https://mirror.test/birdlock/update-api/" && defaults[1].name=="镜像","default sources keep order and normalize base");
+   var custom=Engine.Sources(config,new[]{"https://other.test/u/","github","https://other.test/u"});
+   Assert(custom.Count==2 && custom[0].url=="https://other.test/u/" && custom[0].name=="other.test" && custom[1].id=="github","requested order overrides defaults and removes duplicates");
+   Assert(Engine.Sources(new Config{windows=cfg},null).Single().id=="github","missing source list falls back to GitHub");
+   foreach(var bad in new[]{"http://mirror.test/","https://user:pw@mirror.test/","https://mirror.test/?a=1","https://mirror.test/#a","ftp://mirror.test/","","https://mirror:8o8o/","https://exa mple.test/"}) {
+    Reject(()=>Engine.SourceBase(bad),"source "+bad);
+    var kept=Engine.Sources(config,new[]{bad,"https://good.test/","github"});
+    Assert(kept.Count==2 && kept[0].url=="https://good.test/" && kept[1].id=="github","invalid source skipped: "+bad);
+    Assert(Engine.Sources(config,new[]{bad}).Single().id=="github","only invalid sources fall back to GitHub: "+bad);
+   }
+   Reject(()=>Engine.Sources(config,Enumerable.Range(0,11).Select(i=>"https://m"+i+".test/").ToList()),"too many sources");
+   var github=defaults[0];var mirror=defaults[1];
+   Assert(Engine.FeedUrl(github,cfg,true)==cfg.feed_url && Engine.FeedUrl(github,cfg,false)==cfg.stable_feed_url,"GitHub feeds come from config");
+   Assert(Engine.FeedUrl(mirror,cfg,true)=="https://mirror.test/birdlock/update-api/windows.json" && Engine.FeedUrl(mirror,cfg,false)=="https://mirror.test/birdlock/update-api/windows-stable.json","source feeds follow the shared layout");
+   Assert(Engine.AssetUrl(mirror,prefix+"v1.5.0-beta.1/BirdLock-1.5.0-Windows-update.zip",prefix)=="https://mirror.test/birdlock/update-api/download/v1.5.0-beta.1/BirdLock-1.5.0-Windows-update.zip","assets keep the release tag");
+   Assert(Engine.AssetUrl(mirror,"https://elsewhere.test/a.zip",prefix)==null && Engine.AssetUrl(github,"https://elsewhere.test/a.zip",prefix)=="https://elsewhere.test/a.zip","only release URLs are rewritten");
+   var m=Fixture();m.channel="stable";m.full.url=prefix+"v1.10.0/full.zip";m.full.mirrors=new[]{"https://signed.test/full.zip"};m.delta=new Package{url=prefix+"v1.10.0/delta.zip",from="1.9.0",sha256=new string('b',64),size=1};
+   var signed=Sign(m,rsa);var requests=new List<string>();
+   Engine.Transport=(u,start)=>{requests.Add(u);if(u.Contains("raw.example.test"))throw new System.Net.WebException("blocked");return new HttpReply{status=200,finalUrl=u,body=new MemoryStream(signed)};};
+   Source used;var got=Engine.FetchFirst(defaults,cfg,false,out used);
+   Assert(used==mirror && got.version==m.version && requests.SequenceEqual(new[]{cfg.stable_feed_url,"https://mirror.test/birdlock/update-api/windows-stable.json"}),"unreachable GitHub falls back to the next source");
+   var tampered=Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(signed).Replace("\"signature\":\"","\"signature\":\"AA"));
+   Engine.Transport=(u,start)=>new HttpReply{status=200,finalUrl=u,body=new MemoryStream(u.Contains("raw.example.test")?tampered:signed)};
+   Engine.FetchFirst(defaults,cfg,true,out used);Assert(used==mirror,"invalid signature on one source tries the next");
+   Engine.Transport=(u,start)=>{throw new System.Net.WebException("offline");};
+   try{Engine.FetchFirst(defaults,cfg,true,out used);throw new Exception("FAILED: all sources offline");}catch(Exception e){Assert(e.Message.Contains("GitHub")&&e.Message.Contains("镜像"),"all-source failure names every source");}
+   Engine.Route(got,new[]{mirror,github},prefix);
+   Assert(got.full.url=="https://mirror.test/birdlock/update-api/download/v1.10.0/full.zip" && got.full.mirrors.SequenceEqual(new[]{prefix+"v1.10.0/full.zip","https://signed.test/full.zip"}),"packages follow the serving source, then other sources, then signed mirrors");
+   Assert(got.delta.url=="https://mirror.test/birdlock/update-api/download/v1.10.0/delta.zip" && got.delta.mirrors.Single()==prefix+"v1.10.0/delta.zip","delta routing");
+   var only=Engine.Verify(signed,cfg);Engine.Route(only,new[]{mirror},prefix);Assert(only.full.url.StartsWith("https://mirror.test/") && only.full.mirrors.Single()=="https://signed.test/full.zip","removed GitHub source is not contacted");
+  } finally {Engine.Transport=network;}
  }
 
  static void Assert(bool ok,string name){if(!ok)throw new Exception("FAILED: "+name);count++;}
@@ -52,6 +96,7 @@ public static class Tests {
     foreach(var n in new[]{"../bad","a/../../bad","/absolute","a\\bad","a:bad","a//b","CON.txt","a./b","data/settings.json","a/LPT1"})Reject(()=>Engine.ValidatePath(n),n);
     m.files.Add("birdlock.EXE",Spec(new byte[0]));Reject(()=>Engine.Verify(Sign(m,rsa),cfg),"case collision");m.files.Remove("birdlock.EXE");
     m.full.url="http://example.test/a";Reject(()=>Engine.Verify(Sign(m,rsa),cfg),"insecure URL");m.full.url="https://example.test/full.zip";
+    SourceTests(rsa,cfg);
    }
    string old=Path.Combine(root,"old"),stage=Path.Combine(root,"stage");Directory.CreateDirectory(old);
    Put(old,"unchanged.dll","same");string zip=Path.Combine(root,"delta.zip");using(var z=ZipFile.Open(zip,ZipArchiveMode.Create)){var e=z.CreateEntry("BirdLock.exe");using(var w=new StreamWriter(e.Open(),new UTF8Encoding(false)))w.Write("new");}
