@@ -142,6 +142,8 @@ def verify(app: Path, version: str, universal: bool = False):
     manifest = json.loads((support / "manifest.json").read_text(encoding="utf-8"))
     if hashlib.sha256((support / "alipay-coffee.jpg").read_bytes()).hexdigest() != manifest["sha256"]:
         raise ValueError("赞赏图片校验失败")
+    if 'wechat' in manifest and hashlib.sha256((support / "wechat-coffee.png").read_bytes()).hexdigest() != manifest['wechat']['sha256']:
+        raise ValueError("微信赞赏图片校验失败")
     if not (audio / "silence.wav").is_file():
         raise ValueError("缺少混音静音资源")
     if (resources / "VERSION").read_text().strip() != version:

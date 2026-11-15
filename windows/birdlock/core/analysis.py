@@ -179,6 +179,9 @@ def fingerprint(frames: list, subject="bird", model_identity: str | None = None)
     h = hashlib.sha256()
     for f in frames:
         h.update(f"{f.path}|{f.fileSize}|{f.modified}\n".encode())
+        if getattr(f, 'raw', None):
+            from .raw_photo import fingerprint_suffix
+            h.update(fingerprint_suffix(f).encode())
     if subject == "aircraft":
         h.update(f"subject=aircraft|model={model_identity}\n".encode())
     if subject == "custom":

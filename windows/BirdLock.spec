@@ -1,6 +1,7 @@
 # PyInstaller spec: portable one-folder build  →  dist/BirdLock/BirdLock.exe
 # Build with:  python build_windows.py   (downloads FFmpeg, then runs PyInstaller)
 import os
+from importlib.metadata import distribution
 from PyInstaller.utils.hooks import collect_dynamic_libs
 
 here = os.path.abspath(SPECPATH)
@@ -29,6 +30,10 @@ datas = [
     (os.path.join(repo, "LICENSE"), "docs"),
 ]
 binaries = collect_dynamic_libs("onnxruntime")   # includes DirectML.dll
+binaries += collect_dynamic_libs("rawpy")       # LibRaw and its OpenMP runtime
+rawpy_dist = distribution("rawpy")
+datas += [(str(rawpy_dist.locate_file(file)), os.path.join("docs", "windows", "rawpy"))
+          for file in rawpy_dist.files if file.name in {"LICENSE", "LICENSE.LibRaw"}]
 
 a = Analysis(
     [os.path.join(here, "BirdLock.pyw")],
@@ -40,6 +45,13 @@ a = Analysis(
               "PySide6.QtQuick", "PySide6.QtQml", "PySide6.QtPdf", "PySide6.QtCharts"],
     noarchive=False,
 )
+# Qt links to Windows' ICU exports. A generic DLL picked up from PATH (for
+# example Poppler's ICU) can have the same filename with incompatible symbols.
+# Keep Windows' system ICU out of the portable application directory.
+if os.name == "nt":
+    system_icu = {"icu.dll", "icuuc.dll", "icuin.dll", "icudt.dll"}
+    a.binaries = [entry for entry in a.binaries
+                  if os.path.basename(entry[0]).casefold() not in system_icu]
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="BirdLock", console=False,
           icon=os.path.join(here, "assets", "BirdLock.ico"), version=os.path.join(here, "version_info.txt"))

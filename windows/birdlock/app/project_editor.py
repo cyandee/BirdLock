@@ -1,5 +1,6 @@
 """Editing controls for photo burst groups, replacement closeups and local music cues."""
-from PySide6.QtWidgets import (QCheckBox,QComboBox,QDoubleSpinBox,QHBoxLayout,QLabel,QPushButton,QVBoxLayout,QWidget)
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (QCheckBox,QComboBox,QDoubleSpinBox,QHBoxLayout,QInputDialog,QLabel,QMessageBox,QPushButton,QVBoxLayout,QWidget)
 from .inspector import Card,caption
 from ..core.settings import FocusMarkColor
 from ..core.music_cues import visual_candidates
@@ -20,7 +21,7 @@ class ProjectEditor(Card):
         self.message.setText(self.state.timeline_message)
         self.message.setVisible(bool(self.state.timeline_message))
         a=self.state.analysis
-        signature=(self.state.phase,self.state.segment_index,tuple(self.state.merge_group_indices),tuple((s.start,s.stop) for s in self.state.segments),tuple(id(s) for s in a.closeups) if a else (),a.fingerprint if a else None)
+        signature=(self.state.phase,self.state.segment_index,tuple(self.state.merge_group_indices),tuple((s.groupID,s.name,s.start,s.stop) for s in self.state.segments),tuple(id(s) for s in a.closeups) if a else (),a.fingerprint if a else None)
         if signature==self.signature:
             for fn in self.refreshers:fn()
             return
@@ -35,14 +36,29 @@ class ProjectEditor(Card):
             mode.setCurrentIndex(1 if self.state.segment_index==-1 else 0)
             mode.currentIndexChanged.connect(lambda _:self.state.select_segment(-1 if mode.currentData()==-1 else 0))
             self.rows.addWidget(mode)
-            for i,seg in enumerate(self.state.segments):
-                check=QCheckBox(f"合并第 {i+1} 组（{seg.count} 张）")
+        for i,seg in enumerate(self.state.segments):
+            holder=QWidget();row=QHBoxLayout(holder);row.setContentsMargins(0,0,0,0)
+            if len(self.state.segments)>1:
+                check=QCheckBox()
+                check.setAccessibleName(f"合并{seg.label(i)}")
                 check.setChecked(i in self.state.merge_group_indices)
                 check.toggled.connect(lambda v,k=i:self.state.include_group(k,v))
-                self.rows.addWidget(check)
+                row.addWidget(check)
+            label=QLabel();label.setTextFormat(Qt.PlainText)
+            label.setText(label.fontMetrics().elidedText(seg.label(i),Qt.ElideRight,118)+f" · {seg.count} 张")
+            label.setToolTip(seg.label(i));row.addWidget(label,1)
+            rename=QPushButton("重命名…");rename.setEnabled(self.state.phase=="ready")
+            rename.clicked.connect(lambda _,k=i:self.rename(k));row.addWidget(rename)
+            locate=QPushButton("显示原片");locate.setToolTip("在文件资源管理器中显示")
+            locate.clicked.connect(lambda _,k=i:self.reveal_group(k));row.addWidget(locate)
+            self.rows.addWidget(holder)
+        if len(self.state.segments)>1:
             self.rows.addWidget(caption("片段播放顺序（上移提前播放，下移延后播放）"))
             for position,group in enumerate(self.state.merge_group_indices):
-                row=QHBoxLayout();row.addWidget(QLabel(f"{position+1}. 第 {group+1} 组"))
+                row=QHBoxLayout();label=QLabel();label.setTextFormat(Qt.PlainText)
+                title=self.state.segments[group].label(group)
+                label.setText(f"{position+1}. "+label.fontMetrics().elidedText(title,Qt.ElideRight,128))
+                label.setToolTip(title);row.addWidget(label,1)
                 for label,delta,enabled in (("上移",-1,position>0),("下移",1,position+1<len(self.state.merge_group_indices))):
                     button=QPushButton(label);button.setEnabled(enabled and self.state.phase=="ready")
                     button.clicked.connect(lambda _,g=group,d=delta:self.state.move_group(g,d));row.addWidget(button)
@@ -52,6 +68,17 @@ class ProjectEditor(Card):
         self.rows.addWidget(caption("特写替换所选照片时段；放大与移动只影响该镜头。时段不可重叠。"))
         if a is None:return
         for shot in a.closeups:self.rows.addWidget(self.editor(shot))
+
+    def rename(self,index):
+        seg=self.state.segments[index]
+        name,ok=QInputDialog.getText(self,"重命名连拍组","组名（留空恢复自动名称）",text=seg.name)
+        if ok:self.state.rename_group(index,name)
+
+    def reveal_group(self,index):
+        from .media_location import original_path,select_in_explorer
+        seg=self.state.segments[index]
+        if not select_in_explorer([original_path(f) for f in self.state.frames[seg.start:seg.stop]]):
+            QMessageBox.information(self,"原片不可用","这组照片的原片均已丢失，请重新定位素材。")
 
     def editor(self,shot):
         box=Card(f"特写：第 {shot.frame+1} 帧")

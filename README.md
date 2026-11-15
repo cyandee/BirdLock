@@ -85,7 +85,7 @@ Mac 版还没有做 Apple 公证，首次打开可能被系统拦截，安装方
 
 有问题或想法，欢迎给我发邮件：[cyanodee@gmail.com](mailto:cyanodee@gmail.com)，也可以提 [Issue](https://github.com/cyandee/BirdLock/issues)。遇到问题时，带上软件版本、系统信息和操作步骤，会更容易定位。
 
-如果 BirdLock 帮你省了点时间，也欢迎[请我喝杯咖啡](docs/赞赏.md)。5 块、10 块、20 块都行，多少随意。软件所有功能都免费，是否赞赏不影响使用。
+如果 BirdLock 帮你省了点时间，也欢迎[请我喝杯咖啡](docs/赞赏.md)。软件所有功能都免费，是否赞赏不影响使用。
 
 ## 源码和文档
 

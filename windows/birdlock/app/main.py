@@ -8,14 +8,37 @@ import sys
 def _redirect_output(name: str):
     """Windowed builds have no console: send prints to a log file in the data folder."""
     from ..core.paths import data_dir
-    path = data_dir()/name
-    if name == 'app.log' and path.exists():
-        path.replace(path.with_suffix('.log.1'))
-    log = open(path, "w", encoding="utf-8", buffering=1)
+    import tempfile
+    import uuid
+    log = None
+    try:
+        path = data_dir()/name
+        if name == 'app.log' and path.exists():
+            path.replace(path.with_suffix('.log.1'))
+        log = open(path, "w", encoding="utf-8", buffering=1)
+    except OSError:
+        # An older BirdLock instance or an external reader can hold either
+        # log open on Windows. Keep it intact and give this process its own log.
+        try:
+            path = data_dir()/f"{name}.{os.getpid()}-{uuid.uuid4().hex[:8]}"
+            log = open(path, "x", encoding="utf-8", buffering=1)
+        except OSError:
+            try:
+                log = tempfile.TemporaryFile(mode="w", encoding="utf-8", buffering=1)
+            except OSError:
+                log = open(os.devnull, "w", encoding="utf-8")
     sys.stdout = sys.stderr = log
 
 
 def main():
+    desktop_smoke = "--desktop-smoketest" in sys.argv
+    offscreen_smoke = "--smoketest" in sys.argv
+    if len(sys.argv) > 1 and sys.argv[1] in {
+        "--gui-regression", "--project-regression", "--subject-regression", "--video-regression",
+    } and not os.environ.get("BIRDLOCK_DATA"):
+        raise SystemExit("Regression tests need a disposable BIRDLOCK_DATA directory")
+    if desktop_smoke and (os.name != "nt" or offscreen_smoke or not os.environ.get("BIRDLOCK_DATA")):
+        raise SystemExit("Desktop smoketest needs Windows, a disposable BIRDLOCK_DATA and no --smoketest")
     from ..core import log as _log
     _log.setup()
     if len(sys.argv) > 1 and sys.argv[1] == "--video-regression":
@@ -69,8 +92,11 @@ def main():
         from ..cli import main as cli
         cli(["selftest"])
         return
-    if "--smoketest" in sys.argv:
+    if offscreen_smoke:
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        _redirect_output("smoketest.log")
+    elif desktop_smoke:
+        os.environ["QT_QPA_PLATFORM"] = "windows"
         _redirect_output("smoketest.log")
     from ..core import log as _log
     _log.setup()
@@ -103,7 +129,7 @@ def main():
     if icon.exists():
         app.setWindowIcon(QIcon(str(icon)))
     theme.apply(app)
-    if "--smoketest" in sys.argv and os.name == "nt":
+    if offscreen_smoke and os.name == "nt":
         # the offscreen platform has no font database: load Microsoft YaHei for the screenshot
         from PySide6.QtGui import QFont, QFontDatabase
         fid = QFontDatabase.addApplicationFont(os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "msyh.ttc"))
@@ -139,14 +165,23 @@ def main():
 
     paths = [p for p in sys.argv[1:] if not p.startswith("-") and os.path.exists(p)]
 
-    if "--smoketest" in sys.argv:
-        from ..core.paths import data_dir
-
+    if offscreen_smoke or desktop_smoke:
         def snap():
             win.resize(1360, 860)
-            win.grab().save(str(data_dir() / "smoketest.png"))
+            handle = win.windowHandle()
+            if desktop_smoke and (app.platformName() != "windows" or not handle or not handle.isExposed()):
+                print("desktop smoketest failed: no exposed native window", flush=True)
+                app.exit(1)
+                return
+            if not win.grab().save(str(data_dir() / "smoketest.png")):
+                print("smoketest failed: screenshot could not be saved", flush=True)
+                app.exit(1)
+                return
+            if desktop_smoke:
+                print(f"desktop platform={app.platformName()} DPR={handle.devicePixelRatio():g}", flush=True)
             print("smoketest ok", flush=True)
-            app.quit()
+            win.close()
+            app.exit(0)
         QTimer.singleShot(1500, snap)
         sys.exit(app.exec())
 

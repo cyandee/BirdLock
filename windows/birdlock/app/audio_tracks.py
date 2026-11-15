@@ -77,12 +77,15 @@ class AudioTracksCard(Card):
         if track.assetID:
             choice = CameraSoundPicker(track.assetID, lambda value: self.set(track, "assetID", value))
             box.add(choice)
-        for label, key in (("静音", "muted"), ("循环播放", "loop")):
+        for label, key in (("启用音轨", "enabled"), ("静音", "muted"), ("循环播放", "loop")):
             if track.videoOriginal and key == "loop": continue
             check = QCheckBox(label)
             check.setChecked(getattr(track, key))
             check.toggled.connect(lambda value, k=key: self.set(track, k, value))
             box.add(check)
+            def refresh_check(control=check, k=key):
+                control.blockSignals(True);control.setChecked(getattr(track,k));control.blockSignals(False)
+            self.refreshers.append(refresh_check)
         for label, key, limit, suffix in (("音量", "volume", 1.5, " ×"), ("视频起点", "timelineStart", 86400, " 秒"),
                                          ("播放长度", "duration", 86400, " 秒"), ("素材起点", "startOffset", 86400, " 秒"),
                                          ("淡入", "fadeIn", 5, " 秒"), ("淡出", "fadeOut", 5, " 秒")):

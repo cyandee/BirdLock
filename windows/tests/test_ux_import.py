@@ -79,10 +79,10 @@ class ImportUXTests(unittest.TestCase):
         d.apply_match(SimpleNamespace(metadata=SimpleNamespace(display_name='Updated identity'),selected_url=None,selected=None,message='No exact match'),automatic=True)
         self.assertEqual(d.profile,expected);self.assertEqual(d.catalog.selected_path,expected)
     def test_shared_limits_before_decoding(self):
-        info=VideoInfo(1920,1080,24.,200.)
-        self.assertEqual(selection(info,199,10,60),(1.,24.,24))
-        for start,seconds,fps in [(200,1,30),(0,121,30),(-1,1,30),(0,1,float('nan')),(0,120,60)]:
-            if seconds==120 and fps==60:info=VideoInfo(1920,1080,60.,200.)
+        info=VideoInfo(1920,1080,60.,800.)
+        self.assertEqual(selection(info,799,10,60),(1.,60.,60))
+        self.assertEqual(selection(info,0,600,30),(600.,30.,18000))
+        for start,seconds,fps in [(800,1,30),(0,601,30),(-1,1,30),(0,1,float('nan')),(0,600,60)]:
             with self.assertRaises(ValueError):selection(info,start,seconds,fps)
     def test_silent_video_export_uses_original_name(self):
         with tempfile.TemporaryDirectory() as t:

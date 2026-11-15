@@ -14,6 +14,7 @@ from birdlock.core import frames as F
 from birdlock.core.settings import FrameInterpolation,AspectRatio,VideoCodec,AudioTrack,AudioSettings
 from birdlock.core.exporter import VideoExporter,render_audio_preview,_run_quiet,_ffmpeg
 from birdlock.core.render import RenderJob
+from .regression_support import close_regression_window
 
 
 def check_short_audio(job,out):
@@ -55,11 +56,14 @@ def check_short_audio(job,out):
 def main(argv=None):
     if not os.environ.get('BIRDLOCK_DATA'):
         raise SystemExit('Project regression requires a disposable BIRDLOCK_DATA directory')
-    args = sys.argv[1:] if argv is None else argv
+    args = list(sys.argv[1:] if argv is None else argv)
+    allow_untracked = bool(args and args[-1] == '--allow-untracked')
+    if allow_untracked:args.pop()
     if len(args) != 2:
-        raise SystemExit('Usage: --project-regression photos output')
+        raise SystemExit('Usage: --project-regression photos output [--allow-untracked]')
     photos,out=args[0],Path(args[1]);out.mkdir(parents=True,exist_ok=True)
     app=QApplication([]);theme.apply(app);state=AppState();state.change_subject('bird');state.device='cpu';window=MainWindow(state);window.show()
+    if allow_untracked:state.selection.dropUntracked=False
     def wait(condition,limit=180):
      end=time.monotonic()+limit
      while not condition():
@@ -207,9 +211,28 @@ def main(argv=None):
     assert len(state.analysis.closeups)==0
     state.select_segment(-1);wait(lambda:state.phase=='ready' and state.analysis.count==12 and len(state.analysis.closeups)==1 and len(state.job.output_frames)==34)
     state.toggle_play();settle(.6);state.stop();settle()
+    # Exercise the real save and open actions; redirect only the save file picker.
+    document=out/'roundtrip.birdlock'
+    state.selection.trimStart=1
+    state.audio.tracks=[AudioTrack(assetID='sony-20',volume=.3)]
+    state.settings_changed()
+    manual=dict(state.analysis.manualEye)
+    original_key=state.analysis.fingerprint
+    with patch('birdlock.app.project_actions.QFileDialog.getSaveFileName',return_value=(str(document),'BirdLock')):
+        assert window.save_project_dialog()
+    assert document.is_file()
+    window.close_project_dialog()
+    assert state.analysis is None
+    window.open_project_dialog(str(document))
+    wait(lambda:state.phase=='ready' and state.job is not None)
+    assert state.analysis.fingerprint==original_key and state.analysis.manualEye==manual
+    assert state.selection.trimStart==1 and len(state.analysis.closeups)==1
+    assert state.audio.tracks[0].assetID=='sony-20' and state.audio.tracks[0].volume==.3
+    state.selection.trimStart=0;state.settings_changed();settle()
     from .export_regression import check_export_recovery
     export_recovery=check_export_recovery(state,window,wait,settle,out)
     result=dict(group_order_buttons_preserve_edits=True,camera_variant_menus=True,single_shutter_aac=True,coffee_dialog_image=True,contact_email=True,photos=12,clips=2,closeups=1,frames=34,duration=job.duration,restore_after_group_switch=True,legacy_group_cache_preserves_edits=True,music_alignment_resolves_closeup_and_rejects_trimmed=True,layout_checks=2,short_audio_eof=audio_eof,export_recovery=export_recovery)
     result['diagnostic_bundle']=True;result['visible_support_entry']=True
+    result['allow_untracked']=allow_untracked;result['project_file_roundtrip']=True
     (out/'project-regression.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result),flush=True)
-    window.close();app.processEvents()
+    close_regression_window(window);app.processEvents()

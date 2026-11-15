@@ -77,6 +77,9 @@ class SourceCache:
             if self.cancelled():
                 raise ExportCancelled()
             src = self.job.source(i, self.proxy, self.scale)
+            analysis_frames = getattr(getattr(self.job, "analysis", None), "frames", ())
+            if src is None and i < len(analysis_frames) and analysis_frames[i].raw:
+                raise ExportError(f"无法解码 RAW：{analysis_frames[i].file_name}；请重新定位原片或改用可用的渲染策略。")
             with self.lock:
                 self.items[i] = src
                 while len(self.items) > self.limit:
@@ -287,7 +290,12 @@ def _output_file(out, cancelled):
         yield temporary
         if cancelled():
             raise ExportCancelled()
-        os.replace(temporary, out)
+        publish_started = time.monotonic()
+        try:
+            os.replace(temporary, out)
+        except PermissionError as error:
+            raise ExportError("无法写入最终文件；请关闭正在使用成片的程序，或改用可写目录和新文件名") from error
+        log.info("export replace seconds=%.3f", time.monotonic() - publish_started)
     finally:
         _remove_temporary(temporary)
 
@@ -326,21 +334,31 @@ def _stream_frames(cmd: list[str], frames: list[OutputFrame], render, progress, 
     watcher = threading.Thread(target=watch_cancel, daemon=True)
     t.start()
     watcher.start()
+    started = time.monotonic()
+    first_frame = write_seconds = finalize_seconds = 0.
+    streamed = 0
     try:
         black = np.zeros((H, W, 3), np.uint8)
         for k, img in _ordered_render(frames, render, cancelled, workers or VideoExporter.workers_default()):
             if img is None or img.shape[:2] != (H, W):
                 img = black
             try:
+                write_started = time.monotonic()
+                if not streamed:
+                    first_frame = write_started - started
                 proc.stdin.write(np.ascontiguousarray(img).tobytes())
+                write_seconds += time.monotonic() - write_started
+                streamed += 1
             except (BrokenPipeError, OSError):
                 break
             progress((k + 1) / len(frames))
+        finalize_started = time.monotonic()
         try:
             proc.stdin.close()
         except (BrokenPipeError, OSError):
             pass
         proc.wait()
+        finalize_seconds = time.monotonic() - finalize_started
         t.join(timeout=5)
         if cancelled():
             raise ExportCancelled()
@@ -359,8 +377,11 @@ def _stream_frames(cmd: list[str], frames: list[OutputFrame], render, progress, 
             pass
         t.join(timeout=5)
         proc.stderr.close()
-    if proc.returncode != 0:
-        raise ExportError("视频编码失败：" + (" ".join(list(err_tail)[-3:]) or f"ffmpeg 退出码 {proc.returncode}"))
+        log.info("export streamed=%d/%d first_frame=%.3fs pipe=%.3fs finalize=%.3fs total=%.3fs exit=%s",
+                 streamed,len(frames),first_frame,write_seconds,finalize_seconds,time.monotonic()-started,proc.returncode)
+    if proc.returncode != 0 or streamed != len(frames):
+        tail = " ".join(list(err_tail)[-3:])
+        raise ExportError(f"视频编码失败：FFmpeg 退出码 {proc.returncode}，已写 {streamed}/{len(frames)} 帧。" + tail)
 
 
 class VideoExporter:

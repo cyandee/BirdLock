@@ -7,6 +7,8 @@ from ..core.subjects import SubjectProfile
 class ProjectWorkspace:
     def init_workspace(self):
         self.project_path='';self.project_dirty=False;self._project_loading=False
+        self.raw_mode="camera";self.raw_pair_policy="jpeg";self.import_notice=""
+        self.appearance="dark"
         self.cache_limit_gb=20;self.ask_cleanup_after_export=True
         self.cleanup_export_token=0;self.last_export_kind=''
         self.cache_message='';self._cache_owner=str(id(self))
@@ -40,7 +42,7 @@ class ProjectWorkspace:
                         cache_policy.end(lease);return
                     self._project_loading=True
                     try:
-                        self.frames=d['_frames'];self.cache.retain_records(self.frames);self.segments=[F.BurstSegment(s['start'],s['start']+s['count'],s['fps']) for s in d['segments']]
+                        self.frames=d['_frames'];self.cache.retain_records(self.frames);self.segments=[F.BurstSegment.from_project(s) for s in d['segments']]
                         self.segment_index=d['segmentIndex'];self.merge_group_indices=list(d['mergeGroups'])
                         for a in d['_analyses']:self.cache.save_analysis(a)
                         self.analysis=d['_analyses'][0];self.subject=d['subject']
@@ -50,6 +52,9 @@ class ProjectWorkspace:
                         self.current_frame=max(0,min(d['currentFrame'],self.analysis.count-1));self.view_mode=d['viewMode'];self.source_zoom=d['sourceZoom']
                         self.preview_audio=d['previewAudio'];self.source_tool='none';self._subject_rollback=None
                         self.phase='ready';self.project_path=str(Path(path).absolute());self.project_dirty=False
+                        from ..core.raw_photo import quality_notices
+                        self.import_notice='；'.join(quality_notices(self.frames))
+                        self.reset_edit_history()
                         self.timeline_message='工程已恢复，可继续编辑。'+('部分音频或水印素材缺失，请重新选择。' if d.get('_warnings') else '')
                         self.engine.clear();self._rebuild_now();self._load_audio_overview()
                         self.save_settings();self.changed.emit('project');self.changed.emit('frames');self.changed.emit('analysis');self.changed.emit('audio');self.changed.emit('phase')
@@ -77,6 +82,8 @@ class ProjectWorkspace:
         self.audio.tracks=[t for t in self.audio.tracks if not t.videoOriginal]
         self.cache.retain_records([]);cache_policy.protect(self._cache_owner,[])
         self.phase='empty';self.project_path='';self.project_dirty=False;self._subject_rollback=None
+        self.import_notice=''
+        self.reset_edit_history()
         self.changed.emit('project');self.changed.emit('frames');self.changed.emit('phase')
 
     def protected_cache(self):

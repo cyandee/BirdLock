@@ -151,9 +151,17 @@ def cmd_selftest(_args):
     try:
         support_meta=json.loads((support/"manifest.json").read_text(encoding="utf-8"))
         sound_ok &= hashlib.sha256((support/"alipay-coffee.jpg").read_bytes()).hexdigest()==support_meta["sha256"]
+        if 'wechat' in support_meta:
+            sound_ok &= hashlib.sha256((support/"wechat-coffee.png").read_bytes()).hexdigest()==support_meta['wechat']["sha256"]
     except (OSError,ValueError,KeyError):sound_ok=False
     print("sound library and support image:", len(library), "PASS" if sound_ok else "FAIL")
     ok &= sound_ok
+    try:
+        import rawpy
+        print("RAW decoder:", rawpy.__version__, rawpy.libraw_version, "PASS")
+    except (ImportError, OSError) as error:
+        print("RAW decoder:", error, "FAIL")
+        ok = False
     rng = np.random.default_rng(1)
     n = 128
     yy, xx = np.mgrid[0:n, 0:n]

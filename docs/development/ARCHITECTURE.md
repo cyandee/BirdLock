@@ -26,3 +26,19 @@
 - **更新源**。同一份 config 的 `sources` 给出默认顺序（GitHub、BirdLock 镜像），`release_download_prefix` 是签名清单里可改写的 Release 前缀。两端遵守同一[源标准](../自动更新.md#合法更新源标准)，用户的自定义列表各自保存：Mac 存在 `UserDefaults` 的 `updates.sources`（`BirdLockCore/UpdateSources.swift`、`UpdateSourceProbe.swift`，`AppUpdater` 通过 Sparkle 的 `feedURLString` 和 `willDownloadUpdate` 接入），Windows 存在 `data/updates.json` 的 `sources`（`birdlock/app/updates.py` 以 `--source` 传给 `windows/updater`）。没有自定义时字段缺省，跟随新版默认值。`scripts/stage_updater.py` 把默认值写进 Mac 的 Info.plist。
 
 对齐用户可见的输入、默认行为、工程兼容性、输出、取消和错误反馈。识别数值、系统 UI、硬件可用性与编码器随平台变化。遇到差异，用同一份获准用于本机测试的素材检查两端的导入、编辑、导出和回退，并写明差异。[测试矩阵](TEST_MATRIX.md)
+
+## 下一版 Windows 阶段的共享约定
+
+继续使用 `schema: 1`。下表字段是增量扩展；旧工程无需迁移。Mac 必须实现读取和保留后才能用来重存这些新工程；现有 Swift 解码器可能忽略新字段。
+
+| 字段 | 缺省和兼容行为 | Windows 接入 | Mac 对应位置 |
+|---|---|---|---|
+| `audio.enabled`，`audio.tracks[].enabled` | 缺省 `true`。禁用不改 `muted`、路径、资源 ID、音量、开始位置、时长、循环、淡入淡出或静音区间；禁用轨不进入预览或导出。既有快门和视频原声仍按各自轨道处理 | `settings.py`、`exporter.py`、`audio_tracks.py` | `Export/SoundLibrary.swift`、预览混音、导出和 `WorkspaceDocument.swift` |
+| `segments[].groupID`，`segments[].name` | 新分组 UUID；旧组缺省标识 `legacy-<start>-<count>`。空名用现有序号显示；允许重名、Unicode，最多 256 字符。仍以原 `start/count/fps` 定义帧范围，`mergeGroups` 保留原索引语义；重命名、合并排序不重建标识 | `frames.py`、`workspace.py`、`project_editor.py`、`media_location.py` | `IO/SourceFrame.swift`、`IO/WorkspaceDocument.swift`、分组列表、`ProjectEditing.swift`；用 Finder 选择可用原片 |
+| `frames[].raw` 与 `analyses[].frames[].raw` | JPEG 等缺省无字段。RAW 写 `{mode, source, fullWidth, fullHeight}`；`mode: camera\|raw` 是用户选择，缺省策略为 `camera`；`source: embedded\|decoded` 是实际来源。两项完整尺寸和现有 `pixelWidth/pixelHeight` 都是按方向校正后的尺寸，后者表示实际使用的图像。原 `url` 始终指向原片 | `raw_photo.py`、`frames.py`、`workspace.py`；缓存键包括路径、大小、mtime、渲染策略、实际来源、解码库与处理版本 | `IO/SourceFrame.swift`、`ImageLoader.swift`、`WorkspaceDocument.swift`；验证 ImageIO / Core Image RAW 实际能力 |
+
+RAW 的相机模式优先使用内嵌预览并把已知的 ICC 色彩转为 sRGB；高分辨率模式用相机白平衡和 LibRaw 的 sRGB 输出，不保证复制相机厂商风格。策略不可用时尝试另一条解码路径并显示原因。内嵌图明显小于完整尺寸时显示实际尺寸并阻止以全分辨率名义导出。更改策略用于下一次导入，已保存项目重开沿用实际来源。RAW/JPEG 同目录同名且已知拍摄时间相差小于 0.51 秒（或至少一方时间未知）视为配对；默认 JPEG 优先，另可选 RAW 优先或导入两者。损坏的候选不会盖过可读取的配对文件。小图和分析代理留在缓存，不能代替原片引用。
+
+视频导入、界面和恢复都走同一校验：至多 600 秒、18,000 帧，采样不超过 60 fps 和源帧率，短于所选长度时按实际片尾计数。Windows 抽帧前估算每帧像素数加 64 KiB 的 JPEG/代理预算，叠加音频预算和磁盘余量；过程中继续检查可用空间，取消只清理本次临时文件。限额是分批保护，不能代替磁盘检查；保持既有 SDR 及编码边界。Mac 接手调整 `VideoImporter.swift`、`VideoImportSheet.swift`、缓存恢复及原声采样，并复测相同片段。
+
+编辑历史仅在当前会话保留最近 40 步；滑块拖动和调整位置合并，执行新编辑后改写重做分支。保存只写最终状态。重新导入、打开/关闭工程、重新识别建立新历史；导出和定位文件不写历史。菜单对照：两端「文件」提供导入、工程和导出，「编辑」提供撤销/重做，「播放」和「修片」保留现有命令；Windows 将「外观」和「显示当前原片」放「显示」，Mac 可沿用原生菜单和 Finder 命令。自定义设置保存在各自系统；Windows 旧版沿用深色，另可设浅色或跟随系统，DWM 保留原生窗口框架。

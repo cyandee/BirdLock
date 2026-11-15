@@ -7,6 +7,8 @@ explicitly so every decode path agrees. Unicode (Chinese) paths work on Windows 
 from __future__ import annotations
 
 import os
+import unicodedata
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -24,8 +26,9 @@ except Exception:  # pragma: no cover
     HAVE_HEIF = False
 
 from .util import median
+from .raw_photo import RAW_EXT
 
-SUPPORTED_EXT = {".jpg", ".jpeg", ".heic", ".heif", ".hif", ".png", ".tif", ".tiff"}
+SUPPORTED_EXT = {".jpg", ".jpeg", ".heic", ".heif", ".hif", ".png", ".tif", ".tiff"} | RAW_EXT
 JPEG_EXT = {".jpg", ".jpeg"}
 HEIF_EXT = {".heic", ".heif", ".hif"}
 
@@ -84,6 +87,7 @@ class SourceFrame:
     fileSize: int = 0
     modified: float = 0.0
     exif: ExifInfo = field(default_factory=ExifInfo)
+    raw: dict | None = None
 
     @property
     def file_name(self) -> str:
@@ -92,11 +96,18 @@ class SourceFrame:
     def to_dict(self) -> dict:
         d = dict(self.__dict__)
         d["exif"] = dict(self.exif.__dict__)
+        if self.raw is None:
+            d.pop("raw")
         return d
 
     @staticmethod
     def from_dict(d: dict) -> "SourceFrame":
         d = dict(d)
+        raw = d.get("raw")
+        if raw is not None and (not isinstance(raw, dict) or raw.get("mode") not in ("camera", "raw")
+                or raw.get("source") not in ("embedded", "decoded")
+                or any(type(raw.get(k)) is not int or not 0 < raw[k] <= 100_000 for k in ("fullWidth", "fullHeight"))):
+            raise ValueError("工程 RAW 图像记录无效。")
         d["exif"] = ExifInfo(**d.get("exif", {}))
         return SourceFrame(**d)
 
@@ -106,10 +117,20 @@ class BurstSegment:
     start: int
     stop: int        # exclusive
     fps: float
+    groupID: str = field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = ""
 
     @property
     def count(self) -> int:
         return self.stop - self.start
+
+    def label(self, index: int) -> str:
+        return self.name or f"第 {index+1} 组"
+
+    @classmethod
+    def from_project(cls, value):
+        start,count=value['start'],value['count']
+        return cls(start,start+count,value['fps'],value.get('groupID') or f'legacy-{start}-{count}',value.get('name') or '')
 
 
 # ---------------------------------------------------------------------------------------------- decoding
@@ -150,6 +171,9 @@ def load_image(frame: SourceFrame, scale: float = 1.0, gray: bool = False) -> np
     """
     ext = Path(frame.path).suffix.lower()
     try:
+        if ext in RAW_EXT:
+            from .raw_photo import inspect, pixels
+            return pixels(frame if frame.raw else inspect(frame.path, frame.id, 'camera'), scale, gray)
         if ext in HEIF_EXT or (ext not in JPEG_EXT and ext not in {".png", ".tif", ".tiff"}):
             with Image.open(frame.path) as im:
                 im = im.convert("L" if gray else "RGB")
@@ -204,6 +228,12 @@ def read_file_image(path: str, flags=cv2.IMREAD_COLOR) -> np.ndarray | None:
 
 def load_thumbnail(path: str, max_side: int = 160) -> np.ndarray | None:
     """Small BGR preview for the import dialog (fast: JPEG decoded at 1/8 when possible)."""
+    if Path(path).suffix.lower() in RAW_EXT:
+        try:
+            frame = read_frame(path, 0)
+            return load_max_side(frame, max_side)
+        except (ValueError, OSError):
+            return None
     img = read_file_image(path, cv2.IMREAD_REDUCED_COLOR_8)
     if img is None:
         try:
@@ -240,23 +270,23 @@ def _ratio(v):
             return None
 
 
-def read_frame(path: str, id: int) -> SourceFrame | None:
-    try:
-        with Image.open(path) as im:
-            w, h = im.size
-            exif = im.getexif()
-    except Exception:
+def clean_exif_text(value):
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if not isinstance(value, str):
         return None
-    if w <= 0 or h <= 0:
-        return None
-    orientation = int(exif.get(0x0112, 1) or 1)
-    if orientation >= 5:
-        w, h = h, w
+    end = len(value)
+    while end and (value[end-1].isspace() or unicodedata.category(value[end-1]) == "Cc"):
+        end -= 1
+    return value[:end].lstrip() or None
+
+
+def exif_metadata(exif):
     sub = exif.get_ifd(0x8769) if exif else {}
     info = ExifInfo()
-    info.make = (exif.get(0x010F) or "").strip() or None
-    info.model = (exif.get(0x0110) or "").strip() or None
-    info.lens = (sub.get(0xA434) or "").strip() or None if sub else None
+    info.make = clean_exif_text(exif.get(0x010F))
+    info.model = clean_exif_text(exif.get(0x0110))
+    info.lens = clean_exif_text(sub.get(0xA434))
     info.focalLength = _ratio(sub.get(0x920A)) if sub else None
     info.exposureTime = _ratio(sub.get(0x829A)) if sub else None
     info.fNumber = _ratio(sub.get(0x829D)) if sub else None
@@ -278,6 +308,25 @@ def read_frame(path: str, id: int) -> SourceFrame | None:
                     t += float("0." + digits)
         except Exception:
             t = None
+    return info, t
+
+
+def read_frame(path: str, id: int, raw_mode='camera') -> SourceFrame | None:
+    if Path(path).suffix.lower() in RAW_EXT:
+        from .raw_photo import inspect
+        return inspect(path, id, raw_mode)
+    try:
+        with Image.open(path) as im:
+            w, h = im.size
+            exif = im.getexif()
+            orientation = int(exif.get(0x0112, 1) or 1)
+            info, t = exif_metadata(exif)
+    except Exception:
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    if orientation >= 5:
+        w, h = h, w
     st = os.stat(path)
     return SourceFrame(id=id, path=os.path.abspath(path), pixelWidth=w, pixelHeight=h, orientation=orientation,
                        captureTime=t, fileSize=st.st_size, modified=st.st_mtime, exif=info)
@@ -292,7 +341,7 @@ def _images_in(folder: str) -> list[str]:
             and os.path.isfile(os.path.join(folder, n))]
 
 
-def collect_image_paths(paths: list[str], max_depth: int = 2, limit: int = 3000) -> list[str]:
+def collect_image_paths(paths: list[str], max_depth: int = 2, limit: int | None = None) -> list[str]:
     """Image files of the given files / folders. A folder without photos of its own is searched one or two
     levels deep (e.g. a parent folder holding one sub-folder per burst); bursts are split by time later."""
     out = []
@@ -316,9 +365,9 @@ def collect_image_paths(paths: list[str], max_depth: int = 2, limit: int = 3000)
             out += found
         elif os.path.isfile(p) and Path(p).suffix.lower() in SUPPORTED_EXT:
             out.append(p)
-        if len(out) >= limit:
-            break
-    return out[:limit]
+        if limit is not None and len(out) > limit:
+            raise ValueError(f'找到超过 {limit:,} 张照片；请缩小选择范围')
+    return list(dict.fromkeys(os.path.abspath(p) for p in out))
 
 
 def _natural_key(s: str):
@@ -326,11 +375,52 @@ def _natural_key(s: str):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
 
 
-def import_frames(paths: list[str]) -> list[SourceFrame]:
-    files = collect_image_paths(paths)
-    with ThreadPoolExecutor(max_workers=min(16, (os.cpu_count() or 4))) as ex:
-        frames = [f for f in ex.map(lambda a: read_frame(a[1], a[0]), enumerate(files)) if f]
+class PhotoImportCancelled(Exception):
+    pass
 
+
+def import_frames(paths: list[str], *, read=None, raw_mode='camera', pair_policy='jpeg', progress=lambda done,total: None,
+                  cancelled=lambda: False, rejected=lambda path,error: None) -> list[SourceFrame]:
+    files = collect_image_paths(paths)
+    if read is None:
+        read = lambda path,i: read_frame(path, i, raw_mode)
+    def inspect(item):
+        i, path = item
+        try:
+            frame = read(path, i)
+            return frame, None if frame else '无法读取图像或元数据'
+        except (OSError, ValueError, TypeError, OverflowError) as error:
+            return None, str(error)
+    frames = []
+    with ThreadPoolExecutor(max_workers=min(16, (os.cpu_count() or 4))) as ex:
+        for start in range(0, len(files), 32):
+            if cancelled():
+                raise PhotoImportCancelled()
+            batch = enumerate(files[start:start+32], start=start)
+            for i, (frame, error) in enumerate(ex.map(inspect, batch), start=start):
+                if cancelled():
+                    raise PhotoImportCancelled()
+                if frame is not None: frames.append(frame)
+                else: rejected(files[i], error)
+                progress(i+1, len(files))
+
+    if pair_policy not in ('jpeg','raw','both'):
+        raise ValueError('无效的 RAW+JPEG 导入策略')
+    if pair_policy != 'both':
+        def pair_key(frame):
+            return os.path.normcase(str(Path(frame.path).with_suffix('')))
+        preferred = {}
+        for frame in frames:
+            ext = Path(frame.path).suffix.lower()
+            if ext in (JPEG_EXT if pair_policy == 'jpeg' else RAW_EXT):
+                preferred.setdefault(pair_key(frame), []).append(frame)
+        def is_alternate(frame):
+            ext = Path(frame.path).suffix.lower()
+            if ext not in (RAW_EXT if pair_policy == 'jpeg' else JPEG_EXT):
+                return False
+            return any(frame.captureTime is None or other.captureTime is None or
+                       abs(frame.captureTime-other.captureTime) < .51 for other in preferred.get(pair_key(frame), ()))
+        frames = [frame for frame in frames if not is_alternate(frame)]
     # sort by time; equal timestamps (within 0.1 ms) fall back to file name order
     frames.sort(key=lambda f: _natural_key(f.file_name))
     frames.sort(key=lambda f: round(f.captureTime, 4) if f.captureTime is not None else float("inf"))
