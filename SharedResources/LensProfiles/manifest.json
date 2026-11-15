@@ -2979,11 +2979,11 @@
     {
       "id": "db-a6d325e330e119ed46b6",
       "file": "db-a6d325e330e119ed46b6.json",
-      "title": "Fufifilm · XT200 · KIT 15-45 · 1920×1080 / 25.00fps",
+      "title": "Fujifilm · XT200 · KIT 15-45 · 1920×1080 / 25.00fps",
       "sha256": "a6d325e330e119ed46b6a3885d7db2196efb7ff25064985f75a22db0e81ebe20",
       "sourceURL": "https://github.com/gyroflow/lens_profiles/blob/886fc616c9c2c788856f54c21d451b9cb7fc4f44/Fujifilm/Fufifilm_XT200_KIT%2015-45__1080p_16by9_1920x1080-25.00fps.json",
       "upstreamPath": "Fujifilm/Fufifilm_XT200_KIT 15-45__1080p_16by9_1920x1080-25.00fps.json",
-      "cameraBrand": "Fufifilm",
+      "cameraBrand": "Fujifilm",
       "cameraModels": [
         "XT200"
       ],
