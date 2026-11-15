@@ -43,7 +43,7 @@ cp "$TELEMETRY_DIR/manifest.json" "$APP/Contents/Resources/Telemetry/manifest.js
 cp -R "$TELEMETRY_DIR/Licenses" "$APP/Contents/Resources/Telemetry/Licenses"
 cp -R Models/*.mlmodelc "$APP/Contents/Resources/Models/"
 cp Models/*.json "$APP/Contents/Resources/Models/" 2>/dev/null || true
-[ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 
 # Bundled documents: agreement, licenses, manual (HTML + PDF)
 DOCS="$APP/Contents/Resources/Docs"
@@ -74,10 +74,26 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
   <key>UTExportedTypeDeclarations</key>
-  <array><dict><key>UTTypeIdentifier</key><string>app.birdlock.project</string><key>UTTypeDescription</key><string>BirdLock 工程</string><key>UTTypeConformsTo</key><array><string>public.json</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>birdlock</string></array></dict></dict></array>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>app.birdlock.project</string>
+      <key>UTTypeDescription</key><string>BirdLock 工程</string>
+      <key>UTTypeIconFile</key><string>AppIcon.icns</string>
+      <!-- Expose this as a project document so Finder does not show a JSON thumbnail. -->
+      <key>UTTypeConformsTo</key><array><string>public.data</string><string>public.content</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict><key>public.filename-extension</key><array><string>birdlock</string></array></dict>
+    </dict>
+  </array>
   <key>CFBundleDocumentTypes</key>
   <array>
-    <dict><key>CFBundleTypeName</key><string>BirdLock 工程</string><key>CFBundleTypeRole</key><string>Editor</string><key>LSHandlerRank</key><string>Owner</string><key>LSItemContentTypes</key><array><string>app.birdlock.project</string></array></dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>BirdLock 工程</string>
+      <key>CFBundleTypeIconFile</key><string>AppIcon.icns</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Owner</string>
+      <key>LSItemContentTypes</key><array><string>app.birdlock.project</string></array>
+    </dict>
     <dict>
       <key>CFBundleTypeName</key><string>连拍文件夹</string>
       <key>CFBundleTypeRole</key><string>Viewer</string>

@@ -234,6 +234,7 @@ struct DropZoneView: View {
             Button("选择文件夹…") { openImportPanel(state) }
                 .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.large)
             Button("导入视频（实验）…") { openVideoPanel(state) }
+            Button("打开工程…") { state.openProjectPanel() }
         }
         .padding(60)
         .background(
