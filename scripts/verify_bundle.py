@@ -133,7 +133,7 @@ def verify(app: Path, version: str, universal: bool = False):
     verify_lens_profiles(resources / "LensProfiles")
     audio = resources / "Audio"
     entries = json.loads((audio / "library.json").read_text(encoding="utf-8"))
-    if len(entries) != 12 or len({e["id"] for e in entries}) != 12 or "single-canon-rebel" not in {e["id"] for e in entries}:
+    if len(entries) != 17 or len({e["id"] for e in entries}) != 17 or "single-canon-rebel" not in {e["id"] for e in entries}:
         raise ValueError("内置音效清单不完整")
     for entry in entries:
         if Path(entry["file"]).name != entry["file"] or hashlib.sha256((audio / entry["file"]).read_bytes()).hexdigest() != entry["sha256"]:

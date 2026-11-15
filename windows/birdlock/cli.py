@@ -140,8 +140,8 @@ def cmd_selftest(_args):
     from pathlib import Path
     from .core.sounds import assets, asset_path
     library = assets()
-    sound_ok = len(library) == 12 and len({e["id"] for e in library}) == 12
-    sound_ok &= {e.get("cameraID") for e in library if e.get("kind")=="burst"} == {"sony-a1m2","sony-a93","sony-a7m5","sony-a7r6","nikon-z8"}
+    sound_ok = len(library) == 17 and len({e["id"] for e in library}) == 17
+    sound_ok &= {e.get("cameraID") for e in library if e.get("kind")=="burst"} == {"sony-a1m2","sony-a93","sony-a7m5","sony-a7r6","nikon-z8","canon-1d-mark-ii","canon-r5-mark-ii"}
     sound_ok &= any(e["id"]=="single-canon-rebel" and e.get("license")=="CC0-1.0" for e in library)
     sound_ok &= all(hashlib.sha256(Path(asset_path(e["id"])).read_bytes()).hexdigest() == e["sha256"] for e in library)
     from .core.paths import resource_dir
