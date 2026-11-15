@@ -91,7 +91,9 @@ public enum VideoImporter {
         try fm.createDirectory(at: stage, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: stage) }
         let asset = AVURLAsset(url: url)
-        let track = try awaitSync { try await asset.loadTracks(withMediaType: .video).first! }
+        guard let track = try awaitSync({ try await asset.loadTracks(withMediaType: .video).first }) else {
+            throw VideoImportError.invalid("视频里没有可用的画面轨道")
+        }
         let transform = try awaitSync { try await track.load(.preferredTransform) }
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])

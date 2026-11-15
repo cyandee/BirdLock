@@ -187,7 +187,7 @@ public final class RenderJob: @unchecked Sendable {
         let w = max(2, Int((Double(sz.w) * scale).rounded())), h = max(2, Int((Double(sz.h) * scale).rounded()))
         let xf = plan.xforms[i].scaled(Double(w) / Double(sz.w))
         let fill = composition.edgeFill
-        return renderer.compose(source: source, sourceScale: sourceScale, originalHeight: Double(analysis.frames[i].pixelHeight),
+        return renderer.compose(source: source, sourceScale: sourceScale,
                                 xform: xf, outW: w, outH: h, gains: gains[i], edgeFill: fill,
                                 overlays: withOverlays ? overlays(for: i, outW: w, outH: h) : [])
     }

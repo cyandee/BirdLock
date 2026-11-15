@@ -32,6 +32,10 @@ final class Renderer: NSObject, WKNavigationDelegate {
 }
 
 let args = CommandLine.arguments
+guard args.count >= 3 else {
+    FileHandle.standardError.write(Data("usage: html2pdf <input.html> <output.pdf>\n".utf8))
+    exit(2)
+}
 let app = NSApplication.shared
 app.setActivationPolicy(.prohibited)
 let r = Renderer(out: URL(fileURLWithPath: args[2]))

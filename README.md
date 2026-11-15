@@ -92,8 +92,8 @@ Mac 版还没有做 Apple 公证，首次打开可能被系统拦截，安装方
 macOS 使用 SwiftUI / Core ML，Windows 使用 Python / Qt / ONNX Runtime。版本号统一放在 [VERSION](VERSION)。
 
 ```zsh
-zsh scripts/build_app.sh
-zsh scripts/make_dmg.sh
+zsh scripts/build_app.sh   # 只构建 dist/BirdLock.app
+zsh scripts/make_dmg.sh    # 构建通用版 app 并打成 dist/BirdLock-<版本>.dmg
 ```
 
 Windows 构建方法见 [windows/README.md](windows/README.md)。飞机模型约 204 MB，构建脚本会按固定版本和 SHA256 下载；安装包已经包含模型，使用时不用另外下载。

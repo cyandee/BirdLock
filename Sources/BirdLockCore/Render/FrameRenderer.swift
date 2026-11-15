@@ -87,7 +87,7 @@ public final class FrameRenderer: @unchecked Sendable {
     /// - Parameters:
     ///   - source: decoded source (full res or a proxy)
     ///   - sourceScale: source-image pixels per original-source pixel (proxy = proxyW / fullW)
-    public func compose(source: CIImage, sourceScale: Double, originalHeight: Double, xform: FrameXform,
+    public func compose(source: CIImage, sourceScale: Double, xform: FrameXform,
                         outW: Int, outH: Int, gains: [Double], edgeFill: EdgeFill, overlays: [OverlayItem] = []) -> CIImage {
         var img = source
         let Hs = Double(source.extent.height)

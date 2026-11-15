@@ -2,6 +2,24 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+/// EXIF capture time is parsed for every photo, often from parallel import workers,
+/// so keep one formatter behind a lock instead of building one per file.
+private enum ExifDateParser {
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        return f
+    }()
+    private static let lock = NSLock()
+
+    static func date(from string: String) -> Date? {
+        lock.lock(); defer { lock.unlock() }
+        return formatter.date(from: string)
+    }
+}
+
 public struct ExifInfo: Codable, Hashable, Sendable {
     public var make: String?
     public var model: String?
@@ -101,11 +119,7 @@ public enum FrameImporter {
 
         var t: Double? = nil
         if let dto = exif.dateTimeOriginal ?? (tiffD[kCGImagePropertyTIFFDateTime] as? String) {
-            let f = DateFormatter()
-            f.locale = Locale(identifier: "en_US_POSIX")
-            f.timeZone = TimeZone(secondsFromGMT: 0)
-            f.dateFormat = "yyyy:MM:dd HH:mm:ss"
-            if let d = f.date(from: dto) {
+            if let d = ExifDateParser.date(from: dto) {
                 t = d.timeIntervalSinceReferenceDate
                 if let sub = (exifD[kCGImagePropertyExifSubsecTimeOriginal] as? String) ?? (exifD[kCGImagePropertyExifSubsecTime] as? String) {
                     let digits = sub.trimmingCharacters(in: .whitespaces)

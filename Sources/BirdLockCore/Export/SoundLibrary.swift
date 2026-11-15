@@ -13,7 +13,9 @@ public struct SoundAsset: Codable, Identifiable, Sendable {
 }
 
 public enum SoundLibrary {
-    public static var directory: URL? {
+    /// Resolved once: bundled resources never change at runtime, and callers in SwiftUI
+    /// bodies would otherwise re-read library.json from disk on every update.
+    public static let directory: URL? = {
         var candidates: [URL] = []
         if let resource = Bundle.main.resourceURL { candidates.append(resource.appendingPathComponent("Audio")) }
         candidates.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("SharedResources/Audio"))
@@ -23,21 +25,21 @@ public enum SoundLibrary {
             root.deleteLastPathComponent()
         }
         return candidates.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("library.json").path) }
-    }
+    }()
 
-    public static var assets: [SoundAsset] {
+    public static let assets: [SoundAsset] = {
         guard let root = directory, let data = try? Data(contentsOf: root.appendingPathComponent("library.json")),
               let list = try? JSONDecoder().decode([SoundAsset].self, from: data) else { return [] }
         return list.filter { !$0.file.contains("/") && !$0.file.contains("..") && FileManager.default.fileExists(atPath: root.appendingPathComponent($0.file).path) }
-    }
+    }()
 
     public static func canonicalID(_ id: String) -> String {
         ["sony-10": "sony-a1m2-10", "sony-20": "sony-a1m2-30"][id] ?? id
     }
-    public static var burstAssets: [SoundAsset] { assets.filter { $0.kind == "burst" } }
-    public static var cameras: [String] {
+    public static let burstAssets: [SoundAsset] = assets.filter { $0.kind == "burst" }
+    public static let cameras: [String] = {
         var seen = Set<String>(); return burstAssets.compactMap { seen.insert($0.cameraID).inserted ? $0.cameraID : nil }
-    }
+    }()
     public static func asset(for id: String) -> SoundAsset? { assets.first { $0.id == canonicalID(id) } }
     public static func url(for id: String) -> URL? {
         guard let asset = asset(for: id), let root = directory else { return nil }

@@ -232,7 +232,7 @@ final class VideoStabilizationTests: XCTestCase {
         let image = try texturedImage(width:640,height:480)
         for i in sourceFrames.indices {
             let xf = FrameXform(a:.zero,p:V2(Double(i)*5,Double(i)*(-3)),z:1,psi:0,valid:true)
-            let output = renderer.compose(source:CIImage(cgImage:image),sourceScale:1,originalHeight:480,xform:xf,outW:640,outH:480,gains:[1,1,1],edgeFill:.black)
+            let output = renderer.compose(source:CIImage(cgImage:image),sourceScale:1,xform:xf,outW:640,outH:480,gains:[1,1,1],edgeFill:.black)
             XCTAssertTrue(ImageLoader.writePNG(try XCTUnwrap(renderer.renderCGImage(output)),to:sourceFrames[i].url))
         }
         let data = try XCTUnwrap(VideoStabilization.prepare(frames:sourceFrames,video:sourceFrames[0].url,start:0,fps:30))
@@ -257,7 +257,7 @@ final class VideoStabilizationTests: XCTestCase {
         let renderer = FrameRenderer.shared
         let expected = Mat3.similarity(12,-7,0.04)
         let xf = FrameXform(a:.zero,p:.zero,z:1,psi:0,valid:true,prewarp:expected.v)
-        let warped = renderer.compose(source:CIImage(cgImage:image),sourceScale:1,originalHeight:Double(h),xform:xf,outW:w,outH:h,gains:[1,1,1],edgeFill:.black)
+        let warped = renderer.compose(source:CIImage(cgImage:image),sourceScale:1,xform:xf,outW:w,outH:h,gains:[1,1,1],edgeFill:.black)
         let target = try XCTUnwrap(renderer.renderCGImage(warped))
         let (measured,quality) = VideoStabilization.imagePair(previous:image,current:target)
         XCTAssertGreaterThan(quality,0.65)
@@ -270,7 +270,7 @@ final class VideoStabilizationTests: XCTestCase {
         let w = 640, h = 480, image = try gradientImage(width:w,height:h), renderer = FrameRenderer.shared
         let matrix = Mat3([1.01,0.02,8,-0.01,0.99,-5,0.00008,-0.00004,1])
         let xf = FrameXform(a:V2(320,240),p:V2(160,120),z:0.5,psi:0.06,valid:true,prewarp:matrix.v)
-        let result = renderer.compose(source:CIImage(cgImage:image),sourceScale:1,originalHeight:480,xform:xf,outW:320,outH:240,gains:[1,1,1],edgeFill:.black)
+        let result = renderer.compose(source:CIImage(cgImage:image),sourceScale:1,xform:xf,outW:320,outH:240,gains:[1,1,1],edgeFill:.black)
         let actual = rgba(renderer,result,width:320,height:240)
         for point in [V2(80.5,60.5),V2(160.5,120.5),V2(240.5,180.5)] {
             let source = xf.unmap(point), index = (Int(point.y)*320+Int(point.x))*4
@@ -278,7 +278,7 @@ final class VideoStabilizationTests: XCTestCase {
             XCTAssertEqual(Double(actual[index+1]),source.y/Double(h)*255,accuracy:3)
         }
         let proxy = CIImage(cgImage:image).applyingFilter("CILanczosScaleTransform",parameters:[kCIInputScaleKey:0.5])
-        let proxyResult = renderer.compose(source:proxy,sourceScale:0.5,originalHeight:480,xform:xf,outW:320,outH:240,gains:[1,1,1],edgeFill:.black)
+        let proxyResult = renderer.compose(source:proxy,sourceScale:0.5,xform:xf,outW:320,outH:240,gains:[1,1,1],edgeFill:.black)
         let proxyBytes = rgba(renderer,proxyResult,width:320,height:240)
         for point in [V2(80,60),V2(160,120),V2(240,180)] {
             let i = (Int(point.y)*320+Int(point.x))*4

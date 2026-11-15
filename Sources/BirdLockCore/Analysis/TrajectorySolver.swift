@@ -22,13 +22,12 @@ public enum TrajectorySolver {
     public struct Output {
         public var positions: [V2]
         public var measurementInlier: [Bool]
-        public var linkInlier: [Bool]
     }
 
     /// `links[i]` connects frame i-1 -> i (links[0] ignored).
     public static func solve(measurements m: [Measurement], links: [Link], cauchyK: Double = 3.0, iterations: Int = 12) -> Output {
         let n = m.count
-        guard n > 0 else { return Output(positions: [], measurementInlier: [], linkInlier: []) }
+        guard n > 0 else { return Output(positions: [], measurementInlier: []) }
         var w0 = m.map { $0.value == nil ? 0 : 1 / max(1e-6, $0.sigma * $0.sigma) }
         let l0 = (0..<n).map { i -> Double in
             guard i > 0, i < links.count, links[i].delta != nil else { return 0 }
@@ -36,8 +35,7 @@ public enum TrajectorySolver {
         }
         // If no absolute measurement at all we cannot solve.
         if w0.allSatisfy({ $0 == 0 }) {
-            return Output(positions: Array(repeating: V2(0, 0), count: n), measurementInlier: Array(repeating: false, count: n),
-                          linkInlier: Array(repeating: false, count: n))
+            return Output(positions: Array(repeating: V2(0, 0), count: n), measurementInlier: Array(repeating: false, count: n))
         }
         // Tiny prior towards the gap-filled measurement keeps disconnected components well posed.
         let filledX = Signal.fillGaps(m.map { $0.value?.x ?? .nan })
@@ -51,7 +49,7 @@ public enum TrajectorySolver {
 
         var w = w0, l = l0
         var x = mx, y = my
-        var mIn = [Bool](repeating: true, count: n), lIn = [Bool](repeating: true, count: n)
+        var mIn = [Bool](repeating: true, count: n)
         for _ in 0..<iterations {
             x = thomas(w: w, l: l, m: mx, r: rx)
             y = thomas(w: w, l: l, m: my, r: ry)
@@ -70,10 +68,9 @@ public enum TrajectorySolver {
                 let s = links[i].sigma
                 let u = e / (cauchyK * s)
                 l[i] = l0[i] / (1 + u * u)
-                lIn[i] = e <= 3 * s
             }
         }
-        return Output(positions: (0..<n).map { V2(x[$0], y[$0]) }, measurementInlier: mIn, linkInlier: lIn)
+        return Output(positions: (0..<n).map { V2(x[$0], y[$0]) }, measurementInlier: mIn)
     }
 
     /// Solve the tridiagonal normal equations for one axis.

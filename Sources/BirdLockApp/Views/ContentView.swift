@@ -16,8 +16,14 @@ struct ContentView: View {
         if urls.count==1,urls[0].pathExtension.lowercased()=="birdlock" { state.openProjectPanel(urls[0]);return }
         if urls.contains(where: { VideoImporter.extensions.contains($0.pathExtension.lowercased()) }) { if state.confirmCanLeave() { state.importURLs(urls) };return }
         let audio = urls.filter { isAudioFile($0) }
-        if audio.count == urls.count, state.analysis != nil, let u = audio.first { state.setAudio(u) }
-        else if state.frames.isEmpty || !urls.isEmpty { if state.confirmCanLeave() { state.importURLs(urls.filter { !isAudioFile($0) }) } }
+        if audio.count == urls.count {
+            if state.analysis != nil, let u = audio.first { state.setAudio(u) }
+            else { state.timelineMessage = "请先导入照片或工程，再添加音乐。" }
+            return
+        }
+        let images = urls.filter { !isAudioFile($0) }
+        guard !images.isEmpty else { return }
+        if state.confirmCanLeave() { state.importURLs(images) }
     }
 
     var body: some View {
@@ -120,11 +126,14 @@ struct ContentView: View {
             if urls.contains(where: { VideoImporter.extensions.contains($0.pathExtension.lowercased()) || $0.pathExtension.lowercased()=="birdlock" }) { open(urls); return }
             // a dropped audio file (with a burst already loaded) becomes the background music
             let audio = urls.filter { isAudioFile($0) }
-            if audio.count == urls.count, state.analysis != nil, let u = audio.first {
-                state.setAudio(u)
-            } else {
-                if state.confirmCanLeave() { state.importURLs(urls.filter { !isAudioFile($0) }) }
+            if audio.count == urls.count {
+                if state.analysis != nil, let u = audio.first { state.setAudio(u) }
+                else { state.timelineMessage = "请先导入照片或工程，再添加音乐。" }
+                return
             }
+            let images = urls.filter { !isAudioFile($0) }
+            guard !images.isEmpty else { return }
+            if state.confirmCanLeave() { state.importURLs(images) }
         }
     }
 }
