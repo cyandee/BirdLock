@@ -31,6 +31,8 @@ struct BirdLockApp: App {
                 Toggle("自动检查更新", isOn: Binding(get: { updater.automatic }, set: { updater.automatic = $0 }))
                     .disabled(!updater.configured)
                 Toggle("接收测试版更新", isOn: Binding(get: { updater.includeBeta }, set: { updater.includeBeta = $0 }))
+                Button("更新源…") { UpdateSourcesWindow.show(updater) }
+                    .disabled(!updater.configured)
                 Divider()
                 Button("用户协议…") { LegalWindow.show(.agreement) }
                 Button("许可与第三方组件…") { LegalWindow.show(.notices) }
