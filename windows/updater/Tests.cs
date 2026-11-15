@@ -32,6 +32,10 @@ public static class Tests {
    p.mirrors=new[]{"https://mirror.test/archive.zip"};int attempts=0;
    Engine.Transport=(u,start)=>{attempts++;if(u.Contains("example.test"))throw new System.Net.WebException("offline");return Reply(bytes,start,u);};
    result=Engine.Download(p,Path.Combine(root,"mirror"));Assert(Engine.Matches(result,p)&&attempts==4,"mirror fallback with same hash");
+   p.mirrors=new[]{"https://good.test/archive.zip"};var poisoned=new List<string>();
+   Engine.Transport=(u,start)=>{poisoned.Add(u+":"+start);if(u.Contains("example.test"))return new HttpReply{status=200,finalUrl=u,body=new MemoryStream(new byte[bytes.Length+10])};return Reply(bytes,start,u);};
+   result=Engine.Download(p,Path.Combine(root,"poisoned"));
+   Assert(Engine.Matches(result,p)&&poisoned.Last()=="https://good.test/archive.zip:0","bytes from a failed source are not resumed by the next");
    Engine.FreeSpace=path=>1;Reject(()=>Engine.Prepare(Fixture(),"1.0.0",Path.Combine(root,"low-disk"),Path.Combine(root,"cache")),"disk space check");Assert(!Directory.Exists(Path.Combine(root,"low-disk")),"low disk leaves app unchanged");
   } finally {Engine.Transport=network;Engine.Progress=progress;Engine.FreeSpace=free;Engine.Cancelled=false;}
  }
@@ -47,7 +51,12 @@ public static class Tests {
    var custom=Engine.Sources(config,new[]{"https://other.test/u/","github","https://other.test/u"});
    Assert(custom.Count==2 && custom[0].url=="https://other.test/u/" && custom[0].name=="other.test" && custom[1].id=="github","requested order overrides defaults and removes duplicates");
    Assert(Engine.Sources(new Config{windows=cfg},null).Single().id=="github","missing source list falls back to GitHub");
-   foreach(var bad in new[]{"http://mirror.test/","https://user:pw@mirror.test/","https://mirror.test/?a=1","https://mirror.test/#a","ftp://mirror.test/",""})Reject(()=>Engine.Sources(config,new[]{bad}),"source "+bad);
+   foreach(var bad in new[]{"http://mirror.test/","https://user:pw@mirror.test/","https://mirror.test/?a=1","https://mirror.test/#a","ftp://mirror.test/","","https://mirror:8o8o/","https://exa mple.test/"}) {
+    Reject(()=>Engine.SourceBase(bad),"source "+bad);
+    var kept=Engine.Sources(config,new[]{bad,"https://good.test/","github"});
+    Assert(kept.Count==2 && kept[0].url=="https://good.test/" && kept[1].id=="github","invalid source skipped: "+bad);
+    Assert(Engine.Sources(config,new[]{bad}).Single().id=="github","only invalid sources fall back to GitHub: "+bad);
+   }
    Reject(()=>Engine.Sources(config,Enumerable.Range(0,11).Select(i=>"https://m"+i+".test/").ToList()),"too many sources");
    var github=defaults[0];var mirror=defaults[1];
    Assert(Engine.FeedUrl(github,cfg,true)==cfg.feed_url && Engine.FeedUrl(github,cfg,false)==cfg.stable_feed_url,"GitHub feeds come from config");

@@ -93,11 +93,13 @@ public static class Engine {
         if(items.Count==0) items.Add(new Source{id="github"});
         if(items.Count>10) throw new Exception("更新源过多");
         var result=new List<Source>();
+        // A mistyped custom source must not take the remaining sources down with it.
         foreach(var s in items) {
             if(s.id=="github") { s.url=null;s.name=String.IsNullOrEmpty(s.name)?"GitHub":s.name; }
-            else { s.id=null;s.url=SourceBase(s.url);if(String.IsNullOrEmpty(s.name))s.name=new Uri(s.url).Host; }
+            else { s.id=null;try{s.url=SourceBase(s.url);}catch{continue;}if(String.IsNullOrEmpty(s.name))s.name=new Uri(s.url).Host; }
             if(!result.Any(o=>o.id==s.id && o.url==s.url)) result.Add(s);
         }
+        if(result.Count==0) result.Add(new Source{id="github",name="GitHub"});
         return result;
     }
     public static string FeedUrl(Source s,WindowsConfig config,bool beta) {
@@ -158,7 +160,12 @@ public static class Engine {
         string original=package.url;
         var urls=new List<string>{original};if(package.mirrors!=null)urls.AddRange(package.mirrors);
         try {
-            for(int i=0;i<urls.Count;i++) { package.url=urls[i];try { return DownloadOne(package,cache); } catch(OperationCanceledException){throw;} catch {if(i==urls.Count-1)throw;} }
+            for(int i=0;i<urls.Count;i++) {
+                package.url=urls[i];
+                // Resume only within one source: bytes left by a failed source must not poison the next one.
+                if(i>0) { string partial=Path.Combine(cache,package.sha256+".zip.part");if(File.Exists(partial))File.Delete(partial); }
+                try { return DownloadOne(package,cache); } catch(OperationCanceledException){throw;} catch {if(i==urls.Count-1)throw;}
+            }
             throw new Exception("所有下载源均失败");
         } finally {package.url=original;}
     }

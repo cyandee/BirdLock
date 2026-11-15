@@ -10,6 +10,7 @@ import os
 final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     @Published private(set) var canCheck = false
     @Published private(set) var activeSource: UpdateSource?
+    @Published private(set) var checkPending = false
     private var observation: NSKeyValueObservation?
     private var controller: SPUStandardUpdaterController!
     var isBusy: () -> Bool = { false }
@@ -17,6 +18,8 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     private var timer: Timer?
     let sourceList: UpdateSourceList
     private var probe: Task<Void, Never>?
+    private var probing = false
+    private var refreshTimer: Timer?
     // Read from Sparkle callbacks; until a probe finishes the first listed source is used.
     private nonisolated let selected: OSAllocatedUnfairLock<UpdateSource?>
     private nonisolated let githubFeed = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String
@@ -40,7 +43,9 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     }
     func start() {
         Diagnostics.record("updater configured=\(configured) sources=\(sources.count) custom=\(sourceList.isCustom)")
-        if configured { refreshSource();controller.startUpdater() }
+        // A launch check may be due at once, so start Sparkle only after the first probe has picked a source.
+        guard configured else { return }
+        Task { await self.settledProbe();self.controller.startUpdater() }
     }
     func check() {
         Diagnostics.record("update check requested beta=\(includeBeta)")
@@ -51,8 +56,9 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
             if a.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(URL(string: "https://github.com/cyandee/BirdLock/releases")!) }
             return
         }
-        let probe = refreshSource()
-        Task { await probe.value;self.controller.checkForUpdates(nil) }
+        guard !checkPending else { return }
+        checkPending = true
+        Task { await self.settledProbe();self.checkPending = false;self.controller.checkForUpdates(nil) }
     }
     var automatic: Bool {
         get { configured && controller.updater.automaticallyChecksForUpdates }
@@ -72,13 +78,25 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
             Diagnostics.record("update sources changed count=\(sourceList.sources.count) custom=\(sourceList.isCustom)")
             let first = sourceList.sources.first
             selected.withLock { $0 = first }
-            if configured { refreshSource() }
+            if configured { refreshSource(restart: true) }
         }
     }
 
+    /// Waits for a probe that reflects the current list; a probe restarted by a list edit is followed to its replacement.
+    private func settledProbe() async {
+        var task = refreshSource()
+        while true {
+            await task.value
+            guard let current = probe, current != task else { return }
+            task = current
+        }
+    }
     /// Probes every source at once and keeps the first one, in the user's order, whose feed and newest archive answer.
-    @discardableResult func refreshSource() -> Task<Void, Never> {
+    /// A running probe is reused unless the list changed.
+    @discardableResult func refreshSource(restart: Bool = false) -> Task<Void, Never> {
+        if let probe, probing, !restart { return probe }
         probe?.cancel()
+        probing = true
         let sources = sourceList.sources, feed = githubFeed, prefix = releasePrefix
         let agent = "BirdLock/\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0") UpdateSourceProbe"
         let task = Task { [weak self] in
@@ -86,6 +104,7 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
                 await UpdateSourceProbe.reachable($0, githubFeed: feed, releasePrefix: prefix, userAgent: agent)
             }
             guard !Task.isCancelled, let self else { return }
+            self.probing = false
             let source = chosen ?? sources.first
             self.selected.withLock { $0 = source }
             self.activeSource = chosen
@@ -108,9 +127,15 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     nonisolated func feedURLString(for updater: SPUUpdater) -> String? {
         selected.withLock { $0 }?.feedURL(githubFeed: githubFeed)
     }
+    /// Re-probes shortly before a scheduled check so a network change since the last check is picked up.
     @objc(updater:willScheduleUpdateCheckAfterDelay:)
     nonisolated func updater(_ updater: SPUUpdater, willScheduleUpdateCheckAfterDelay delay: TimeInterval) {
-        Task { @MainActor in self.refreshSource() }
+        Task { @MainActor in
+            self.refreshTimer?.invalidate()
+            self.refreshTimer = Timer.scheduledTimer(withTimeInterval: max(0, delay - 60), repeats: false) { [weak self] _ in
+                Task { @MainActor in self?.refreshSource() }
+            }
+        }
     }
     /// The signed feed names GitHub release URLs; the archive signature makes any relaying source equivalent.
     @objc(updater:willDownloadUpdate:withRequest:)

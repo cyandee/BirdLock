@@ -27,7 +27,7 @@ struct BirdLockApp: App {
             CommandGroup(replacing: .appInfo) {
                 Button("关于 BirdLock 鸟眼锁定") { AppDocs.showAbout() }
                 Button("检查更新…") { updater.check() }
-                    .disabled(updater.configured && !updater.canCheck)
+                    .disabled(updater.configured && (!updater.canCheck || updater.checkPending))
                 Toggle("自动检查更新", isOn: Binding(get: { updater.automatic }, set: { updater.automatic = $0 }))
                     .disabled(!updater.configured)
                 Toggle("接收测试版更新", isOn: Binding(get: { updater.includeBeta }, set: { updater.includeBeta = $0 }))

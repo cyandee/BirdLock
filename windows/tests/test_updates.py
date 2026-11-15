@@ -59,7 +59,8 @@ class UpdateSourceTests(unittest.TestCase):
     def test_source_url_rules(self):
         self.assertEqual(updates.source_base(' https://Mirror.Test/a/b '),'https://mirror.test/a/b/')
         self.assertEqual(updates.source_base(MIRROR),MIRROR)
-        for bad in ('http://mirror.test/','https://u:p@mirror.test/','https://mirror.test/?x=1','https://mirror.test/#a','mirror.test','https:///path'):
+        for bad in ('http://mirror.test/','https://u:p@mirror.test/','https://mirror.test/?x=1','https://mirror.test/#a','mirror.test','https:///path',
+                    'https://mirror:8o8o/','https://host:99999/x','https://exa mple.com/','https://%zz/','https://m.test/a b/'):
             with self.assertRaises(ValueError,msg=bad):updates.source_base(bad)
     def test_defaults_and_saved_order(self):
         self.assertEqual(updates.default_sources(),DEFAULTS)

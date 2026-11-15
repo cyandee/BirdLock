@@ -1,6 +1,6 @@
 """Update UI. Signature checks and installation run in a separate, small Windows process."""
 from __future__ import annotations
-import json,os,shutil,subprocess,sys,time,uuid,math
+import json,os,re,shutil,subprocess,sys,time,uuid,math
 from pathlib import Path
 from urllib.parse import urlsplit,urlunsplit
 from PySide6.QtCore import QProcess,QTimer,Qt,QUrl
@@ -16,7 +16,10 @@ MAX_SOURCES=10
 def source_base(value):
     """A source relays the signed feeds at <base>/windows*.json and release assets at <base>/download/<tag>/<name>."""
     u=urlsplit(str(value).strip())
-    if u.scheme.lower()!='https' or not u.hostname or u.username or u.password or u.query or u.fragment:
+    try:
+        u.port;host=(u.hostname or '').encode('idna').decode('ascii')
+    except (ValueError,UnicodeError):host=''
+    if u.scheme.lower()!='https' or not re.fullmatch(r'[a-z0-9.-]+|[0-9a-f:.]+',host) or u.username or u.password or u.query or u.fragment or re.search(r'\s',u.path):
         raise ValueError('更新源必须是 HTTPS 地址，且不能带账号、查询参数或 #')
     path=u.path if u.path.endswith('/') else u.path+'/'
     return urlunsplit(('https',u.netloc.lower(),path,'',''))
@@ -126,11 +129,12 @@ class UpdateDialog(QDialog):
         return self.prefs.get('sources') or default_sources()
     def edit_sources(self):
         if self.installing:return
-        if self.query.state()!=QProcess.NotRunning:self.query.kill();self.query.waitForFinished(1000)
         defaults=default_sources();dialog=SourcesDialog(self.current_sources(),defaults,self)
         if dialog.exec()!=QDialog.Accepted:return
         chosen=dialog.sources();self.prefs['sources']=None if chosen==defaults else chosen;self.save()
-        log.info('update sources changed count=%d custom=%s',len(chosen),chosen!=defaults);self.check()
+        log.info('update sources changed count=%d custom=%s',len(chosen),chosen!=defaults)
+        if self.query.state()!=QProcess.NotRunning:self.query.kill();self.query.waitForFinished(1000)
+        self.check()
     def busy(self):
         return self.state.export_running or self.state.phase in ('importing','analyzing')
     def check(self,*_):

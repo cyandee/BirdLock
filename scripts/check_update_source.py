@@ -38,6 +38,10 @@ def fetch(url,method='GET',first=None,last=None):
         with OPENER.open(Request(url,headers=headers,method=method),timeout=120) as r:
             return r.status,r.headers,(b'' if method=='HEAD' else r.read()),r.geturl()
     except HTTPError as e:return e.code,e.headers,b'',url
+    except (OSError,ValueError) as e:return 0,{'X-Check-Error':f'{type(e).__name__}: {e}'},b'',url
+
+def status_text(status,headers):
+    return f'HTTP {status}' if status else headers.get('X-Check-Error','request failed')
 
 def verify_windows(data,cfg):
     env=json.loads(data);payload=base64.b64decode(env['payload'],validate=True)
@@ -84,7 +88,7 @@ def check(base,cfg,compare=True,full_limit=16*1024*1024):
     for name in FEEDS:
         status,headers,body,final=fetch(base+name)
         ok=status==200 and final.startswith('https://') and not headers.get('Content-Encoding')
-        record(ok,'feed '+name,f'HTTP {status}, {len(body)} B, sha256 {hashlib.sha256(body).hexdigest()[:16]}')
+        record(ok,'feed '+name,status_text(status,headers)+f', {len(body)} B, sha256 {hashlib.sha256(body).hexdigest()[:16]}')
         if not ok:continue
         try:(verify_macos if name=='macos.xml' else verify_windows)(body,cfg['macos' if name=='macos.xml' else 'windows']);record(True,'signature '+name)
         except Exception as e:record(False,'signature '+name,str(e));continue
@@ -97,15 +101,15 @@ def check(base,cfg,compare=True,full_limit=16*1024*1024):
         except ValueError as e:record(False,'asset route',str(e));continue
         label=canonical[len(prefix):]
         status,headers,_,final=fetch(url,'HEAD')
-        record(status==200 and final.startswith('https://') and headers.get('Content-Length')==str(size),'HEAD '+label,f'HTTP {status}, Content-Length {headers.get("Content-Length")}, expected {size}')
+        record(status==200 and final.startswith('https://') and headers.get('Content-Length')==str(size),'HEAD '+label,status_text(status,headers)+f', Content-Length {headers.get("Content-Length")}, expected {size}')
         first=max(0,size-65536);status,headers,body,_=fetch(url,first=first)
         expected=f'bytes {first}-{size-1}/{size}'
-        record(status==206 and headers.get('Content-Range')==expected and len(body)==size-first and not headers.get('Content-Encoding'),'Range '+label,f'HTTP {status}, {headers.get("Content-Range")}')
+        record(status==206 and headers.get('Content-Range')==expected and len(body)==size-first and not headers.get('Content-Encoding'),'Range '+label,status_text(status,headers)+f', {headers.get("Content-Range")}')
         if size<=full_limit:
             status,headers,body,_=fetch(url)
-            record(status==200 and len(body)==size and valid(body),'content '+label,f'HTTP {status}, {len(body)} B, signature or SHA256 checked')
+            record(status==200 and len(body)==size and valid(body),'content '+label,status_text(status,headers)+f', {len(body)} B, signature or SHA256 checked')
     for missing in ('download/v0.0.0/BirdLock-0.0.0-source-check.zip','source-check-missing.json'):
-        status,headers,body,_=fetch(base+missing);record(status==404,'missing '+missing,f'HTTP {status}')
+        status,headers,body,_=fetch(base+missing);record(status==404,'missing '+missing,status_text(status,headers))
     return results
 
 if __name__=='__main__':

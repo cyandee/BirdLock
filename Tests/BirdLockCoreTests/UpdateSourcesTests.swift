@@ -11,7 +11,8 @@ final class UpdateSourcesTests:XCTestCase {
     func testBaseURLRules() throws {
         XCTAssertEqual(try UpdateSource.base(" https://Mirror.Test/a/b "),"https://mirror.test/a/b/")
         XCTAssertEqual(try UpdateSource.base(mirror),mirror)
-        for bad in ["http://mirror.test/","https://u:p@mirror.test/","https://mirror.test/?x=1","https://mirror.test/#a","mirror.test","https:///path",""] {
+        for bad in ["http://mirror.test/","https://u:p@mirror.test/","https://mirror.test/?x=1","https://mirror.test/#a","mirror.test","https:///path","",
+                    "https://mirror:8o8o/","https://host:99999/x","https://exa mple.com/","https://%zz/"] {
             XCTAssertThrowsError(try UpdateSource.base(bad),bad)
         }
     }

@@ -80,8 +80,11 @@ class BundleTests(unittest.TestCase):
             verify_updater(app,'1.5.0',info)
             info['BirdLockUpdateSources'][1]['url']='http://mirror.test/u/'
             with self.assertRaisesRegex(ValueError,'更新源'):verify_updater(app,'1.5.0',info)
+            info['BirdLockUpdateSources'][1]['url']='https://mirror.test/u/';prefix=info.pop('BirdLockReleaseDownloadPrefix')
+            with self.assertRaisesRegex(ValueError,'下载前缀'):verify_updater(app,'1.5.0',info)
+            info['BirdLockReleaseDownloadPrefix']=prefix
             info['BirdLockUpdateSources'].pop();info['BirdLockReleaseDownloadPrefix']='https://u:p@github.com/'
             with self.assertRaisesRegex(ValueError,'更新源'):verify_updater(app,'1.5.0',info)
-            info.pop('BirdLockReleaseDownloadPrefix')
+            info.pop('BirdLockReleaseDownloadPrefix');verify_updater(app,'1.5.0',info)
             info['CFBundleVersion']='999'
             with self.assertRaisesRegex(ValueError,'版本号'):verify_updater(app,'1.5.0',info)

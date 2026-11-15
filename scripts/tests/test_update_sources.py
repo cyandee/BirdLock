@@ -29,4 +29,16 @@ class UpdateSourceTests(unittest.TestCase):
         with self.assertRaises(ValueError):asset_url(base,'https://elsewhere.test/a.zip',prefix)
         with self.assertRaises(ValueError):base_url('http://3rd.0x01.page/birdlock/update-api/')
 
+    def test_checker_records_network_errors_instead_of_crashing(self):
+        from unittest.mock import patch
+        from urllib.error import URLError
+        from scripts import check_update_source as c
+        for error in (URLError('dns'),TimeoutError('slow'),ValueError('Redirect left HTTPS: http://x/')):
+            with patch.object(c.OPENER,'open',side_effect=error):
+                status,headers,body,_=c.fetch('https://m.test/macos.xml')
+            self.assertEqual((status,body),(0,b''));self.assertIn(type(error).__name__,c.status_text(status,headers))
+        with patch.object(c.OPENER,'open',side_effect=URLError('dns')):
+            results=c.check('https://m.test/',json.loads((ROOT/'SharedResources/Updates/config.json').read_text(encoding='utf-8')))
+        self.assertEqual(len(results),3);self.assertFalse(any(r['ok'] for r in results))
+
 if __name__=='__main__':unittest.main()

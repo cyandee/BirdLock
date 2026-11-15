@@ -20,7 +20,9 @@ public struct UpdateSource: Codable, Hashable, Sendable {
     public static func base(_ value: String) throws -> String {
         guard var c = URLComponents(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
               c.scheme?.lowercased() == "https", let host = c.host, !host.isEmpty,
-              c.user == nil, c.password == nil, c.query == nil, c.fragment == nil else { throw Invalid.url }
+              c.user == nil, c.password == nil, c.query == nil, c.fragment == nil,
+              host.lowercased().range(of: #"^([a-z0-9.-]+|\[?[0-9a-f:.]+\]?)$"#, options: .regularExpression) != nil,
+              c.port.map({ (1...65535).contains($0) }) ?? true else { throw Invalid.url }
         c.scheme = "https";c.host = host.lowercased()
         if !c.percentEncodedPath.hasSuffix("/") { c.percentEncodedPath += "/" }
         guard let s = c.string, URL(string: s) != nil else { throw Invalid.url }
