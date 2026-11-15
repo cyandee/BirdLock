@@ -33,6 +33,13 @@
 | 2026-11-15 · `a0c63d4` 源码 | Linux x64，Mono，公网 | 更新器下载链路（测试夹具驱动真实更新器） | 通过。清单取自镜像，增量包路由到镜像 `download/`，中断后从 1 MiB 处 Range 续传，SHA256 一致。未执行安装 |
 | 2026-11-15 · `a0c63d4` 源码 | Linux x64，Swift 6.2.1，公网 | Core 探测逻辑对真实源 | 通过。GitHub、镜像可用；无效主机和 `/birdlock/` 根地址判为不可用。未经过 Sparkle |
 
+| 2026-11-15 · `codex/audit-fixes`（代码提交 `4649f7c`） | 实体 Mac x86_64，macOS 15.7.3，Swift 6.2.4 | `swiftc -typecheck` 全部 `Sources/BirdLockCore`、`Sources/BirdLockCLI` | 通过，无新增错误，仅既有告警。本机离线，未解析 SwiftPM 依赖，**未执行 `swift test`** |
+| 2026-11-15 · 同上 | 同机，Python 3.12，`.venv` 内 `cryptography==48.0.1` | `python -m unittest discover -s scripts/tests` | 通过，35 项、0 跳过，含新增的 3 项 `md2html` 用例 |
+| 2026-11-15 · 同上 | 同机 | `scripts/verify_bundle.py --lens-resources SharedResources/LensProfiles` | 通过。镜头清单只改 `title`/`cameraBrand` 拼写，文件与 SHA256 未变 |
+| 2026-11-15 · 同上 | 同机 | Windows 风格工程夹具：把 `locations[].path` 写成 `C:\...`、帧记录写成 `file:///C:/...`，移动素材后调用 `WorkspaceDocument.read(_:relocation:)` | 通过，6 帧全部重定位到新目录 |
+| 2026-11-15 · 同上 | 同机 | 全部 34 个 Markdown 的相对链接与锚点检查 | 通过，0 个失效 |
+| — · 未执行 | Windows 10 / 11 实体 | `windows/tests`、`birdlock.cli selftest`、成品自检 | 未执行 · 本机无 Windows 环境，本分支未改 Windows 行为，仅两处注释 |
+
 PR 检查使用 GitHub 生成的合并引用，后续推送以当前任务 PR 的检查为准。多更新源任务对应 PR #5，运行记录见上表。
 
 ## 实体设备验收
