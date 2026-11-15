@@ -28,7 +28,7 @@ enum AppIdentity {
 
     @MainActor static func showSupport() {
         if let window = supportWindow { window.makeKeyAndOrderFront(nil); return }
-        let window = NSWindow(contentRect: NSRect(x: 0,y: 0,width: 390,height: 650),
+        let window = NSWindow(contentRect: NSRect(x: 0,y: 0,width: 620,height: 420),
             styleMask: [.titled,.closable], backing: .buffered, defer: false)
         window.title = "请作者喝杯咖啡"; window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: CoffeeSupportView())
@@ -46,23 +46,23 @@ enum AppIdentity {
 private struct CoffeeSupportView: View {
     var body: some View {
         VStack(spacing: 16) {
-            Text("如果 BirdLock 帮到了你，欢迎自愿赞赏。\n所有功能均可免费使用，赞赏不影响使用。")
+            Text("如果 BirdLock 帮到了你，欢迎自愿赞赏。\n所有功能均可免费使用，是否赞赏不影响使用")
                 .multilineTextAlignment(.center)
             HStack(spacing: 24) {
                 code("支付宝", file: "alipay-coffee.jpg")
                 code("微信", file: "wechat-coffee.png")
             }
             Button("关闭") { AppIdentity.supportWindow?.close() }.keyboardShortcut(.cancelAction)
-        }.padding(24).frame(width: 620, height: 500)
+        }.padding(24).frame(width: 620, height: 420)
     }
 
     private func code(_ title: String, file: String) -> some View {
         VStack {
             if let url = AppIdentity.supportImage(file), let image = NSImage(contentsOf: url) {
-                Image(nsImage: image).resizable().scaledToFit().frame(width: 258, height: 325)
+                Image(nsImage: image).resizable().scaledToFit().frame(width: 258, height: 258)
                     .accessibilityLabel(title + "二维码")
             } else {
-                Text("暂时找不到二维码").frame(width: 258, height: 325)
+                Text("暂时找不到二维码").frame(width: 258, height: 258)
             }
             Text(title + "扫码 · 自愿支持").foregroundStyle(.secondary)
         }

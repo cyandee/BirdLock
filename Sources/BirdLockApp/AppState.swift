@@ -134,6 +134,9 @@ final class AppState {
     var sourceZoom: Double = 1
     var exportState = ExportState()
     var showExportSheet = false
+    var lastExportDirectory: URL? {
+        didSet { defaults.set(lastExportDirectory, forKey: "export.directory") }
+    }
     var loopPlayback = true
 
     let engine = PreviewEngine()
@@ -152,6 +155,7 @@ final class AppState {
     private let defaults: UserDefaults
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        self.lastExportDirectory = defaults.url(forKey: "export.directory")
         self.releaseNotice=ReleaseNotice(defaults:defaults,current:AppDocs.appVersion)
         loadSettings()
         rawMode = defaults.string(forKey: "photos.rawMode").flatMap(RawMode.init(rawValue:)) ?? .camera

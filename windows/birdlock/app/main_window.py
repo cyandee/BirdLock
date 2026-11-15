@@ -774,18 +774,26 @@ class MainWindow(ProjectActions,QMainWindow):
         from ..core.paths import resource_dir
         dialog = QDialog(self); dialog.setWindowTitle("请作者喝杯咖啡")
         layout = QVBoxLayout(dialog)
-        text = QLabel("如果 BirdLock 帮到了你，欢迎自愿赞赏。\n所有功能均可免费使用，赞赏不影响使用。")
+        text = QLabel("如果 BirdLock 帮到了你，欢迎自愿赞赏。\n所有功能均可免费使用，是否赞赏不影响使用")
         text.setWordWrap(True); text.setAlignment(Qt.AlignCenter); layout.addWidget(text)
         row=QHBoxLayout();layout.addLayout(row)
+        side = 258
         for platform,filename in (("支付宝","alipay-coffee.jpg"),("微信","wechat-coffee.png")):
             column=QVBoxLayout();row.addLayout(column)
             image=QLabel();image.setAlignment(Qt.AlignCenter)
+            image.setFixedSize(side, side)
             candidates=(resource_dir()/"support"/filename,Path(__file__).resolve().parents[3]/"SharedResources"/"Support"/filename)
             path=next((p for p in candidates if p.is_file()),None)
             pixmap=QPixmap(str(path)) if path else QPixmap()
-            if pixmap.isNull():image.setText("暂时找不到二维码")
-            else:image.setPixmap(pixmap.scaled(QSize(260,330),Qt.KeepAspectRatio,Qt.SmoothTransformation))
-            column.addWidget(image,1)
+            if pixmap.isNull():
+                image.setText("暂时找不到二维码")
+            else:
+                scale = image.devicePixelRatioF()
+                pixels = round(side * scale)
+                pixmap = pixmap.scaled(pixels, pixels, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                pixmap.setDevicePixelRatio(scale)
+                image.setPixmap(pixmap)
+            column.addWidget(image, alignment=Qt.AlignHCenter)
             label=QLabel(platform+"扫码 · 自愿支持");label.setAlignment(Qt.AlignCenter);column.addWidget(label)
         close = QPushButton("关闭"); close.clicked.connect(dialog.accept); layout.addWidget(close)
         dialog.exec()
