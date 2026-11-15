@@ -143,13 +143,26 @@ public enum FrameImporter {
             let f = readFrame(url: files[i], id: i)
             lock.lock(); frames[i] = f; lock.unlock()
         }
-        var list = frames.compactMap { $0 }
-        list.sort { a, b in
-            if let ta = a.captureTime, let tb = b.captureTime, abs(ta - tb) > 1e-4 { return ta < tb }
-            return a.fileName.localizedStandardCompare(b.fileName) == .orderedAscending
-        }
+        var list = Self.sortedForImport(frames.compactMap { $0 })
         for i in list.indices { list[i].id = i }
         return list
+    }
+
+    /// Match the Windows importer: photos with a capture time come first in time order,
+    /// photos without one go last in natural file-name order. Mixing "time" and "name"
+    /// for near-equal times would make the comparison non-transitive and the result
+    /// dependent on the sort's internal order.
+    static func sortedForImport(_ frames: [SourceFrame]) -> [SourceFrame] {
+        frames.sorted { a, b in
+            switch (a.captureTime, b.captureTime) {
+            case let (.some(ta), .some(tb)):
+                if ta != tb { return ta < tb }
+                return a.fileName.localizedStandardCompare(b.fileName) == .orderedAscending
+            case (.some, .none): return true
+            case (.none, .some): return false
+            case (.none, .none): return a.fileName.localizedStandardCompare(b.fileName) == .orderedAscending
+            }
+        }
     }
 
     /// Estimate the burst frame rate from capture timestamps (defaults to 30).
