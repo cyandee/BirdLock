@@ -38,6 +38,7 @@
 | 2026-11-15 · 同上 | 同机 | `scripts/verify_bundle.py --lens-resources SharedResources/LensProfiles` | 通过。镜头清单只改 `title`/`cameraBrand` 拼写，文件与 SHA256 未变 |
 | 2026-11-15 · 同上 | 同机 | Windows 风格工程夹具：把 `locations[].path` 写成 `C:\...`、帧记录写成 `file:///C:/...`，移动素材后调用 `WorkspaceDocument.read(_:relocation:)` | 通过，6 帧全部重定位到新目录 |
 | 2026-11-15 · 同上 | 同机 | 全部 34 个 Markdown 的相对链接与锚点检查 | 通过，0 个失效 |
+| 2026-11-15 · 同上 | 同机 | 照片导入排序夹具：混合有无 EXIF 拍摄时间与接近时间戳 | 通过，有时间的按时间在前、无时间的按文件名排最后，结果确定 |
 | — · 未执行 | Windows 10 / 11 实体 | `windows/tests`、`birdlock.cli selftest`、成品自检 | 未执行 · 本机无 Windows 环境，本分支未改 Windows 行为，仅两处注释 |
 
 PR 检查使用 GitHub 生成的合并引用，后续推送以当前任务 PR 的检查为准。多更新源任务对应 PR #5，运行记录见上表。
