@@ -1,4 +1,4 @@
-"""Experimental local aircraft-part inference; the application does not enable this module yet.
+"""Experimental local aircraft-part inference, wired into the "飞机（试验）" subject option.
 
 The existing COCO detector supplies the aircraft box. A separate, fixed Grounding DINO query
 supplies nose candidates. A body centre is never used as a nose prediction. Four-view agreement
