@@ -6,6 +6,21 @@
 
 | 字段 | 内容 |
 |---|---|
+| 任务及分支 | Windows 下一版；`codex/windows-next-release` → `main`。基线 `96e047dd25eb44bf1e0944067e85b91dc340271e`。复用 [PR #4](https://github.com/cyandee/BirdLock/pull/4) 的缓存、工程路径、本地验收及 ICU 修复；[Issue #1](https://github.com/cyandee/BirdLock/issues/1) 已关闭，作为回归复测 |
+| 写入权 | Windows 写入阶段在草稿 PR 成功创建后结束。Mac 以该 PR 正文注明的远端完整 HEAD SHA 为接手点，在 PR 确认接手后才在同一分支写入。只读验证可直接检出该 SHA |
+| 取代码 | `git status --short`，确认未提交修改已保护；`git fetch origin`；`git rev-parse origin/codex/windows-next-release`，与 PR 交接 SHA 逐字核对；新分支用 `git switch --track -c codex/windows-next-release origin/codex/windows-next-release`。已有同名分支只在确认能快进时 `git pull --ff-only origin codex/windows-next-release` |
+| Windows 已实现 | 两种 RAW 渲染策略、配对去重、3,000 张截断移除、长视频限额与磁盘预算、轨道启用开关、分组命名/排序/定位、编辑历史、主题与 DWM、赞赏资源、历史问题的可复现修复。详细验证和未完成项见 [测试矩阵](TEST_MATRIX.md) |
+| Mac 工程与导入 | `Sources/BirdLockCore/IO/WorkspaceDocument.swift`、`SourceFrame.swift`、`ImageLoader.swift` 实现 [新增字段和缺省](ARCHITECTURE.md#下一版-windows-阶段的共享约定)。用 ImageIO / Core Image RAW 或可合法分发的解码器实际验证 ARW/NEF/CR2/CR3/RAF/DNG，记录预览、完整解码、方向、EXIF、色彩、分辨率和失败回退。用两端创建的工程交叉保存、定位原片、打开、导出 |
+| Mac 界面和视频 | `Sources/BirdLockCore/Export/SoundLibrary.swift` 及预览/导出混音接入独立启用；`Sources/BirdLockApp/AppState.swift`、`ProjectEditing.swift` 和分组界面接入改名、Finder 定位与 Command+Z / Command+Shift+Z；`BirdLockApp.swift` 改菜单和原生外观，`AppIdentity.swift` 及打包资源接入已有二维码和文案。同步 `VideoImporter.swift`、`VideoImportSheet.swift` 与视频缓存/原声恢复，实测 1080p/4K 长片、磁盘不足和取消重试 |
+| 剩余 Windows 验证 | Win10、跨屏与 Snap、真实连拍鸟眼和不同 RAW 压缩、18,000 帧满负荷及长视频全链路、实体设备经镜像升级。原报告中水印原生选择器闪退与特定硬件上的编码崩溃未复现；已拆开选择器与解码日志、加入导出阶段计时。连拍异常仍需原片时间戳辨因。不要据此宣称历史问题全关 |
+| 待回传 | Mac 飞机识别卡顿反馈要区分预览掉帧和成片横跳：本地报告样本出现短时横向跳变，机头分析耗时比例较高；需 Mac 原生复现、检查目标索引和运动轨迹。原视频、工程和诊断不提交。用户提供的佳能连拍音源仍待录制条件、档位和再分发许可核对 |
+
+这次不合并主分支，也不生成正式发布、标签或线上更新清单；外部版本说明不单列赞赏调整。
+
+## 上一轮：多更新源
+
+| 字段 | 内容 |
+|---|---|
 | 任务 | 多更新源：内置 GitHub 与 BirdLock 镜像（Cloudflare），用户可排序、添加、删除 |
 | 分支与基线 | `codex/update-sources`，基于 `origin/main` 的 `411f6c4`。代码交接 SHA `a0c63d4`，本条记录随后续文档提交更新 |
 | 评审与检出 | 向 `cyandee/BirdLock` 的 `main` 提交 PR，从 PR 获取当前 HEAD。复现验证时按测试矩阵检出对应 SHA |
