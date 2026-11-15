@@ -2,20 +2,19 @@
 
 这里记录当前任务和下一步。版本历史、已上线状态和历史验收沿用原文档。当前开发验证集中在 [测试矩阵](TEST_MATRIX.md)。[版本记录](../迭代记录.md) · [项目近况](../工作进度.md) · [历史验收](../整批功能验收清单.md)
 
-## 当前任务
+## 当前任务：下一版双平台集成
 
 | 字段 | 内容 |
 |---|---|
-| 任务及分支 | Windows 下一版；`codex/windows-next-release` → `main`。基线 `96e047dd25eb44bf1e0944067e85b91dc340271e`。复用 [PR #4](https://github.com/cyandee/BirdLock/pull/4) 的缓存、工程路径、本地验收及 ICU 修复；[Issue #1](https://github.com/cyandee/BirdLock/issues/1) 已关闭，作为回归复测 |
-| 写入权 | Windows 写入阶段在草稿 PR 成功创建后结束。Mac 以该 PR 正文注明的远端完整 HEAD SHA 为接手点，在 PR 确认接手后才在同一分支写入。只读验证可直接检出该 SHA |
-| 取代码 | `git status --short`，确认未提交修改已保护；`git fetch origin`；`git rev-parse origin/codex/windows-next-release`，与 PR 交接 SHA 逐字核对；新分支用 `git switch --track -c codex/windows-next-release origin/codex/windows-next-release`。已有同名分支只在确认能快进时 `git pull --ff-only origin codex/windows-next-release` |
-| Windows 已实现 | 两种 RAW 渲染策略、配对去重、3,000 张截断移除、长视频限额与磁盘预算、轨道启用开关、分组命名/排序/定位、编辑历史、主题与 DWM、赞赏资源、历史问题的可复现修复。详细验证和未完成项见 [测试矩阵](TEST_MATRIX.md) |
-| Mac 工程与导入 | `Sources/BirdLockCore/IO/WorkspaceDocument.swift`、`SourceFrame.swift`、`ImageLoader.swift` 实现 [新增字段和缺省](ARCHITECTURE.md#下一版-windows-阶段的共享约定)。用 ImageIO / Core Image RAW 或可合法分发的解码器实际验证 ARW/NEF/CR2/CR3/RAF/DNG，记录预览、完整解码、方向、EXIF、色彩、分辨率和失败回退。用两端创建的工程交叉保存、定位原片、打开、导出 |
-| Mac 界面和视频 | `Sources/BirdLockCore/Export/SoundLibrary.swift` 及预览/导出混音接入独立启用；`Sources/BirdLockApp/AppState.swift`、`ProjectEditing.swift` 和分组界面接入改名、Finder 定位与 Command+Z / Command+Shift+Z；`BirdLockApp.swift` 改菜单和原生外观，`AppIdentity.swift` 及打包资源接入已有二维码和文案。同步 `VideoImporter.swift`、`VideoImportSheet.swift` 与视频缓存/原声恢复，实测 1080p/4K 长片、磁盘不足和取消重试 |
-| 剩余 Windows 验证 | Win10、跨屏与 Snap、真实连拍鸟眼和不同 RAW 压缩、18,000 帧满负荷及长视频全链路、实体设备经镜像升级。原报告中水印原生选择器闪退与特定硬件上的编码崩溃未复现；已拆开选择器与解码日志、加入导出阶段计时。连拍异常仍需原片时间戳辨因。不要据此宣称历史问题全关 |
-| 待回传 | Mac 飞机识别卡顿反馈要区分预览掉帧和成片横跳：本地报告样本出现短时横向跳变，机头分析耗时比例较高；需 Mac 原生复现、检查目标索引和运动轨迹。原视频、工程和诊断不提交。用户提供的佳能连拍音源仍待录制条件、档位和再分发许可核对 |
+| 分支及 PR | `codex/windows-next-release` → `main`，沿用 [PR #6](https://github.com/cyandee/BirdLock/pull/6)。Windows 交接 SHA `704cac5a6e04c30be17803c17d38738c904bd062`，Mac 原生实现 SHA `81eae24521efb087fd32304569fb2f380574e652` |
+| 写入权 | Windows 在 PR 正文交出写入权。Mac 在 PR 确认接手并完成适配。回填实机结果前在 PR 确认下一次接手，或从约定 SHA 开单独分支 |
+| Windows 已实现 | RAW、配对去重、长视频磁盘预算、音轨开关、分组、编辑历史、外观与 DWM。吸收 [PR #4](https://github.com/cyandee/BirdLock/pull/4) 的缓存、工程路径、本地验收及 ICU 修复 |
+| Mac 已实现 | Apple ImageIO 和 Core Image RAW、音轨启用和混音、分组命名与 Finder 定位、⌘Z / ⇧⌘Z、三种 AppKit 外观、支持窗口资源、600 秒 / 18,000 帧选择和缓存预算。schema 1 工程可恢复已选 RAW 来源，按原记录分组和保存。Mac 可以重新定位 Windows 盘符路径并重存 |
+| 双向回归 | 实体 Mac 上的原生 Swift 与 Python/Qt 代码对六种共同 RAW 样本执行了两种策略的双向读取、保存或导出。相关证据和实机范围见 [TEST_MATRIX.md](TEST_MATRIX.md) |
+| Windows 接手 | 在实际 Windows x64 上打开 Mac 保存的工程并回存给 Mac，覆盖两种 RAW、关闭的背景音乐/独立轨、Unicode 分组和视频缓存重建。Nikon Z8 高效率低样本在此次 Mac 上可解码，仍以 Windows 已记录的失败为准。Mac 上运行 Windows Python 代码时，带循环音轨的 FFmpeg 导出曾停滞，非循环对照通过，请在实体 Windows 对照 |
+| 其他复测 | 两端真实 RAW 鸟眼连拍、Windows 10 和高 DPI/Snap、不同 RAW 压缩、18,000 帧负载、真实长视频全链路和镜像实机升级。Windows 端仍需原报告的水印选择器闪退、特定硬件编码和异常连拍时间戳。Mac 飞机预览卡顿与成片短时横跳需用获授权原片分别定位 |
 
-这次不合并主分支，也不生成正式发布、标签或线上更新清单；外部版本说明不单列赞赏调整。
+验收完毕由维护者在 PR 审核合并。正式版本说明只覆盖对外功能变更，发布另行授权。
 
 ## 上一轮：多更新源
 

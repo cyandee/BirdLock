@@ -53,6 +53,32 @@ RAW 下表为已验证哈希的 [CC0 样本集](https://github.com/tellodaniel/r
 | 4K | 5 分钟 · 1 fps | 300 / 15.0 秒 / 39.1 MB |
 | 4K | 10 分钟 · 1 fps | 600 / 31.5 秒 / 78.1 MB |
 
+## Mac 适配验证
+
+被测代码 `81eae24521efb087fd32304569fb2f380574e652`。本机 arm64，macOS 27.2.1，Xcode 27.2。Windows 交接原生结果在上节。
+
+| 检查 | 实际结果 |
+|---|---|
+| Apple SwiftPM 和 CLI | `swift test` 104 项通过、0 跳过，使用已核验的 Mac 遥测辅助程序。覆盖 125 秒抽帧、途中取消清理、重试、工程重建、空间预算边界和旧字段缺省。CLI 合成自检通过 |
+| 包与工具 | 打包/更新工具 32 项通过。按现有脚本生成通用 App，主程序、光流进程、遥测进程均含 arm64 / x86_64 切片，包资源校验和 `codesign --verify --deep --strict` 通过。支持图片均可解码并在窗口加载。实际启动平台为 arm64 |
+| 原生窗口 | Canon EOS R CR3 从文件选择器导入。重命名分组，⌘Z 回到默认名、⇧⌘Z 恢复，Finder 选中原片。关闭音轨后静音字段保留，保存工程可重开。操作三种外观选项并确认浅色界面。单独开/关同一音轨的导出由 ffprobe 复核，启用时有 AAC，禁用时仅有视频 |
+| 长视频（SDR 合成源，3 fps） | 1080p 600 秒以 1 fps 生成 600 张 JPEG，约 20.2 MB，带 PCM。清理后由工程及原视频重建画面和原声。4K 180 秒以 1 fps 生成 180 张 JPEG，约 23.6 MB。未负载测试 18,000 帧、真实长 RAW/视频混合工作流或物理磁盘写满 |
+| 双向工程（Mac + Mac 上 Python/Qt 代码） | ARW、NEF、CR2、CR3、RAF、DNG 共六种，各测两种策略。Swift 保存 → Python 读取、还原并导出。Python 保存并换成 Windows 盘符及相对路径 → Swift 重定位、保留分组名、RAW 策略、禁用音轨，重存并导出。待实体 Windows 对同一工程复测 |
+| Python/Qt 补测（Mac） | 167 项通过、0 跳过，使用实际目录作为 `TMPDIR`。Mac 默认目录经过 `/var` 符号链接时，Windows 套件有 1 项工程指纹断言失败。带短循环音源的 FFmpeg 导出在 Mac 的 Python 路径中出现等待，终止进程后非循环对照通过。Windows 行为待实机核对 |
+| 真实鸟眼识别 | 两张公开 CC0 鸟类 JPEG 均检出目标和可见鸟眼（2/2）。RAW 样本用于验证解码、EXIF、分析流水线和导出，真实 RAW 鸟眼连拍待复测。[样本 1](https://commons.wikimedia.org/wiki/File:A_Mallard.jpg) · [样本 2](https://commons.wikimedia.org/wiki/File:Mallard_duck.11.jpg) |
+
+七份 RAW 来自 [raw.pixls.us](https://raw.pixls.us/) 的公开 CC0 样本，下载逐文件核对目录 SHA256。实际读到 EXIF 机型和拍摄日期，两种渲染策略分别完成分析和 H.264 导出。另用同名 RAW/JPEG 校验 JPEG 优先、RAW 优先、两者保留和损坏 JPEG 的配对行为。内嵌预览缩到 300×200 后与 Mac 上 LibRaw 预览的平均 RGB 绝对差为 0.54–0.86 / 255，含测试 JPEG 再编码误差。此结果只覆盖这些样本。
+
+| 相机及压缩样本 | ImageIO 内嵌预览 | CIRAWFilter 解码 |
+|---|---:|---:|
+| Sony A7 III ARW，14-bit 压缩（2414） | 1616×1080 | 6000×4000 |
+| Nikon Z6 NEF，14-bit 压缩（3581） | 6048×4024 | 6048×4024 |
+| Canon 5D Mark IV CR2（983） | 6720×4480 | 6720×4480 |
+| Canon EOS R CR3（4515） | 6720×4480 | 6720×4480 |
+| Fujifilm X-T2 RAF，14-bit 无损压缩（865） | 1920×1280 | 6000×4000 |
+| Ricoh GR III DNG（3115） | 6000×4000 | 6000×4000 |
+| Nikon Z8 NEF，高效率低（6616） | 8256×5504 | 8256×5504 |
+
 ## 本轮验证
 
 | 日期与提交 | 环境 | 检查 | 结果与证据 |
@@ -73,7 +99,7 @@ RAW 下表为已验证哈希的 [CC0 样本集](https://github.com/tellodaniel/r
 | 2026-11-15 · `a0c63d4` 源码 | Linux x64，Mono，公网 | 更新器下载链路（测试夹具驱动真实更新器） | 通过。清单取自镜像，增量包路由到镜像 `download/`，中断后从 1 MiB 处 Range 续传，SHA256 一致。未执行安装 |
 | 2026-11-15 · `a0c63d4` 源码 | Linux x64，Swift 6.2.1，公网 | Core 探测逻辑对真实源 | 通过。GitHub、镜像可用；无效主机和 `/birdlock/` 根地址判为不可用。未经过 Sparkle |
 
-PR 检查使用 GitHub 生成的合并引用。后续推送以 [PR #2 的当前检查](https://github.com/cyandee/BirdLock/pull/2/checks) 为准。
+PR 检查使用 GitHub 生成的合并引用。本分支以 [PR #6 的当前检查](https://github.com/cyandee/BirdLock/pull/6/checks) 为准。
 
 ## 实体设备验收
 
