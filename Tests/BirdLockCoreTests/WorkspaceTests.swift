@@ -28,6 +28,63 @@ final class WorkspaceTests: XCTestCase {
         return try WorkspaceDocument(frames:frames,segments:[BurstSegment(range:0..<6,fps:30)],analysis:a,remembered:[],subject:.bird,
             profile:profile,profiles:["bird":profile],audio:AudioSettings(),watermark:WatermarkSettings(),segmentIndex:0,mergeGroups:[0],currentFrame:3,viewMode:"source",sourceZoom:4,previewAudio:true)
     }
+    func testCancelledVideoPreservesExistingOutputAndCanBeRetried() throws {
+        let root = try temporary()
+        let document = try example(root.appendingPathComponent("sources"))
+        let cache = ProxyCache(root: root.appendingPathComponent("cache"))
+        var settings = document.profile.export
+        settings.shortSide = 128
+        settings.codec = .h264
+        let job = RenderJob(analysis: document.analyses[0], composition: document.profile.composition,
+                            look: document.profile.look, export: settings, selection: document.profile.selection, cache: cache)
+        let output = root.appendingPathComponent("existing.mp4")
+        let original = Data("old export".utf8)
+        try original.write(to: output)
+        let exporter = VideoExporter(workers: 1)
+        let lock = NSLock()
+        var cancelled = false
+        XCTAssertThrowsError(try exporter.export(job: job, to: output,
+                                                progress: { _ in lock.withLock { cancelled = true } },
+                                                isCancelled: { lock.withLock { cancelled } })) {
+            guard case ExportError.cancelled = $0 else { return XCTFail("Unexpected error: \($0)") }
+        }
+        XCTAssertEqual(try Data(contentsOf: output), original)
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: root.path).contains { $0.hasPrefix(".BirdLock-export-") })
+        try exporter.export(job: job, to: output, progress: { _ in }, isCancelled: { false })
+        XCTAssertGreaterThan(try Data(contentsOf: output).count, 500)
+    }
+
+    func testMissingSourceFailsGIFAndImageSequenceWithoutOverwritingOutput() throws {
+        let root = try temporary()
+        let document = try example(root.appendingPathComponent("sources"))
+        let cache = ProxyCache(root: root.appendingPathComponent("cache"))
+        let job = RenderJob(analysis: document.analyses[0], composition: document.profile.composition,
+                            look: document.profile.look, export: document.profile.export,
+                            selection: document.profile.selection, cache: cache)
+        let first = try XCTUnwrap(job.used.first)
+        let missing = try XCTUnwrap(job.used.last)
+        XCTAssertNotEqual(first, missing)
+        try FileManager.default.removeItem(at: document.frames[missing].url)
+        let images = root.appendingPathComponent("images")
+        try FileManager.default.createDirectory(at: images, withIntermediateDirectories: false)
+        let stem = document.frames[first].url.deletingPathExtension().lastPathComponent
+        let existing = images.appendingPathComponent("00000_" + stem + ".jpg")
+        let gif = root.appendingPathComponent("existing.gif")
+        let old = Data("old output".utf8)
+        try old.write(to: existing)
+        try old.write(to: gif)
+        let exporter = VideoExporter(workers: 1)
+
+        XCTAssertThrowsError(try exporter.exportImages(job: job, to: images, type: .jpeg,
+                                                       progress: { _ in }, isCancelled: { false }))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: images.path), [existing.lastPathComponent])
+        XCTAssertEqual(try Data(contentsOf: existing), old)
+        XCTAssertThrowsError(try exporter.exportGIF(job: job, to: gif, maxSide: 128,
+                                                    progress: { _ in }, isCancelled: { false }))
+        XCTAssertEqual(try Data(contentsOf: gif), old)
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: root.path).contains { $0.hasPrefix(".BirdLock-export-") })
+    }
+
     func testProjectAndEditsSurviveDisposableProxyCleanup() throws {
         let root=try temporary(),cache=ProxyCache(root:root.appendingPathComponent("cache")),file=root.appendingPathComponent("工程.birdlock")
         let document=try example(root.appendingPathComponent("素材"));try document.save(to:file,cacheRoot:cache.root)

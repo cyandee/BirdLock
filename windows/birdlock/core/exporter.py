@@ -38,6 +38,11 @@ class ExportCancelled(ExportError):
         super().__init__("已取消")
 
 
+class FrameRenderError(ExportError):
+    def __init__(self, index: int):
+        super().__init__(f"无法渲染第 {index + 1} 个输出画面。请确认原始素材可读后重试。")
+
+
 def _ffmpeg() -> str:
     ff = ffmpeg_path()
     if not ff:
@@ -338,10 +343,9 @@ def _stream_frames(cmd: list[str], frames: list[OutputFrame], render, progress, 
     first_frame = write_seconds = finalize_seconds = 0.
     streamed = 0
     try:
-        black = np.zeros((H, W, 3), np.uint8)
         for k, img in _ordered_render(frames, render, cancelled, workers or VideoExporter.workers_default()):
-            if img is None or img.shape[:2] != (H, W):
-                img = black
+            if img is None or img.shape != (H, W, 3) or img.dtype != np.uint8:
+                raise FrameRenderError(k)
             try:
                 write_started = time.monotonic()
                 if not streamed:
@@ -445,6 +449,8 @@ class VideoExporter:
             try:
                 _stream_frames(cmd, frames, render, progress, cancelled, W, H, active_workers)
                 return
+            except (FrameRenderError, ExportCancelled):
+                raise
             except ExportError as e:
                 hardware = self.encoder_used.endswith(("_nvenc", "_amf", "_qsv", "_videotoolbox"))
                 if hardware and preference != "software" and not cancelled():
@@ -454,17 +460,29 @@ class VideoExporter:
                 raise
 
     def export_images(self, job: RenderJob, out_dir: str, progress=lambda p: None, cancelled=lambda: False):
-        os.makedirs(out_dir, exist_ok=True)
         used = job.used
         if not used:
             raise ExportError("没有可导出的帧")
+        destination = Path(out_dir)
+        destination.mkdir(parents=True, exist_ok=True)
         cache = SourceCache(job, proxy=not job.export.useFullResolution, scale=job.export_decode_scale, cancelled=cancelled)
         frames = [OutputFrame(i, i, 0.0, 1.0) for i in used]
-        for k, img in _ordered_render(frames, lambda of: job.render_output(of, fetch=cache.get), cancelled, self.workers):
-            if img is not None:
+        with tempfile.TemporaryDirectory(prefix=".BirdLock-export-", dir=destination) as directory:
+            staged = []
+            for k, img in _ordered_render(frames, lambda of: job.render_output(of, fetch=cache.get), cancelled, self.workers):
+                if img is None:
+                    raise FrameRenderError(k)
                 name = f"{k:05d}_{Path(job.analysis.frames[frames[k].a].path).stem}.jpg"
-                F.write_jpeg(img, os.path.join(out_dir, name), 92)
-            progress((k + 1) / len(frames))
+                path = Path(directory) / name
+                if not F.write_jpeg(img, str(path), 92):
+                    raise ExportError(f"无法写入图片：{name}")
+                staged.append(path)
+                progress(0.99 * (k + 1) / len(frames))
+            if cancelled():
+                raise ExportCancelled()
+            for path in staged:
+                os.replace(path, destination / path.name)
+        progress(1.0)
 
     def export_gif(self, job: RenderJob, out: str, max_side: int = 720, progress=lambda p: None, cancelled=lambda: False):
         with _output_file(out, cancelled) as temporary:

@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from birdlock.core.exporter import SourceCache, VideoExporter, ExportError, ExportCancelled, _stream_frames, _remove_temporary, _output_file
+from birdlock.core.exporter import SourceCache, VideoExporter, ExportError, ExportCancelled, FrameRenderError, _stream_frames, _remove_temporary, _output_file
 from birdlock.core.paths import ffmpeg_path
 from birdlock.core.render import OutputFrame
 from birdlock.core.settings import ExportSettings
@@ -93,6 +93,101 @@ class ExportRecoveryTests(unittest.TestCase):
             # Popen.wait has reaped this exact child, not an unrelated FFmpeg process.
             if os.name!='nt':
                 with self.assertRaises(ProcessLookupError):os.kill(int(pid.read_text()),0)
+
+    def test_head_rotation_falls_back_to_manual_offset_without_a_valid_angle(self):
+        from birdlock.core.planner import plan
+        from birdlock.core.settings import Composition, RotationMode
+        from birdlock.core.workspace import local_analysis
+        from test_workspace import example
+
+        with tempfile.TemporaryDirectory() as directory:
+            document = example(directory)
+            analysis = local_analysis(document["analyses"][0])
+            analysis.track.angle[:] = np.nan
+            for mode in (RotationMode.LOCK_HEAD, RotationMode.FOLLOW_HEAD_SMOOTH):
+                with self.subTest(mode=mode):
+                    composition = Composition(rotationMode=mode, rotationOffsetDeg=13)
+                    result = plan(analysis.track, analysis.frames, composition, 64, 48)
+                    for transform in result.xforms:
+                        self.assertTrue(np.isfinite(transform.matrix()).all())
+                        self.assertAlmostEqual(transform.psi, np.deg2rad(13))
+
+    def test_image_render_failure_preserves_preexisting_sequence(self):
+        job = SimpleNamespace(used=[0, 1], export=ExportSettings(), export_decode_scale=1,
+                              analysis=SimpleNamespace(frames=[SimpleNamespace(path="first.jpg")]))
+        job.render_output = lambda frame, **kwargs: np.zeros((8, 8, 3), np.uint8) if frame.a == 0 else None
+        with tempfile.TemporaryDirectory() as directory:
+            existing = Path(directory) / "00000_first.jpg"
+            existing.write_bytes(b"older image")
+            progress = []
+            with self.assertRaisesRegex(FrameRenderError, "第 2 个"):
+                VideoExporter(1).export_images(job, directory, progress.append)
+            self.assertEqual(list(Path(directory).iterdir()), [existing])
+            self.assertEqual(existing.read_bytes(), b"older image")
+            self.assertLess(max(progress), 1)
+
+    @unittest.skipUnless(ffmpeg_path(), "FFmpeg required")
+    def test_video_and_gif_frame_failure_keep_existing_output(self):
+        settings = ExportSettings(encoder="software")
+        job = SimpleNamespace(mixed_audio=lambda audio: audio,
+                              output_frames=[OutputFrame(0, 0, 0, 1), OutputFrame(1, 1, 0, 1)],
+                              output_size=(64, 64), out_dims=lambda _: (64, 64),
+                              export=settings, export_decode_scale=1)
+        exporter = VideoExporter(1)
+        with tempfile.TemporaryDirectory() as directory:
+            for ext, export in ((".mp4", exporter.export_video), (".gif", exporter.export_gif)):
+                with self.subTest(ext=ext):
+                    existing = Path(directory) / ("output" + ext)
+                    existing.write_bytes(b"older export")
+                    job.render_output = lambda frame, **kwargs: (
+                        np.zeros((64, 64, 3), np.uint8) if frame.a == 0 else np.zeros((63, 64, 3), np.uint8)
+                    )
+                    with self.assertRaisesRegex(FrameRenderError, "第 2 个"):
+                        export(job, str(existing))
+                    self.assertEqual(existing.read_bytes(), b"older export")
+                    self.assertFalse(list(Path(directory).glob(".BirdLock-export-*")))
+
+    def test_exporter_initialization_failure_resets_state_and_allows_retry(self):
+        from PySide6.QtWidgets import QApplication
+        from birdlock.app.state import AppState
+        from birdlock.core.analysis import ProxyCache
+
+        app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as directory, \
+             patch('birdlock.app.state.data_dir', return_value=Path(directory)), \
+             patch('birdlock.app.state.ProxyCache', return_value=ProxyCache(Path(directory) / "cache")):
+            state = AppState()
+            try:
+                state.analysis = SimpleNamespace(copy_edits=lambda: None)
+                job = SimpleNamespace(output_size=(64, 64), export=ExportSettings(), output_frames=[])
+                path = str(Path(directory) / "output.mp4")
+
+                def wait_for_export():
+                    limit = time.monotonic() + 3
+                    while state.export_running and time.monotonic() < limit:
+                        app.processEvents()
+                        time.sleep(0.005)
+                    self.assertFalse(state.export_running)
+                    self.assertIsNone(state._export_thread)
+
+                with patch('birdlock.app.state.RenderJob', return_value=job), \
+                     patch('birdlock.app.state.VideoExporter', side_effect=RuntimeError("test initialization failure")), \
+                     self.assertLogs('birdlock', level='ERROR'):
+                    state.export_to("video", path)
+                    wait_for_export()
+                self.assertEqual(state.export_progress, 0)
+                self.assertIn("test initialization failure", state.export_message)
+
+                external = SimpleNamespace(workers=1, encoder_used="test", export_video=lambda *args: None)
+                with patch('birdlock.app.state.RenderJob', return_value=job), \
+                     patch('birdlock.app.state.VideoExporter', return_value=external):
+                    state.export_to("video", path)
+                    wait_for_export()
+                self.assertEqual(state.export_progress, 1)
+                self.assertIn("导出完成", state.export_message)
+            finally:
+                state.analysis = None
+                state.close()
 
     @unittest.skipUnless(ffmpeg_path(),'FFmpeg required')
     def test_cancel_then_change_codec_and_export_again_in_same_process(self):

@@ -37,6 +37,10 @@ rawpy_dist = distribution("rawpy")
 datas += [(str(rawpy_dist.locate_file(file)), os.path.join("docs", "windows", "rawpy"))
           for file in rawpy_dist.files if file.name in {"LICENSE", "LICENSE.LibRaw"}]
 
+pyinstaller_dist = distribution("pyinstaller")
+pyinstaller_license = next(file for file in pyinstaller_dist.files if file.name == "COPYING.txt")
+datas.append((str(pyinstaller_dist.locate_file(pyinstaller_license)), os.path.join("docs", "windows", "pyinstaller")))
+
 a = Analysis(
     [os.path.join(here, "BirdLock.pyw")],
     pathex=[here],

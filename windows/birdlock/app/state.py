@@ -1539,10 +1539,10 @@ class AppState(ProjectWorkspace,QObject):
             self.on_main(update)
 
         def work():
-            with cache_policy.operation(self.cache.root) as lease:
-                ex = VideoExporter()
-                t0 = time.time()
-                try:
+            t0 = time.monotonic()
+            try:
+                with cache_policy.operation(self.cache.root):
+                    ex = VideoExporter()
                     log.info("export start kind=%s size=%s fps=%s codec=%r quality=%r encoder=%r interpolation=%r frames=%d workers=%d",
                              kind,job.output_size,job.export.outputFPS,job.export.codec,job.export.quality,
                              job.export.encoder,job.export.interpolation,len(job.output_frames),ex.workers)
@@ -1552,23 +1552,22 @@ class AppState(ProjectWorkspace,QObject):
                         ex.export_images(job, path, progress, lambda: flag.cancelled)
                     else:
                         ex.export_gif(job, path, progress=progress, cancelled=lambda: flag.cancelled)
-                    enc = f"，编码器 {ex.encoder_used}" if kind == "video" and ex.encoder_used else ""
-                    msg, prog = f"导出完成（{time.time() - t0:.0f} 秒{enc}）", 1.0
-                    log.info("export %s done: %s", kind, msg)
-                except ExportCancelled:
-                    msg, prog = "已取消", 0.0
-                except Exception as e:
-                    log.exception("export %s failed", kind)
-                    msg, prog = str(e)+"。可在帮助中导出诊断日志。", 0.0
+                enc = f"，编码器 {ex.encoder_used}" if kind == "video" and ex.encoder_used else ""
+                msg, prog = f"导出完成（{time.monotonic() - t0:.0f} 秒{enc}）", 1.0
+                log.info("export %s done: %s", kind, msg)
+            except ExportCancelled:
+                msg, prog = "已取消", 0.0
+            except Exception as error:
+                log.exception("export %s failed", kind)
+                msg, prog = str(error)+"。可在帮助中导出诊断日志。", 0.0
 
-                def done():
-                    if flag is not self._export_cancel:
-                        return
-                    self.export_running, self.export_message, self.export_progress = False, msg, prog
-                    self._export_thread = None
-                    self.changed.emit("export")
-                cache_policy.end(lease)
-                self.on_main_wait(done)
+            def done():
+                if flag is not self._export_cancel:
+                    return
+                self.export_running, self.export_message, self.export_progress = False, msg, prog
+                self._export_thread = None
+                self.changed.emit("export")
+            self.on_main_wait(done)
         self._export_thread = threading.Thread(target=work, daemon=True, name="BirdLock-export")
         self._export_thread.start()
 

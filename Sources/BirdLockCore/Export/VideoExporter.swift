@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import CoreImage
 import CoreVideo
+import Darwin
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -102,17 +103,41 @@ public final class VideoExporter {
         warning = nil
         try checkRawQuality(job)
         let audio = job.mixedAudio(audio)
-        guard audio.isActive else {
-            try exportVideo(job: job, to: url, progress: progress, isCancelled: isCancelled)
-            return
+        try withExportDirectory(in: url.deletingLastPathComponent()) { directory in
+            let output = directory.appendingPathComponent(url.lastPathComponent)
+            if audio.isActive {
+                let video = directory.appendingPathComponent("video-\(UUID().uuidString).\(job.export.codec.fileExtension)")
+                try exportVideo(job: job, to: video, progress: { progress($0 * 0.96) }, isCancelled: isCancelled)
+                try AudioMixer.mux(videoURL: video, audio: audio, duration: job.duration, to: output,
+                                   fileType: job.export.codec.fileType, progress: { progress(0.96 + $0 * 0.03) },
+                                   isCancelled: isCancelled)
+            } else {
+                try exportVideo(job: job, to: output, progress: { progress($0 * 0.99) }, isCancelled: isCancelled)
+            }
+            if isCancelled() { throw ExportError.cancelled }
+            try publishExport(output, to: url)
         }
-        let tmp = url.deletingLastPathComponent()
-            .appendingPathComponent(".birdlock-\(UUID().uuidString.prefix(8)).\(job.export.codec.fileExtension)")
-        defer { try? FileManager.default.removeItem(at: tmp) }
-        try exportVideo(job: job, to: tmp, progress: { progress($0 * 0.96) }, isCancelled: isCancelled)
-        try AudioMixer.mux(videoURL: tmp, audio: audio, duration: job.duration, to: url, fileType: job.export.codec.fileType,
-                           progress: { progress(0.96 + 0.04 * $0) }, isCancelled: isCancelled)
         progress(1)
+    }
+
+    private func withExportDirectory(in parent: URL, _ export: (URL) throws -> Void) throws {
+        let directory = parent.appendingPathComponent(".BirdLock-export-\(UUID().uuidString)", isDirectory: true)
+        let files = FileManager.default
+        try files.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? files.removeItem(at: directory) }
+        try export(directory)
+    }
+
+    private func publishExport(_ staged: URL, to destination: URL) throws {
+        try staged.withUnsafeFileSystemRepresentation { sourcePath in
+            try destination.withUnsafeFileSystemRepresentation { destinationPath in
+                guard let sourcePath, let destinationPath else { throw ExportError.writer("无法访问导出路径") }
+                guard rename(sourcePath, destinationPath) == 0 else {
+                    let failure = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    throw ExportError.writer("无法保存 \(destination.lastPathComponent)：\(failure.localizedDescription)")
+                }
+            }
+        }
     }
 
     func exportVideo(job: RenderJob, to url: URL, progress: @escaping (Double) -> Void,
@@ -122,7 +147,6 @@ public final class VideoExporter {
         let (W, H) = job.outputSize
         let s = job.export
         Diagnostics.record("video export size=\(W)x\(H) frames=\(frames.count) fps=\(s.outputFPS) codec=\(s.codec.rawValue) interpolation=\(s.interpolation.rawValue) full_resolution=\(s.useFullResolution)")
-        try? FileManager.default.removeItem(at: url)
         let writer = try AVAssetWriter(outputURL: url, fileType: s.codec.fileType)
         defer { if writer.status == .writing { writer.cancelWriting() } }
         var settings: [String: Any] = [
@@ -272,25 +296,40 @@ public final class VideoExporter {
     public func exportImages(job: RenderJob, to dir: URL, type: UTType, progress: @escaping (Double) -> Void,
                              isCancelled: @escaping () -> Bool) throws {
         try checkRawQuality(job)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let pre = SourcePrefetcher(job: job, proxy: !job.export.useFullResolution, scale: job.exportDecodeScale)
         let used = job.used
         guard !used.isEmpty else { throw ExportError.noFrames }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let pre = SourcePrefetcher(job: job, proxy: !job.export.useFullResolution, scale: job.exportDecodeScale)
         let ext = type == .png ? "png" : (type == .heic ? "heic" : "jpg")
-        for (k, i) in used.enumerated() {
-            if isCancelled() { throw ExportError.cancelled }
-            pre.prefetch(Array(used[k..<min(used.count, k + 6)]))
-            let of = OutputFrame(a: i, b: i, t: 0, fade: 1)
-            guard let img = job.renderOutput(of, fetch: { pre.get($0) }), let cg = job.renderer.renderCGImage(img) else { continue }
-            let name = String(format: "%05d_", k) + (job.analysis.frames[i].url.deletingPathExtension().lastPathComponent) + "." + ext
-            let u = dir.appendingPathComponent(name)
-            if let d = CGImageDestinationCreateWithURL(u as CFURL, type.identifier as CFString, 1, nil) {
-                CGImageDestinationAddImage(d, cg, [kCGImageDestinationLossyCompressionQuality: 0.92] as CFDictionary)
-                CGImageDestinationFinalize(d)
+        try withExportDirectory(in: dir) { directory in
+            var staged: [URL] = []
+            for (k, i) in used.enumerated() {
+                if isCancelled() { throw ExportError.cancelled }
+                let ahead = used[k..<min(used.count, k + 6)]
+                pre.prefetch(Array(ahead))
+                let of = OutputFrame(a: i, b: i, t: 0, fade: 1)
+                guard let img = job.renderOutput(of, fetch: { pre.get($0) }),
+                      let cg = job.renderer.renderCGImage(img) else {
+                    throw ExportError.writer("无法渲染第 \(k + 1) 个输出画面，请确认原始素材可读")
+                }
+                let stem = job.analysis.frames[i].url.deletingPathExtension().lastPathComponent
+                let name = String(format: "%05d_", k) + stem + "." + ext
+                let output = directory.appendingPathComponent(name)
+                guard let dst = CGImageDestinationCreateWithURL(output as CFURL, type.identifier as CFString, 1, nil) else {
+                    throw ExportError.writer("无法创建图片：\(name)")
+                }
+                CGImageDestinationAddImage(dst, cg, [kCGImageDestinationLossyCompressionQuality: 0.92] as CFDictionary)
+                guard CGImageDestinationFinalize(dst) else { throw ExportError.writer("无法写入图片：\(name)") }
+                staged.append(output)
+                pre.evict(keeping: Set(ahead))
+                progress(0.99 * Double(k + 1) / Double(used.count))
             }
-            pre.evict(keeping: Set(used[k..<min(used.count, k + 6)]))
-            progress(Double(k + 1) / Double(used.count))
+            if isCancelled() { throw ExportError.cancelled }
+            for file in staged {
+                try publishExport(file, to: dir.appendingPathComponent(file.lastPathComponent))
+            }
         }
+        progress(1)
     }
 
     private func checkRawQuality(_ job: RenderJob) throws {
@@ -301,6 +340,17 @@ public final class VideoExporter {
 
     /// Animated GIF (downscaled), useful for quick sharing.
     public func exportGIF(job: RenderJob, to url: URL, maxSide: Int = 720, progress: @escaping (Double) -> Void,
+                          isCancelled: @escaping () -> Bool) throws {
+        try withExportDirectory(in: url.deletingLastPathComponent()) { directory in
+            let output = directory.appendingPathComponent(url.lastPathComponent)
+            try writeGIF(job: job, to: output, maxSide: maxSide, progress: { progress($0 * 0.99) }, isCancelled: isCancelled)
+            if isCancelled() { throw ExportError.cancelled }
+            try publishExport(output, to: url)
+        }
+        progress(1)
+    }
+
+    private func writeGIF(job: RenderJob, to url: URL, maxSide: Int, progress: @escaping (Double) -> Void,
                           isCancelled: @escaping () -> Bool) throws {
         let frames = job.outputFrames
         guard !frames.isEmpty else { throw ExportError.noFrames }
@@ -315,7 +365,10 @@ public final class VideoExporter {
         for (k, of) in frames.enumerated() {
             if isCancelled() { throw ExportError.cancelled }
             pre.prefetch(frames[k..<min(frames.count, k + 6)].map { $0.a })
-            guard let img = job.renderOutput(of, scale: scale, fetch: { pre.get($0) }), let cg = job.renderer.renderCGImage(img) else { continue }
+            guard let img = job.renderOutput(of, scale: scale, fetch: { pre.get($0) }),
+                  let cg = job.renderer.renderCGImage(img) else {
+                throw ExportError.writer("无法渲染第 \(k + 1) 个输出画面，请确认原始素材可读")
+            }
             CGImageDestinationAddImage(dst, cg, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: delay,
                                                                                  kCGImagePropertyGIFUnclampedDelayTime: delay]] as CFDictionary)
             pre.evict(keeping: Set(frames[k..<min(frames.count, k + 6)].map { $0.a }))
