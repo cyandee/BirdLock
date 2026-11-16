@@ -1,4 +1,4 @@
-# Versions used by the locally verified 1.5.0 Windows build (Python 3.12 x64).
+# Versions pinned for the Windows release build (Python 3.12 x64).
 # Keep release builds on one tested dependency set to reduce unnecessary file changes.
 PySide6-Essentials==6.12.0
 shiboken6==6.12.0

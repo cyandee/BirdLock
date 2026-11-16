@@ -2,6 +2,24 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+/// EXIF capture time is parsed for every photo, often from parallel import workers,
+/// so keep one formatter behind a lock instead of building one per file.
+private enum ExifDateParser {
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        return f
+    }()
+    private static let lock = NSLock()
+
+    static func date(from string: String) -> Date? {
+        lock.lock(); defer { lock.unlock() }
+        return formatter.date(from: string)
+    }
+}
+
 public struct ExifInfo: Codable, Hashable, Sendable {
     public var make: String?
     public var model: String?
@@ -122,11 +140,7 @@ public enum FrameImporter {
 
         var t: Double? = nil
         if let dto = exif.dateTimeOriginal ?? (tiffD[kCGImagePropertyTIFFDateTime] as? String) {
-            let f = DateFormatter()
-            f.locale = Locale(identifier: "en_US_POSIX")
-            f.timeZone = TimeZone(secondsFromGMT: 0)
-            f.dateFormat = "yyyy:MM:dd HH:mm:ss"
-            if let d = f.date(from: dto) {
+            if let d = ExifDateParser.date(from: dto) {
                 t = d.timeIntervalSince1970
                 if let sub = (exifD[kCGImagePropertyExifSubsecTimeOriginal] as? String) ?? (exifD[kCGImagePropertyExifSubsecTime] as? String) {
                     let digits = sub.trimmingCharacters(in: .whitespaces)
@@ -170,13 +184,21 @@ public enum FrameImporter {
                 }
             }
         }
-        list.sort { a, b in
+        list = sortedForImport(list)
+        for i in list.indices { list[i].id = i }
+        return list
+    }
+
+    /// Match the Windows importer: photos with a capture time come first in time order,
+    /// photos without one go last in natural file-name order. Mixing "time" and "name"
+    /// for near-equal times would make the comparison non-transitive and the result
+    /// dependent on the sort's internal order.
+    static func sortedForImport(_ frames: [SourceFrame]) -> [SourceFrame] {
+        frames.sorted { a, b in
             if a.captureTime != b.captureTime { return (a.captureTime ?? .infinity) < (b.captureTime ?? .infinity) }
             let order = a.fileName.localizedStandardCompare(b.fileName)
             return order == .orderedSame ? a.url.path < b.url.path : order == .orderedAscending
         }
-        for i in list.indices { list[i].id = i }
-        return list
     }
 
     /// Estimate the burst frame rate from capture timestamps (defaults to 30).

@@ -11,7 +11,10 @@ def inline(t):
     t = html.escape(t, quote=False)
     t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
     t = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", t)
-    t = re.sub(r"(https?://[^\s<）)]+)", r'<a href="\1">\1</a>', t)
+    # Inline links first, then bare URLs; the lookbehind keeps the second rule from
+    # matching the URL it just placed inside an href attribute.
+    t = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", r'<a href="\2">\1</a>', t)
+    t = re.sub(r'(?<!["\'>])(https?://[^\s<）)。，、]+)', r'<a href="\1">\1</a>', t)
     return t
 
 

@@ -54,6 +54,36 @@ final class WorkspaceTests: XCTestCase {
         try JSONSerialization.data(withJSONObject:bad).write(to:file)
         XCTAssertThrowsError(try WorkspaceDocument.read(from:file))
     }
+    func testWindowsStyleProjectReferencesAreRelocated() throws {
+        // The Windows build saves absolute paths as "C:\..." in `locations` and as
+        // "file:///C:/..." URLs in the frame records. Relocation has to replace the
+        // latter even though neither side can open the original path on macOS.
+        let root=try temporary(),file=root.appendingPathComponent("工程.birdlock"),old=root.appendingPathComponent("old"),new=root.appendingPathComponent("new")
+        let document=try example(old);try document.save(to:file,cacheRoot:root.appendingPathComponent("cache"))
+        var raw=try XCTUnwrap(JSONSerialization.jsonObject(with:Data(contentsOf:file)) as? [String:Any])
+        let locations=try XCTUnwrap(raw["locations"] as? [[String:Any]])
+        var replacements:[String:String]=[:]
+        for location in locations {
+            let path=try XCTUnwrap(location["path"] as? String)
+            replacements[path]="C:\\Users\\bird\\"+(path as NSString).lastPathComponent
+        }
+        for frame in document.frames {
+            let name=try XCTUnwrap(frame.url.lastPathComponent.addingPercentEncoding(withAllowedCharacters:.urlPathAllowed))
+            replacements[frame.url.absoluteString]="file:///C:/Users/bird/"+name
+        }
+        func rewrite(_ value:Any) -> Any {
+            if let text=value as? String { return replacements[text] ?? text }
+            if let array=value as? [Any] { return array.map(rewrite) }
+            if let object=value as? [String:Any] { return object.mapValues(rewrite) }
+            return value
+        }
+        try JSONSerialization.data(withJSONObject:rewrite(raw)).write(to:file)
+        try FileManager.default.moveItem(at:old,to:new)
+        let relocated=try WorkspaceDocument.read(from:file,relocation:new)
+        for frame in relocated.frames {
+            XCTAssertEqual(frame.url.deletingLastPathComponent().standardizedFileURL.path,new.standardizedFileURL.path)
+        }
+    }
     func testDocumentsCannotBeSavedInsideDisposableCache() throws {
         let root=try temporary(),cache=root.appendingPathComponent("cache")
         try FileManager.default.createDirectory(at:cache,withIntermediateDirectories:true)

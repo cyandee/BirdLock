@@ -132,13 +132,4 @@ public struct GrayPatch {
         }
         return GrayPatch(width: n, height: n, data: out)
     }
-
-    public func toCGImage() -> CGImage? {
-        let bytes = data.map { UInt8(clamp($0, 0, 1) * 255) }
-        let cs = CGColorSpaceCreateDeviceGray()
-        guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
-        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: width,
-                       space: cs, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
-                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
-    }
 }

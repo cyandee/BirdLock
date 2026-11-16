@@ -61,10 +61,9 @@ public enum TrackBuilder {
         }
         let reflectDominant = refl > prop
         var sims = [Similarity?](repeating: nil, count: n)
-        var fitErr = [Double](repeating: .infinity, count: n)
         if let t = template {
             for i in 0..<n {
-                if let (s, e) = t.fit(obs[i], preferReflect: reflectDominant), e < 0.6 { sims[i] = s; fitErr[i] = e }
+                if let (s, e) = t.fit(obs[i], preferReflect: reflectDominant), e < 0.6 { sims[i] = s }
             }
         }
         let tHL = template?.headLength ?? 2

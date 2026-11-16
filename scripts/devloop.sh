@@ -2,7 +2,7 @@
 # BirdLock 开发辅助脚本
 # 作用：执行 Claude 放进 .devloop/queue/ 的任务脚本（编译、测试、训练模型等），
 #       把输出写到 .devloop/out/，这样 Claude 就能在你的 Mac 上编译调试。
-# 用法：在「终端」里运行   zsh ~/Claude/bird/scripts/devloop.sh
+# 用法：在仓库根目录运行   zsh scripts/devloop.sh
 #       随时按 Ctrl-C 停止。每个任务开始时会把脚本内容打印出来，方便你查看。
 
 ROOT="${0:A:h:h}"

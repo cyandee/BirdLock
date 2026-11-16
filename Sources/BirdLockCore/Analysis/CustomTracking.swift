@@ -96,6 +96,8 @@ public enum CustomTracking {
                 mark(seed.frame)
                 let lower=k==0 ? range.lowerBound : (seeds[k-1].frame+seed.frame)/2+1
                 let upper=k+1==seeds.count ? range.upperBound : (seed.frame+seeds[k+1].frame)/2+1
+                // The reference patch is the same for every step of this seed; resample it once.
+                guard let original=GrayPatch.extract(from:reference,rect:sb.rect,outW:32,outH:32) else { continue }
                 for (direction,bound) in [(-1,lower-1),(1,upper)] {
                     var previous=reference,box=sb,anchor=sp,missed=0,i=seed.frame+direction
                     while i != bound {
@@ -103,7 +105,6 @@ public enum CustomTracking {
                         guard let current=cache.loadProxy(fingerprint:a.fingerprint,index:i) else { throw ModelError.badOutput("无法读取跟踪照片") }
                         mark(i)
                         if var result=autoreleasepool(invoking: { step(previous:previous,current:current,box:box,anchor:anchor) }),
-                           let original=GrayPatch.extract(from:reference,rect:sb.rect,outW:32,outH:32),
                            let candidate=GrayPatch.extract(from:current,rect:result.box.rect,outW:32,outH:32),correlation(original.data,candidate.data)>=0.25 {
                             previous=current;box=result.box;anchor=result.anchor;missed=0
                             statistics(current,box,anchor,i)

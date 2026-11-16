@@ -3,7 +3,7 @@
 #   BirdLock.app（Apple 芯片 + Intel 通用版，内置使用说明、用户协议、许可）
 #   使用说明.pdf、用户协议.pdf、安装步骤.txt、LICENSE.txt（AGPL-3.0）
 #   源代码/BirdLock-<版本>-source.zip（AGPL-3.0 要求随软件提供完整源代码）
-# 用法：VERSION=1.0 LABEL=测试版 zsh scripts/make_release.sh
+# 用法：LABEL=测试版 zsh scripts/make_release.sh（版本取自根目录 VERSION；显式传 VERSION 时必须与之一致）
 set -e
 ROOT="${0:A:h:h}"
 cd "$ROOT"
@@ -13,11 +13,12 @@ NAME="BirdLock鸟眼锁定-${VERSION}${LABEL}"
 
 UNIVERSAL=1 VERSION="$VERSION" zsh scripts/build_app.sh
 
+APP="${APP_OUTPUT:-$ROOT/dist/BirdLock.app}"
 STAGE="$(mktemp -d)/$NAME"
 mkdir -p "$STAGE/源代码"
-ditto dist/BirdLock.app "$STAGE/BirdLock.app"
+ditto "$APP" "$STAGE/BirdLock.app"
 codesign --verify --deep --strict "$STAGE/BirdLock.app"
-DOCS=dist/BirdLock.app/Contents/Resources/Docs
+DOCS="$APP/Contents/Resources/Docs"
 cp "$DOCS/使用说明.pdf" "$STAGE/"
 python3 -I scripts/md2html.py docs/用户协议.md "$STAGE/.agreement.html"
 "$ROOT/.build/html2pdf" "$STAGE/.agreement.html" "$STAGE/用户协议.pdf" >/dev/null
