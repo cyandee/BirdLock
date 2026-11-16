@@ -172,12 +172,16 @@ def main(argv=None):
     state.analysis.excluded.remove(1);state.project_changed();settle()
     # Camera first, recording second, on the real multi-track card.
     from .audio_tracks import AudioTracksCard,CameraSoundPicker
-    from ..core.sounds import assets
+    from ..core.sounds import burst_assets
     card=window.findChild(AudioTracksCard);picker=card.sounds
-    assert picker.camera.count()==5
-    for camera,expected in [('sony-a1m2',5),('sony-a93',2),('sony-a7m5',2),('nikon-z8',1),('sony-a7r6',1)]:
+    expected_recordings = {}
+    for entry in burst_assets():
+        expected_recordings.setdefault(entry['cameraID'], []).append(entry['id'])
+    assert {'sony-a1m2', 'nikon-z8', 'canon-1d-mark-ii', 'canon-r5-mark-ii'} <= expected_recordings.keys()
+    assert [picker.camera.itemData(i) for i in range(picker.camera.count())] == list(expected_recordings)
+    for camera, expected in expected_recordings.items():
         picker.camera.setCurrentIndex(picker.camera.findData(camera));settle(.05)
-        assert picker.recording.count()==expected
+        assert [picker.recording.itemData(i) for i in range(picker.recording.count())] == expected
     picker.camera.setCurrentIndex(picker.camera.findData('nikon-z8'));card.add_shutter();settle()
     assert state.audio.tracks[-1].assetID=='nikon-z8'
     track_picker=[p for p in card.findChildren(CameraSoundPicker) if p is not picker][-1]

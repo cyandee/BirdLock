@@ -57,8 +57,11 @@ def main(argv=None):
     state.export.focusMark.showHead = True
     state.export.focusMark.captureFlash = True
     from birdlock.core.settings import AudioTrack, FocusMarkColor
-    from birdlock.core.sounds import assets, asset_path
-    assert len(assets()) == 12, "Missing bundled sound library"
+    from birdlock.core.sounds import assets, asset_path, directory
+    sound_root = directory()
+    assert sound_root is not None, "Missing bundled sound library"
+    sound_manifest = json.loads((sound_root / "library.json").read_text(encoding="utf-8"))
+    assert sound_manifest and assets() == sound_manifest, "Missing bundled sound files"
     state.export.focusMark.eyeColor = FocusMarkColor.WHITE
     state.export.focusMark.headColor = FocusMarkColor.ORANGE
     state.export.focusMark.bodyColor = FocusMarkColor.GREEN
