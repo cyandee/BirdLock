@@ -10,6 +10,7 @@
 | 交接状态 | 当前为本地测试，等待维护者测试审阅。获授权后再推送集成分支，执行整合提交的双端 CI，并准备正式发布 |
 | Windows 已实现 | RAW、配对去重、长视频磁盘预算、音轨开关、分组、编辑历史、外观与 DWM。吸收 [PR #4](https://github.com/cyandee/BirdLock/pull/4) 的缓存、工程路径、本地验收及 ICU 修复 |
 | Mac 已实现 | Apple ImageIO 和 Core Image RAW、音轨启用和混音、分组命名与 Finder 定位、⌘Z / ⇧⌘Z、三种 AppKit 外观、支持窗口资源、600 秒 / 18,000 帧选择和缓存预算。schema 1 工程可恢复已选 RAW 来源，按原记录分组和保存。Mac 可以重新定位 Windows 盘符路径并重存 |
+| Mac 上级文件夹导入 | `c0f7d39`。支持选取、拖入和从 Finder 打开带多级子文件夹的照片目录。拍摄时间排序、连拍分组和 RAW + JPEG 配对沿用已有路径。Windows 目前搜到第一层有照片的位置就停止，最多向下两层。实测见测试矩阵 |
 | 发版前 Issue 整改 | `2907ff8`。Windows 无可用头部角度时保留手动旋转，导出初始化异常后释放导出状态，发现不可渲染帧后明确失败。Mac 的视频、GIF 与图片序列先写临时位置，渲染失败或取消保留旧输出。Windows 便携包许可页补录 PyInstaller 启动器，实际随包的组件以成品清单为准 |
 | 工程恢复 | Windows 可打开原始尺寸未知的机内 RAW 预览记录，并保留分辨率限制。视频工程缺少防抖记录时，重算会采用已保存的镜头配置。六种 RAW 双向读取、保存与导出在 Mac 原生及 Mac 上的 Windows Python 代码完成复测，详见 [测试矩阵](TEST_MATRIX.md) |
 | Windows 接手 | 在实际 Windows x64 上验证修复版便携程序启动、取消后重试、坏帧报错和旧成品保留。再打开 Mac 保存的工程并回存给 Mac，覆盖两种 RAW、关闭的背景音乐/独立轨、Unicode 分组和视频缓存重建。Nikon Z8 高效率低样本在此次 Mac 上可解码，仍以 Windows 已记录的失败为准。Mac 上运行 Windows Python 代码时，带循环音轨的 FFmpeg 导出曾停滞，非循环对照通过，请在实体 Windows 对照 |
