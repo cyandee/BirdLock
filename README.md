@@ -4,17 +4,17 @@ BirdLock 是一个把飞鸟连拍照片做成视频的小工具。导入照片�
 
 我希望做这类视频能简单一点：不用逐张挪照片，也能调整构图、加上对焦框和快门声，再配一段音乐。现在有 macOS 和 Windows 两个版本，免费使用，开源代码也在这里。
 
-**1.11.0 测试版**支持相机 RAW、较长的 SDR 视频和撤销重做。下载区仍指向已发布的 1.10.0。[1.11.0 更新说明](docs/更新说明-1.11.0.md)
+**1.11.0** 支持相机 RAW、较长的 SDR 视频和撤销重做。[1.11.0 更新说明](docs/更新说明-1.11.0.md)
 
 ## 下载
 
-当前下载为 **1.10.0**，Mac 与 Windows 版本一致。安装包、对应源码、更新文件和校验文件都在同一个下载页，旧版本保留。
+Mac 与 Windows 版本一致。安装包、对应源码、更新文件和校验文件都在同一个下载页，旧版本保留。
 
-已安装1.5.0的用户可通过[软件内更新](docs/自动更新.md)直接升级；开启自动检查时会收到提示，未开启时请手动检查。更早版本需先手动安装带更新器的版本，也可以直接安装1.10.0完整包。
+已安装1.5.0的用户可通过[软件内更新](docs/自动更新.md)直接升级；开启自动检查时会收到提示，未开启时请手动检查。更早版本需先手动安装带更新器的版本，也可以直接安装新版完整包。
 
-- [macOS 通用版](https://github.com/cyandee/BirdLock/releases/download/v1.10.0/BirdLock-1.10.0.dmg)：macOS 14 及以上，支持 Apple 芯片和 Intel。
-- [Windows 便携版](https://github.com/cyandee/BirdLock/releases/download/v1.10.0/BirdLock-1.10.0-Windows-x64.zip)：Windows 10 / 11 x64，完整解压后运行。
-- [更新说明、源码和校验文件](https://github.com/cyandee/BirdLock/releases/tag/v1.10.0) · [历史版本](https://github.com/cyandee/BirdLock/releases)
+- [macOS 通用版](https://github.com/cyandee/BirdLock/releases/download/v1.11.0/BirdLock-1.11.0.dmg)：macOS 14 及以上，支持 Apple 芯片和 Intel。
+- [Windows 便携版](https://github.com/cyandee/BirdLock/releases/download/v1.11.0/BirdLock-1.11.0-Windows-x64.zip)：Windows 10 / 11 x64，完整解压后运行。
+- [更新说明、源码和校验文件](https://github.com/cyandee/BirdLock/releases/tag/v1.11.0) · [历史版本](https://github.com/cyandee/BirdLock/releases)
 
 Mac 版还没有做 Apple 公证，首次打开可能被系统拦截，安装方法见[使用说明](docs/使用说明.md)。如果遇到打不开的情况，请把报错提示、系统版本和芯片型号发给我。
 
