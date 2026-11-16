@@ -142,8 +142,9 @@ def fingerprint_suffix(frame):
 def has_preview_limit(frame):
     if not frame.raw or frame.raw.get('source') != 'embedded':
         return False
-    return (frame.pixelWidth < frame.raw['fullWidth'] * .95 or
-            frame.pixelHeight < frame.raw['fullHeight'] * .95)
+    width, height = frame.raw['fullWidth'], frame.raw['fullHeight']
+    return (width == 0 or height == 0 or
+            frame.pixelWidth < width * .95 or frame.pixelHeight < height * .95)
 
 
 def quality_notices(frames):
@@ -154,5 +155,5 @@ def quality_notices(frames):
         notices.append(f'{fallback} 张 RAW 按可用图像降级')
     if limited:
         w, h = limited[0].pixelWidth, limited[0].pixelHeight
-        notices.append(f'{len(limited)} 张 RAW 使用较小的机内预览（首张 {w}×{h}）；全分辨率导出需重新导入并选择高分辨率 RAW。')
+        notices.append(f'{len(limited)} 张 RAW 的机内预览有分辨率限制（首张 {w}×{h}）；全分辨率导出需重新导入并选择高分辨率 RAW。')
     return notices

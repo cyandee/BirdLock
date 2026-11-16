@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy, json, os, tempfile
 from pathlib import Path
 from urllib.parse import urlparse, unquote
+from .. import __version__
 from .frames import SourceFrame,read_frame
 from .analysis import SequenceAnalysis, build_track, fingerprint
 from .subjects import SubjectProfile
@@ -104,7 +105,7 @@ def create(*,frames,segments,analysis,remembered,subject,profile,profiles,audio,
             if not recipe.is_file():raise ValueError('请重新导入一次该视频，记录原片与镜头参数后再保存工程。')
             motion=root/'motion.json'
             videos.append(dict(cacheDirectory=directory,recipe=json.loads(recipe.read_text(encoding='utf-8')),motion=json.loads(motion.read_text(encoding='utf-8')) if motion.exists() else None))
-    return dict(format=FORMAT,schema=SCHEMA,creatorVersion='1.10.0',subject=subject,frames=[{**f.to_dict(),'url':uri(f.path)} for f in frames],
+    return dict(format=FORMAT,schema=SCHEMA,creatorVersion=__version__,subject=subject,frames=[{**f.to_dict(),'url':uri(f.path)} for f in frames],
         segments=[dict(start=s.start,count=s.count,fps=s.fps,groupID=s.groupID,name=s.name) for s in segments],segmentIndex=segment_index,mergeGroups=list(merge_groups),
         analyses=[native_analysis(a) for a in analyses],profile=native_profile(profile),profiles={k:native_profile(v) for k,v in profiles.items()},
         audio=native_audio(audio),watermark=native_watermark(watermark),videos=videos,currentFrame=current_frame,viewMode=view_mode,sourceZoom=source_zoom,previewAudio=preview_audio)
@@ -221,9 +222,13 @@ def restore_media(document, cache_root, cancelled=lambda:False):
             if r.get('lensJSON'):
                 profile=str(Path(temp)/'lens.json');Path(profile).write_text(r['lensJSON'],encoding='utf-8')
             frames,fps=extract(r['sourcePath'],r['start'],r['seconds'],r['fps'],profile=profile,root=Path(cache_root)/'video-imports',cancelled=cancelled)
-        if len(frames)!=r['count']:raise ValueError('原视频已变化，不能恢复同一组画面。')
-        if video.get('motion'):save_record(Path(frames[0].path).parent/'motion.json',video['motion'])
-        else:prepare(frames,r['sourcePath'],r['start'],fps,cancelled=cancelled)
+            if len(frames) != r['count']:
+                raise ValueError('原视频已变化，不能恢复同一组画面。')
+            if video.get('motion'):
+                save_record(Path(frames[0].path).parent / 'motion.json', video['motion'])
+            else:
+                prepare(frames, r['sourcePath'], r['start'], fps, profile=profile,
+                        force=profile is not None, cancelled=cancelled)
         old=video['cacheDirectory']
         for f in d['frames']:
             p=path_from_url(f['url'])

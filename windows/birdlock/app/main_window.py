@@ -507,7 +507,9 @@ class MainWindow(ProjectActions,QMainWindow):
         tb.addWidget(self.support_btn)
 
     def show_release_notes(self):
-        DocDialog("BirdLock 1.10.0 更新说明",doc_text("更新说明-1.10.0.md"),self).exec()
+        from .. import __version__
+
+        DocDialog(f"BirdLock {__version__} 更新说明", doc_text(f"更新说明-{__version__}.md"), self).exec()
         notice=getattr(self,"release_notice",None)
         if notice is not None:notice.acknowledge()
 

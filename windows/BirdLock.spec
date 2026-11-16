@@ -6,6 +6,8 @@ from PyInstaller.utils.hooks import collect_dynamic_libs
 
 here = os.path.abspath(SPECPATH)
 repo = os.path.dirname(here)
+with open(os.path.join(repo, "VERSION"), encoding="utf-8") as version_file:
+    release_version = version_file.read().strip()
 
 datas = [
     (os.path.join(repo, "SharedResources", "Updates"), "updates"),
@@ -24,7 +26,7 @@ datas = [
     (os.path.join(repo, "docs", "自动更新.md"), "docs"),
     (os.path.join(repo, "docs", "视频导入与镜头配置.md"), "docs"),
     (os.path.join(repo, "docs", "工程与缓存管理.md"), "docs"),
-    (os.path.join(repo, "docs", "更新说明-1.10.0.md"), "docs"),
+    (os.path.join(repo, "docs", f"更新说明-{release_version}.md"), "docs"),
     (os.path.join(repo, "docs", "自定义目标与固定选眼.md"), "docs"),
     (os.path.join(repo, "docs", "第三方许可.md"), "docs"),
     (os.path.join(repo, "LICENSE"), "docs"),

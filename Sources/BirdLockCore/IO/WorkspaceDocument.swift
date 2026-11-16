@@ -165,7 +165,7 @@ public struct WorkspaceDocument: Codable, Sendable {
             } else if location["required"] as? Bool != false { missing.append(old) } else { optionalMissing.append(old) }
         }
         if !missing.isEmpty { throw WorkspaceError.missing(missing) }
-        let translated=try JSONSerialization.data(withJSONObject:replace(raw,mapping:mapping,canonical:canonical))
+        let translated=try JSONSerialization.data(withJSONObject:replace(raw, mapping:mapping))
         var document=try JSONDecoder().decode(WorkspaceDocument.self,from:translated)
         document.missingAssets=optionalMissing
         try document.validate();return document

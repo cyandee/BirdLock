@@ -29,6 +29,48 @@ class WorkspaceTests(unittest.TestCase):
         subprocess.run(['cmd.exe','/d','/c','mklink','/J',str(link),str(target)],
                        check=True,capture_output=True)
         self.assertTrue(link.is_junction())
+    def test_mac_raw_preview_with_unknown_native_size_round_trips(self):
+        from birdlock.core.raw_photo import has_preview_limit
+
+        document = example(self.root / 'media')
+        raw = dict(mode='camera', source='embedded', fullWidth=0, fullHeight=0)
+        for frame in (document['frames'][0], document['analyses'][0]['frames'][0]):
+            frame['raw'] = raw.copy()
+        path = self.root / 'preview.birdlock'
+        workspace.save(document, path, self.cache)
+        restored = workspace.restore_media(workspace.read(path), self.cache)
+        self.assertEqual(restored['_frames'][0].raw, raw)
+        self.assertEqual(restored['_analyses'][0].frames[0].raw, raw)
+        self.assertTrue(has_preview_limit(restored['_frames'][0]))
+        invalid = restored['_frames'][0].to_dict()
+        invalid['raw'] = {**raw, 'source': 'decoded'}
+        with self.assertRaisesRegex(ValueError, 'RAW'):
+            SourceFrame.from_dict(invalid)
+
+    def test_video_restore_recomputes_missing_motion_with_saved_lens(self):
+        document = example(self.root / 'media')
+        frame = workspace.local_analysis(document['analyses'][0]).frames[0]
+        lens_json = '{"name":"project lens"}'
+        document['videos'] = [{
+            'cacheDirectory': str(self.root / 'old-cache'),
+            'recipe': dict(sourcePath=str(self.root / 'video.mp4'), start=0,
+                           seconds=1, fps=30, count=1, lensJSON=lens_json),
+            'motion': None,
+        }]
+
+        def extract(*args, profile, **kwargs):
+            self.assertEqual(Path(profile).read_text(encoding='utf-8'), lens_json)
+            return [frame], 30
+
+        def prepare(*args, profile, force, **kwargs):
+            self.assertEqual(Path(profile).read_text(encoding='utf-8'), lens_json)
+            self.assertTrue(force)
+
+        with patch('birdlock.core.video_import.extract', side_effect=extract), \
+                patch('birdlock.core.video_stabilization.prepare', side_effect=prepare) as rebuild:
+            workspace.restore_media(document, self.cache)
+        rebuild.assert_called_once()
+
     def test_optional_empty_strings_stay_absent_in_shared_audio_and_watermark(self):
         audio=AudioSettings(tracks=[AudioTrack(assetID='sony-20')])
         wire=workspace.native_audio(audio)

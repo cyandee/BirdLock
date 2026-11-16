@@ -104,10 +104,14 @@ class SourceFrame:
     def from_dict(d: dict) -> "SourceFrame":
         d = dict(d)
         raw = d.get("raw")
-        if raw is not None and (not isinstance(raw, dict) or raw.get("mode") not in ("camera", "raw")
-                or raw.get("source") not in ("embedded", "decoded")
-                or any(type(raw.get(k)) is not int or not 0 < raw[k] <= 100_000 for k in ("fullWidth", "fullHeight"))):
-            raise ValueError("工程 RAW 图像记录无效。")
+        if raw is not None:
+            if not isinstance(raw, dict) or raw.get("mode") not in ("camera", "raw") or raw.get("source") not in ("embedded", "decoded"):
+                raise ValueError("工程 RAW 图像记录无效。")
+            # A camera preview can be readable even if the original RAW size is unknown.
+            minimum = 0 if raw["source"] == "embedded" else 1
+            if any(type(raw.get(key)) is not int or not minimum <= raw[key] <= 100_000
+                   for key in ("fullWidth", "fullHeight")):
+                raise ValueError("工程 RAW 图像记录无效。")
         d["exif"] = ExifInfo(**d.get("exif", {}))
         return SourceFrame(**d)
 
