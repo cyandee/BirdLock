@@ -14,8 +14,8 @@ struct ContentView: View {
     private func open(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
         guard agreed else { pendingOpen += urls; return }
-        if urls.count==1,urls[0].pathExtension.lowercased()=="birdlock" { state.openProjectPanel(urls[0]);return }
-        if urls.contains(where: { VideoImporter.extensions.contains($0.pathExtension.lowercased()) }) { if state.confirmCanLeave() { state.importURLs(urls) };return }
+        if urls.count == 1, urls[0].pathExtension.lowercased() == "birdlock", !isImportDirectory(urls[0]) { state.openProjectPanel(urls[0]);return }
+        if urls.contains(where: isVideoFile) { if state.confirmCanLeave() { state.importURLs(urls) };return }
         let audio = urls.filter { isAudioFile($0) }
         if audio.count == urls.count {
             if state.analysis != nil, let u = audio.first { state.setAudio(u) }
@@ -132,9 +132,17 @@ struct ContentView: View {
     }
 }
 
+private func isImportDirectory(_ url: URL) -> Bool {
+    url.hasDirectoryPath || (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+}
+
+func isVideoFile(_ url: URL) -> Bool {
+    VideoImporter.extensions.contains(url.pathExtension.lowercased()) && !isImportDirectory(url)
+}
+
 func isAudioFile(_ u: URL) -> Bool {
     let ext = u.pathExtension.lowercased()
-    return AudioMixer.fileExtensions.contains(ext) && !FrameImporter.supportedExtensions.contains(ext)
+    return AudioMixer.fileExtensions.contains(ext) && !FrameImporter.supportedExtensions.contains(ext) && !isImportDirectory(u)
 }
 
 enum Theme {
@@ -223,7 +231,7 @@ struct DropZoneView: View {
                 Circle().fill(Theme.accent.opacity(0.12)).frame(width: 110, height: 110)
                 Image(systemName: "bird.fill").font(.system(size: 46)).foregroundStyle(Theme.accent)
             }
-            Text("把连拍照片或视频拖到这里").font(.title2.weight(.semibold))
+            Text("把照片文件夹、连拍照片或视频拖到这里").font(.title2.weight(.semibold))
             Text("照片支持 JPG / HEIF 和受支持的 RAW，视频推荐 SDR MP4 / MOV。\n自动识别并锁定主体，一键生成连拍视频。")
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Button("选择文件夹…") { openImportPanel(state) }

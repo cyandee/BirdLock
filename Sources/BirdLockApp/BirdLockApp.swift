@@ -126,7 +126,7 @@ func openImportPanel(_ state: AppState) {
     p.allowedContentTypes = FrameImporter.supportedExtensions.sorted().map {
         UTType(filenameExtension: $0) ?? UTType(tag: $0, tagClass: .filenameExtension, conformingTo: .data) ?? .image
     }
-    p.message = "选择连拍照片所在的文件夹，或直接选中多张照片"
+    p.message = "选择照片或包含多个连拍子文件夹的上级文件夹"
     let grouping = NSButton(checkboxWithTitle: "归为一组，合成同一视频（不勾选则按拍摄间隔分组）", target: nil, action: nil)
     grouping.setButtonType(.switch)
     let raw = NSPopUpButton()

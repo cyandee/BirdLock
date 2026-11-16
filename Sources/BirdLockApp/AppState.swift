@@ -168,7 +168,7 @@ final class AppState {
     // MARK: - Import & analysis
 
     func importURLs(_ urls: [URL], merge: Bool = false) {
-        if urls.contains(where: { VideoImporter.extensions.contains($0.pathExtension.lowercased()) }) {
+        if urls.contains(where: isVideoFile) {
             guard urls.count == 1 else { timelineMessage = "视频请每次单独导入一个文件"; return }
             videoImportURL = urls[0]; return
         }
@@ -176,23 +176,26 @@ final class AppState {
         stop()
         analysisTask?.cancel(); cancelFlag.cancel()
         importGeneration += 1
-        let generation = importGeneration
+        let generation = importGeneration, flag = CancelFlag()
+        cancelFlag = flag
         let mode = rawMode, pairs = rawPairPolicy
         editHistory.reset(to: nil)
         eyeUndo = nil; pendingCustomBox = nil
         phase = .importing
         importMessage = "正在读取照片…"
         analysis = nil; job = nil; previewImage = nil; sourceImage = nil; sourceDetail = nil
-        Task.detached(priority: .userInitiated) {
+        analysisTask = Task.detached(priority: .userInitiated) {
             let cacheOperation=CachePolicy.beginOperation(root:ProxyCache.shared.root)
             defer { CachePolicy.endOperation(cacheOperation);Task { @MainActor [weak self] in self?.trimCache() } }
-            let candidates = FrameImporter.collectImageURLs(urls)
-            let all = FrameImporter.importFiles(candidates, rawMode: mode, pairPolicy: pairs)
+            let candidates = FrameImporter.collectImageURLs(urls, isCancelled: { flag.isCancelled })
+            guard !flag.isCancelled else { return }
+            let all = FrameImporter.importFiles(candidates, rawMode: mode, pairPolicy: pairs, isCancelled: { flag.isCancelled })
+            guard !flag.isCancelled else { return }
             let hasRaw = candidates.contains { FrameImporter.rawExtensions.contains($0.pathExtension.lowercased()) }
             let segs = FrameImporter.segments(all)
             await MainActor.run {
                 // a newer import started meanwhile
-                guard generation == self.importGeneration else { return }
+                guard generation == self.importGeneration, !flag.isCancelled else { return }
                 self.segmentIndex = 0
                 self.projectURL=nil;self.projectDirty=true
                 self.frames = all

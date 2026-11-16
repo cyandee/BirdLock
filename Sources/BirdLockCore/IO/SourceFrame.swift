@@ -85,21 +85,37 @@ public enum FrameImporter {
     public static let rawExtensions = RawPhoto.extensions
     public static let supportedExtensions: Set<String> = Set(["jpg", "jpeg", "heic", "heif", "hif", "png", "tif", "tiff"]).union(RawPhoto.extensions)
 
-    /// Expand dropped URLs (files or folders, non-recursive into sub-folders) to image files.
-    public static func collectImageURLs(_ urls: [URL]) -> [URL] {
-        var out: [URL] = []
+    /// Collect photos in selected files and folders, including nested folders.
+    public static func collectImageURLs(_ urls: [URL], isCancelled: () -> Bool = { false }) -> [URL] {
         let fm = FileManager.default
-        for u in urls {
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: u.path, isDirectory: &isDir) else { continue }
-            if isDir.boolValue {
-                let items = (try? fm.contentsOfDirectory(at: u, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
-                out += items.filter { supportedExtensions.contains($0.pathExtension.lowercased()) }
-            } else if supportedExtensions.contains(u.pathExtension.lowercased()) {
-                out.append(u)
+        let keys: Set<URLResourceKey> = [.isRegularFileKey]
+        var seen = Set<URL>()
+        var images: [URL] = []
+
+        func appendIfImage(_ url: URL, inspectionURL: URL) {
+            guard supportedExtensions.contains(url.pathExtension.lowercased()),
+                  (try? inspectionURL.resourceValues(forKeys: keys).isRegularFile) == true else { return }
+            let file = url.standardizedFileURL
+            if seen.insert(file).inserted { images.append(file) }
+        }
+
+        for url in urls {
+            if isCancelled() { return [] }
+            var isDirectory: ObjCBool = false
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else { continue }
+            if isDirectory.boolValue {
+                // Directory enumeration does not follow symbolic links found inside a folder.
+                guard let entries = fm.enumerator(at: url, includingPropertiesForKeys: Array(keys),
+                                                  options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { continue }
+                for case let entry as URL in entries {
+                    if isCancelled() { return [] }
+                    appendIfImage(entry, inspectionURL: entry)
+                }
+            } else {
+                appendIfImage(url, inspectionURL: url.resolvingSymlinksInPath())
             }
         }
-        return out
+        return images
     }
 
     public static func readFrame(url: URL, id: Int, rawMode: RawMode = .camera) -> SourceFrame? {
@@ -160,15 +176,18 @@ public enum FrameImporter {
         importFiles(collectImageURLs(urls), rawMode: rawMode, pairPolicy: pairPolicy)
     }
 
-    public static func importFiles(_ urls: [URL], rawMode: RawMode, pairPolicy: RawPairPolicy) -> [SourceFrame] {
+    public static func importFiles(_ urls: [URL], rawMode: RawMode, pairPolicy: RawPairPolicy,
+                                   isCancelled: @Sendable () -> Bool = { false }) -> [SourceFrame] {
         var seen = Set<URL>()
         let files = urls.map(\.standardizedFileURL).filter { seen.insert($0).inserted }
         var frames = [SourceFrame?](repeating: nil, count: files.count)
         let lock = NSLock()
         DispatchQueue.concurrentPerform(iterations: files.count) { i in
+            guard !isCancelled() else { return }
             let f = autoreleasepool { readFrame(url: files[i], id: i, rawMode: rawMode) }
             lock.lock(); frames[i] = f; lock.unlock()
         }
+        guard !isCancelled() else { return [] }
         var list = frames.compactMap { $0 }
         if pairPolicy != .both {
             let preferRaw = pairPolicy == .raw
