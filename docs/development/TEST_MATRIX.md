@@ -13,6 +13,19 @@
 
 [PR 工作流](../../.github/workflows/pr-checks.yml) · [构建与发布](../构建与发布.md)
 
+## 1.11.0 本地候选复验
+
+2026-11-16，代码提交 `2246d67`。实测平台为 Apple 芯片 Mac，macOS 27.2.1。Windows Python 结果和 Windows EXE 实机结果分别列出。
+
+| 环境 | 检查 | 结果 |
+|---|---|---|
+| macOS 原生 | Swift 单测、CLI 自检、打包工具 | 107 项 Swift 单测与 35 项打包工具单测通过，CLI 自检通过 |
+| macOS 原生 | 1.11.0 通用 DMG | 打包、包内签名和模拟安装后签名检查通过；本机启动并打开 1.11.0 更新说明 |
+| Mac 上的 Windows Python 和 Qt 源码 | Windows 单测、CLI 自检、Qt 离屏启动 | 169 项单测、CLI 自检和离屏启动通过。LibRaw 0.22.2 |
+| Mac 原生与 Mac 上的 Windows Python 源码 | 双向工程与导出 | 六份公开 RAW 在机内预览和高分辨率两种策略下完成跨端读取与导出，Windows 格式路径重定位、Unicode 组名和音轨开关通过 |
+| Mac 上的 Windows Python 源码 | 防抖和视频缓存重建 | 从原视频在新缓存重建 12 帧，核对防抖记录采用工程镜头配置 `[50, 52, 32, 24]` |
+| Windows x64 实体机 | 1.11.0 EXE 启动、RAW 打开与跨系统工程回读、硬件编码 | 待维护者验收 |
+
 ## 下一版 Windows 阶段
 
 2026-11-15，代码验收提交 `fcc576ea9c668d4d683b97e7179b9a83a8b21344`。实机 Windows 11 Pro x64 build 26300，i7-10700K（16 线程），64 GiB，RTX 3060 12 GB，Python 3.12.10 / Qt 6.12 / ONNX Runtime DirectML 1.24.4，原生桌面 DPR 1.75。以下是公开的结果摘要，不附原始日志或用户素材。

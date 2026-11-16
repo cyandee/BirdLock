@@ -2,26 +2,26 @@
 
 这里记录当前任务和下一步。版本历史、已上线状态和历史验收沿用原文档。当前开发验证集中在 [测试矩阵](TEST_MATRIX.md)。[版本记录](../迭代记录.md) · [项目近况](../工作进度.md) · [历史验收](../整批功能验收清单.md)
 
-## 当前任务：下一版双平台集成
+## 当前任务：1.11.0 本地验收
 
 | 字段 | 内容 |
 |---|---|
-| 分支及 PR | `codex/windows-next-release` → `main`，沿用 [PR #6](https://github.com/cyandee/BirdLock/pull/6)。Windows 交接 SHA `704cac5a6e04c30be17803c17d38738c904bd062`，Mac 原生实现 SHA `81eae24521efb087fd32304569fb2f380574e652` |
-| 写入权 | Windows 在 PR 正文交出写入权。Mac 在 PR 确认接手并完成适配。回填实机结果前在 PR 确认下一次接手，或从约定 SHA 开单独分支 |
+| 本地分支 | `codex/birdlock-1.11.0-review` 整合 [PR #6](https://github.com/cyandee/BirdLock/pull/6) 与 [PR #7](https://github.com/cyandee/BirdLock/pull/7)。测试版本为 1.11.0，代码基线 `2246d67` |
+| 交接状态 | 当前为本地测试，等待维护者测试审阅。获授权后再推送集成分支，执行整合提交的双端 CI，并准备正式发布 |
 | Windows 已实现 | RAW、配对去重、长视频磁盘预算、音轨开关、分组、编辑历史、外观与 DWM。吸收 [PR #4](https://github.com/cyandee/BirdLock/pull/4) 的缓存、工程路径、本地验收及 ICU 修复 |
 | Mac 已实现 | Apple ImageIO 和 Core Image RAW、音轨启用和混音、分组命名与 Finder 定位、⌘Z / ⇧⌘Z、三种 AppKit 外观、支持窗口资源、600 秒 / 18,000 帧选择和缓存预算。schema 1 工程可恢复已选 RAW 来源，按原记录分组和保存。Mac 可以重新定位 Windows 盘符路径并重存 |
-| 双向回归 | 实体 Mac 上的原生 Swift 与 Python/Qt 代码对六种共同 RAW 样本执行了两种策略的双向读取、保存或导出。相关证据和实机范围见 [TEST_MATRIX.md](TEST_MATRIX.md) |
+| 工程恢复 | Windows 可打开原始尺寸未知的机内 RAW 预览记录，并保留分辨率限制。视频工程缺少防抖记录时，重算会采用已保存的镜头配置。六种 RAW 双向读取、保存与导出在 Mac 原生及 Mac 上的 Windows Python 代码完成复测，详见 [测试矩阵](TEST_MATRIX.md) |
 | Windows 接手 | 在实际 Windows x64 上打开 Mac 保存的工程并回存给 Mac，覆盖两种 RAW、关闭的背景音乐/独立轨、Unicode 分组和视频缓存重建。Nikon Z8 高效率低样本在此次 Mac 上可解码，仍以 Windows 已记录的失败为准。Mac 上运行 Windows Python 代码时，带循环音轨的 FFmpeg 导出曾停滞，非循环对照通过，请在实体 Windows 对照 |
 | 其他复测 | 两端真实 RAW 鸟眼连拍、Windows 10 和高 DPI/Snap、不同 RAW 压缩、18,000 帧负载、真实长视频全链路和镜像实机升级。Windows 端仍需原报告的水印选择器闪退、特定硬件编码和异常连拍时间戳。Mac 飞机预览卡顿与成片短时横跳需用获授权原片分别定位 |
 
 验收完毕由维护者在 PR 审核合并。正式版本说明只覆盖对外功能变更，发布另行授权。
 
-## 上一轮：多更新源
+## 上一轮：仓库审计整改
 
 | 字段 | 内容 |
 |---|---|
 | 任务 | 全仓审计整改：修复 Mac 端缺陷与冗余代码、过期文档和构建脚本问题；Windows 端问题只记录待办，不改代码 |
-| 分支与基线 | `codex/audit-fixes`，基于 `main` 的 `96e047d`。分支尚未推送，推送后向 `main` 提 PR |
+| 分支与基线 | `codex/audit-fixes`，基于 `main` 的 `96e047d`。以 [PR #7](https://github.com/cyandee/BirdLock/pull/7) 提交评审，代码已整合到 1.11.0 本地分支 |
 | 评审与检出 | 检出该分支即可复核。文件级改动见提交记录，逐项审查清单由提交信息与 PR 说明给出 |
 | 分支写入负责人 | 本轮同一会话在 Mac 端（`Sources/`、`Tests/`、`docs/`、`scripts/`、`README.md`）写入。`windows/` 只改了两处注释，未改行为 |
 | 已完成 | Mac：单独拖入音频的误报、跟踪参考 patch 重复重采样、EXIF 时间解析共享格式化器、音效库重复读盘、工程重定位对 Windows 路径不匹配、若干未使用符号与未使用参数、音频时长非有限时的崩溃路径、视频轨道缺失的强制解包。工具：`md2html` 转换 Markdown 链接（含单测）。文档：README 更新段、交接、测试矩阵、Windows 使用说明的机头设备表述、版本标注、Windows 许可页音频章节。资源：镜头清单 Fujifilm 品牌拼写 |
