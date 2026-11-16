@@ -118,7 +118,8 @@ public enum FrameImporter {
         return images
     }
 
-    public static func readFrame(url: URL, id: Int, rawMode: RawMode = .camera) -> SourceFrame? {
+    public static func readFrame(url: URL, id: Int, rawMode: RawMode = .camera,
+                                 isCancelled: () -> Bool = { false }) -> SourceFrame? {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
         let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] ?? [:]
         var w = props[kCGImagePropertyPixelWidth] as? Int ?? 0
@@ -129,7 +130,8 @@ public enum FrameImporter {
         let ext = url.pathExtension.lowercased()
         if RawPhoto.extensions.contains(ext) {
             let rotation = CGImagePropertyOrientation(rawValue: UInt32(clamping: orientation)) ?? .up
-            guard let result = RawPhoto.inspect(url, source: src, mode: rawMode, orientation: rotation) else { return nil }
+            guard let result = RawPhoto.inspect(url, source: src, mode: rawMode, orientation: rotation,
+                                               isCancelled: isCancelled) else { return nil }
             raw = result.raw; w = result.width; h = result.height
         } else if ext == "jpg" || ext == "jpeg" {
             // A damaged JPEG must not suppress a usable RAW in a pair.
@@ -177,15 +179,30 @@ public enum FrameImporter {
     }
 
     public static func importFiles(_ urls: [URL], rawMode: RawMode, pairPolicy: RawPairPolicy,
-                                   isCancelled: @Sendable () -> Bool = { false }) -> [SourceFrame] {
+                                   isCancelled: @Sendable () -> Bool = { false },
+                                   progress: (@Sendable (Int, Int) -> Void)? = nil) -> [SourceFrame] {
         var seen = Set<URL>()
         let files = urls.map(\.standardizedFileURL).filter { seen.insert($0).inserted }
+        guard !isCancelled(), !files.isEmpty else { return [] }
+        progress?(0, files.count)
         var frames = [SourceFrame?](repeating: nil, count: files.count)
         let lock = NSLock()
+        var completed = 0
+        var lastReport = ProcessInfo.processInfo.systemUptime
         DispatchQueue.concurrentPerform(iterations: files.count) { i in
             guard !isCancelled() else { return }
-            let f = autoreleasepool { readFrame(url: files[i], id: i, rawMode: rawMode) }
-            lock.lock(); frames[i] = f; lock.unlock()
+            let frame = autoreleasepool { readFrame(url: files[i], id: i, rawMode: rawMode, isCancelled: isCancelled) }
+            lock.lock()
+            defer { lock.unlock() }
+            frames[i] = frame
+            if let progress, !isCancelled() {
+                completed += 1
+                let now = ProcessInfo.processInfo.systemUptime
+                if completed == 1 || completed == files.count || now - lastReport >= 0.25 {
+                    lastReport = now
+                    progress(completed, files.count)
+                }
+            }
         }
         guard !isCancelled() else { return [] }
         var list = frames.compactMap { $0 }

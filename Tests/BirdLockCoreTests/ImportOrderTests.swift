@@ -1,5 +1,6 @@
 import CoreImage
 import ImageIO
+import os
 import UniformTypeIdentifiers
 import XCTest
 @testable import BirdLockCore
@@ -52,6 +53,25 @@ final class ImportOrderTests: XCTestCase {
         XCTAssertEqual(frames.map(\.url), expected)
         XCTAssertEqual(frames.map(\.id), [0, 1, 2, 3])
         XCTAssertEqual(FrameImporter.segments(frames).map(\.range), [0..<2, 2..<4])
+
+        let reports = OSAllocatedUnfairLock(initialState: [(done: Int, total: Int)]())
+        let imported = FrameImporter.importFiles(expected + [expected[1]], rawMode: .camera, pairPolicy: .jpeg,
+                                                 progress: { done, total in reports.withLock { $0.append((done, total)) } })
+        XCTAssertEqual(imported.map(\.url), expected)
+        let updates = reports.withLock { $0 }
+        XCTAssertEqual(updates.first?.done, 0)
+        XCTAssertEqual(updates.last?.done, expected.count)
+        XCTAssertTrue(updates.allSatisfy { $0.total == expected.count })
+        XCTAssertTrue(zip(updates, updates.dropFirst()).allSatisfy { $0.done < $1.done })
+
+        let cancelled = OSAllocatedUnfairLock(initialState: false)
+        let partial = FrameImporter.importFiles(expected, rawMode: .camera, pairPolicy: .jpeg,
+                                                isCancelled: { cancelled.withLock { $0 } },
+                                                progress: { done, _ in
+            if done == 1 { cancelled.withLock { $0 = true } }
+        })
+        XCTAssertTrue(cancelled.withLock { $0 })
+        XCTAssertTrue(partial.isEmpty)
 
         var checks = 0
         XCTAssertTrue(FrameImporter.collectImageURLs([root], isCancelled: {

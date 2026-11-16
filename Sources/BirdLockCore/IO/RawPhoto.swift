@@ -24,10 +24,12 @@ enum RawPhoto {
     private static let color = CGColorSpace(name: CGColorSpace.sRGB)!
     private static let slots = DispatchSemaphore(value: 2)
 
-    static func inspect(_ url: URL, source: CGImageSource, mode: RawMode, orientation: CGImagePropertyOrientation)
+    static func inspect(_ url: URL, source: CGImageSource, mode: RawMode, orientation: CGImagePropertyOrientation,
+                        isCancelled: () -> Bool)
         -> (raw: RawFrame, width: Int, height: Int)? {
         slots.wait()
         defer { slots.signal() }
+        guard !isCancelled() else { return nil }
         let filter = CIRAWFilter(imageURL: url)
         filter?.orientation = orientation
         let native = filter?.nativeSize ?? .zero
@@ -37,15 +39,20 @@ enum RawPhoto {
         if orientation.rawValue >= 5 { swap(&fullWidth, &fullHeight) }
 
         func preview() -> (RawFrame, Int, Int)? {
-            guard let image = embedded(source, orientation: orientation, maxPixel: nil) else { return nil }
+            guard !isCancelled(), let image = embedded(source, orientation: orientation, maxPixel: nil) else { return nil }
             return (RawFrame(mode: mode, source: .embedded, fullWidth: fullWidth, fullHeight: fullHeight),
                     Int(image.extent.width), Int(image.extent.height))
         }
         func decoded() -> (RawFrame, Int, Int)? {
-            guard let filter, let image = filter.outputImage,
-                  !image.extent.isInfinite, !image.extent.isEmpty,
-                  render(image, size: previewSize(image.extent.size, maxPixel: 256)) != nil else { return nil }
+            guard !isCancelled(), let filter, let image = filter.outputImage,
+                  !image.extent.isInfinite, !image.extent.isEmpty else { return nil }
             let width = Int(image.extent.width), height = Int(image.extent.height)
+            let size = previewSize(image.extent.size, maxPixel: 256)
+            // Keep the full-resolution pixel grid. Decode at reduced scale only to
+            // validate the file; use the normal render if reduced decode is unavailable.
+            filter.scaleFactor = Float(min(1, 256 / max(image.extent.width, image.extent.height)))
+            let probe = filter.outputImage.flatMap { render($0, size: size) }
+            guard probe != nil || (!isCancelled() && render(image, size: size) != nil) else { return nil }
             return (RawFrame(mode: mode, source: .decoded, fullWidth: width, fullHeight: height), width, height)
         }
         return mode == .camera ? preview() ?? decoded() : decoded() ?? preview()

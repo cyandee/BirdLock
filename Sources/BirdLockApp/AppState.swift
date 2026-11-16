@@ -43,6 +43,17 @@ struct ExportState: Equatable {
     var outputURL: URL? = nil
 }
 
+struct PhotoImportProgress: Sendable {
+    let completed: Int
+    let total: Int
+    let elapsed: TimeInterval
+
+    var remaining: TimeInterval? {
+        guard completed > 0, completed < total else { return nil }
+        return elapsed * Double(total - completed) / Double(completed)
+    }
+}
+
 /// Sharp crop of the original shown in the zoomed source view.
 struct SourceDetail {
     var image: CGImage
@@ -83,6 +94,7 @@ final class AppState {
     var canUndoEdit: Bool { phase == .ready && !exportState.running && editHistory.canUndo }
     var canRedoEdit: Bool { phase == .ready && !exportState.running && editHistory.canRedo }
     var importMessage = "正在读取照片…"
+    var photoImportProgress: PhotoImportProgress?
     private var jobGeneration = 0
 
     // Settings (persisted)
@@ -179,43 +191,62 @@ final class AppState {
         let generation = importGeneration, flag = CancelFlag()
         cancelFlag = flag
         let mode = rawMode, pairs = rawPairPolicy
-        editHistory.reset(to: nil)
-        eyeUndo = nil; pendingCustomBox = nil
         phase = .importing
-        importMessage = "正在读取照片…"
-        analysis = nil; job = nil; previewImage = nil; sourceImage = nil; sourceDetail = nil
-        analysisTask = Task.detached(priority: .userInitiated) {
+        importMessage = "正在扫描照片文件夹…"
+        photoImportProgress = PhotoImportProgress(completed: 0, total: 0, elapsed: 0)
+        let report: @MainActor @Sendable (PhotoImportProgress) -> Void = { [weak self] update in
+            guard let self, generation == self.importGeneration, !flag.isCancelled,
+                  self.phase == .importing, update.completed >= (self.photoImportProgress?.completed ?? 0) else { return }
+            self.photoImportProgress = update
+        }
+        analysisTask = Task.detached(priority: .userInitiated) { [weak self] in
             let cacheOperation=CachePolicy.beginOperation(root:ProxyCache.shared.root)
             defer { CachePolicy.endOperation(cacheOperation);Task { @MainActor [weak self] in self?.trimCache() } }
             let candidates = FrameImporter.collectImageURLs(urls, isCancelled: { flag.isCancelled })
             guard !flag.isCancelled else { return }
-            let all = FrameImporter.importFiles(candidates, rawMode: mode, pairPolicy: pairs, isCancelled: { flag.isCancelled })
+            let started = ProcessInfo.processInfo.systemUptime
+            let all = FrameImporter.importFiles(candidates, rawMode: mode, pairPolicy: pairs,
+                                                isCancelled: { flag.isCancelled }, progress: { completed, total in
+                let update = PhotoImportProgress(completed: completed, total: total,
+                                                 elapsed: ProcessInfo.processInfo.systemUptime - started)
+                Task { @MainActor in report(update) }
+            })
             guard !flag.isCancelled else { return }
             let hasRaw = candidates.contains { FrameImporter.rawExtensions.contains($0.pathExtension.lowercased()) }
             let segs = FrameImporter.segments(all)
-            await MainActor.run {
-                // a newer import started meanwhile
-                guard generation == self.importGeneration, !flag.isCancelled else { return }
-                self.segmentIndex = 0
-                self.projectURL=nil;self.projectDirty=true
-                self.frames = all
-                ProxyCache.shared.retainRecords(frames:all)
-                self.segments = segs
-                CachePolicy.protect(owner:self.cacheOwner,roots:self.protectedCache)
-                let saved = self.defaults.array(forKey: "groupOrder." + Analyzer.fingerprint(all)) as? [Int] ?? []
-                self.mergeGroupIndices = !saved.isEmpty && Set(saved).count == saved.count && saved.allSatisfy(segs.indices.contains) ? saved : Array(segs.indices)
-                self.currentFrame = 0
-                guard !all.isEmpty else {
-                    self.phase = .failed(hasRaw ? "无法读取这些 RAW 文件。可尝试相机直出 JPEG 或转为 DNG。" : "没有找到可读取的照片。")
-                    return
-                }
-                self.timelineMessage = nil
-                self.audio.tracks.removeAll { $0.videoOriginal }
-                // choose the longest burst by default
-                self.segmentIndex = merge && segs.count > 1 ? -1 : (segs.indices.max { segs[$0].range.count < segs[$1].range.count } ?? 0)
-                self.startAnalysis()
-            }
+            await self?.finishPhotoImport(all, segments: segs, hasRaw: hasRaw, merge: merge, flag: flag)
         }
+    }
+
+    private func finishPhotoImport(_ imported: [SourceFrame], segments groups: [BurstSegment],
+                                   hasRaw: Bool, merge: Bool, flag: CancelFlag) {
+        guard flag === cancelFlag, !flag.isCancelled else { return }
+        photoImportProgress = nil
+        guard !imported.isEmpty else {
+            let message = hasRaw ? "无法读取这些 RAW 文件。可尝试相机直出 JPEG 或转为 DNG。" : "没有找到可读取的照片。"
+            if analysis != nil {
+                phase = .ready
+                timelineMessage = message
+            } else {
+                frames = []; segments = []; segmentIndex = 0
+                phase = .failed(message)
+            }
+            return
+        }
+        analysis = nil; job = nil; previewImage = nil; sourceImage = nil; sourceDetail = nil
+        projectURL = nil; projectDirty = true
+        frames = imported
+        ProxyCache.shared.retainRecords(frames: imported)
+        segments = groups
+        CachePolicy.protect(owner: cacheOwner, roots: protectedCache)
+        let saved = defaults.array(forKey: "groupOrder." + Analyzer.fingerprint(imported)) as? [Int] ?? []
+        mergeGroupIndices = !saved.isEmpty && Set(saved).count == saved.count && saved.allSatisfy(groups.indices.contains) ? saved : Array(groups.indices)
+        currentFrame = 0
+        timelineMessage = nil
+        audio.tracks.removeAll { $0.videoOriginal }
+        // Choose the longest burst by default.
+        segmentIndex = merge && groups.count > 1 ? -1 : (groups.indices.max { groups[$0].range.count < groups[$1].range.count } ?? 0)
+        startAnalysis()
     }
 
     func importVideo(_ url: URL, options: VideoImportOptions) {
@@ -469,6 +500,7 @@ final class AppState {
         importGeneration += 1
         cancelFlag.cancel()
         analysisTask?.cancel()
+        photoImportProgress = nil
         if subjectRollback != nil { restoreSubjectTransition();return }
         if analysis == nil {
             frames = []; segments = []; segmentIndex = 0

@@ -96,11 +96,11 @@ struct BirdLockApp: App {
                 .keyboardShortcut("z", modifiers: [])
             }
             CommandGroup(after: .saveItem) {
-                Button("导出…") { state.showExportSheet = true }.keyboardShortcut("e").disabled(state.job == nil)
+                Button("导出…") { state.showExportSheet = true }.keyboardShortcut("e").disabled(state.job == nil || state.phase == .importing)
                 Divider()
                 Button("缓存管理…") { state.showCacheSheet=true }.disabled(state.workspaceBusy)
                 Divider()
-                Button("添加背景音乐…") { state.chooseAudio() }.disabled(state.analysis == nil)
+                Button("添加背景音乐…") { state.chooseAudio() }.disabled(state.analysis == nil || state.phase == .importing)
                 Button("导入图片水印…") { state.chooseWatermark() }
             }
         }

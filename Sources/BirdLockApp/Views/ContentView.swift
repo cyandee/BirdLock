@@ -36,19 +36,13 @@ struct ContentView: View {
                     if state.frames.isEmpty && state.phase != .importing {
                         DropZoneView(targeted: dropTargeted)
                     } else if state.analysis != nil {
-                        PreviewArea()
+                        PreviewArea().disabled(state.phase == .importing)
                     }
                     if case .analyzing(let stage, let p) = state.phase {
                         AnalyzingOverlay(stage: stage, progress: p)
                     }
                     if state.phase == .importing {
-                        StatusCard {
-                            HStack(spacing: 14) {
-                                ProgressView().controlSize(.small)
-                                Text(state.importMessage).font(.headline)
-                                Button("取消") { state.cancelAnalysis() }
-                            }
-                        }
+                        ImportOverlay()
                     }
                     if case .failed(let msg) = state.phase {
                         StatusCard {
@@ -71,15 +65,16 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     Divider()
-                    TransportBar()
+                    TransportBar().disabled(state.phase == .importing)
                     Divider()
-                    TimelinePanel()
+                    TimelinePanel().disabled(state.phase == .importing)
                 }
             }
             if state.analysis != nil {
                 Divider()
                 InspectorView()
                     .frame(width: 330)
+                    .disabled(state.phase == .importing)
             }
         }
         .background(Theme.canvas)
@@ -128,6 +123,49 @@ struct ContentView: View {
         }
         group.notify(queue: .main) {
             if !urls.isEmpty { open(urls) }
+        }
+    }
+}
+
+private struct ImportOverlay: View {
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        StatusCard {
+            VStack(alignment: .leading, spacing: 12) {
+                if let progress = state.photoImportProgress, progress.total > 0 {
+                    Text(progress.completed == progress.total ? "正在整理连拍分组…" : "正在读取照片…")
+                        .font(.headline)
+                    ProgressView(value: Double(progress.completed), total: Double(progress.total))
+                        .tint(Theme.accent)
+                        .accessibilityLabel("照片读取进度")
+                    HStack {
+                        Text("已检查 \(progress.completed) / \(progress.total) 张")
+                        Spacer()
+                        if let remaining = progress.remaining {
+                            Text(remaining < 60 ? "约剩 \(max(1, Int(remaining.rounded()))) 秒"
+                                 : "约剩 \(Int(ceil(remaining / 60))) 分钟")
+                        } else if progress.completed == 0 {
+                            Text("正在估算剩余时间…")
+                        }
+                    }
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                } else {
+                    Text(state.importMessage).font(.headline)
+                    ProgressView().progressViewStyle(.linear)
+                }
+                HStack {
+                    Spacer()
+                    if state.photoImportProgress != nil {
+                        Button("取消并重新选择…") {
+                            state.cancelAnalysis()
+                            openImportPanel(state)
+                        }
+                    }
+                    Button("取消") { state.cancelAnalysis() }
+                }
+            }
+            .frame(width: 330)
         }
     }
 }
@@ -190,6 +228,7 @@ struct MainToolbar: ToolbarContent {
                     }
                 }
                 .frame(width: 160)
+                .disabled(state.phase == .importing)
                 .help("文件夹里检测到多组连拍，选择要处理的一组")
                 Menu("选择合并组") {
                     ForEach(items, id: \.index) { item in
@@ -197,11 +236,11 @@ struct MainToolbar: ToolbarContent {
                             get: { state.mergeGroupIndices.contains(item.index) },
                             set: { state.includeGroup(item.index, enabled: $0) }))
                     }
-                }
+                }.disabled(state.phase == .importing)
             }
         }
         ToolbarItemGroup(placement: .principal) {
-            if state.analysis != nil {
+            if state.analysis != nil && state.phase != .importing {
                 Picker("视图", selection: Binding(get: { state.viewMode }, set: { state.viewMode = $0; state.refreshPreview() })) {
                     ForEach(ViewMode.allCases) { Text($0.title).tag($0) }
                 }
@@ -213,7 +252,7 @@ struct MainToolbar: ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             Button { AppIdentity.showSupport() } label: { Label("赞赏", systemImage: "cup.and.saucer") }
                 .help("请作者喝杯咖啡 · 完全自愿，所有功能免费")
-            if state.analysis != nil {
+            if state.analysis != nil && state.phase != .importing {
                 Button { state.showExportSheet = true } label: { Label("导出", systemImage: "square.and.arrow.up") }
                     .help("导出视频 / 图片序列 / GIF（⌘E）")
             }
