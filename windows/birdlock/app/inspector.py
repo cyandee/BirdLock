@@ -132,6 +132,8 @@ class Tab(QScrollArea):
                 self.state.settings_changed(topic)
 
         s.valueChanged.connect(changed)
+        s.sliderPressed.connect(self.state.begin_edit_gesture)
+        s.sliderReleased.connect(self.state.end_edit_gesture)
 
         def refresh():
             x = get()
@@ -835,6 +837,7 @@ class OutputTab(Tab):
         st = self.state
         A = lambda: st.audio   # noqa: E731
         card = Card("背景音乐", "♪")
+        self.check(card, "启用背景音乐", lambda: A().enabled, lambda v: setattr(A(),"enabled",v), topic="audio")
         top = QHBoxLayout()
         name = QLabel()
         name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)

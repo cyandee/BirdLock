@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import BirdLockCore
 
 @main
@@ -18,6 +19,8 @@ struct BirdLockApp: App {
                 .onAppear {
                     updater.isBusy = { state.exportState.running || state.phase == .importing || { if case .analyzing = state.phase { return true }; return false }() }
                     updater.start()
+                    NSApp.appearance = state.appearance.native
+                    AppDelegate.endEditGesture = { state.endEditGesture() }
                     AppDelegate.terminationCheck={ state.projectCloseApproved || state.confirmCanLeave() }
                     AppDelegate.terminationCleanup={ CachePolicy.protect(owner:state.cacheOwner,roots:[]);if state.cacheLimitGB>0 { _ = CachePolicy.clean(root:ProxyCache.shared.root,limitBytes:state.cacheLimitGB*(1<<30)) } }
                 }
@@ -56,6 +59,18 @@ struct BirdLockApp: App {
                 Button("导入连拍…") { openImportPanel(state) }.keyboardShortcut("o",modifiers:[.command,.option])
                 Button("导入视频（实验）…") { openVideoPanel(state) }
             }
+            CommandGroup(replacing: .undoRedo) {
+                Button("撤销") { state.undoEdit() }
+                    .keyboardShortcut("z").disabled(!state.canUndoEdit)
+                Button("重做") { state.redoEdit() }
+                    .keyboardShortcut("z", modifiers: [.command, .shift]).disabled(!state.canRedoEdit)
+            }
+            CommandGroup(after: .toolbar) {
+                Picker("外观", selection: Binding(get: { state.appearance }, set: { state.appearance = $0 })) {
+                    ForEach(AppAppearance.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                Button("在访达中显示当前原片") { state.revealOriginals() }.disabled(state.analysis == nil)
+            }
             CommandMenu("播放") {
                 Button(state.isPlaying ? "暂停" : "播放") { state.togglePlay() }.keyboardShortcut(.space, modifiers: [])
                 Button("上一帧") { state.step(-1) }.keyboardShortcut(.leftArrow, modifiers: [])
@@ -81,11 +96,11 @@ struct BirdLockApp: App {
                 .keyboardShortcut("z", modifiers: [])
             }
             CommandGroup(after: .saveItem) {
-                Button("导出…") { state.showExportSheet = true }.keyboardShortcut("e").disabled(state.job == nil)
+                Button("导出…") { state.showExportSheet = true }.keyboardShortcut("e").disabled(state.job == nil || state.phase == .importing)
                 Divider()
                 Button("缓存管理…") { state.showCacheSheet=true }.disabled(state.workspaceBusy)
                 Divider()
-                Button("添加背景音乐…") { state.chooseAudio() }.disabled(state.analysis == nil)
+                Button("添加背景音乐…") { state.chooseAudio() }.disabled(state.analysis == nil || state.phase == .importing)
                 Button("导入图片水印…") { state.chooseWatermark() }
             }
         }
@@ -108,16 +123,31 @@ func openImportPanel(_ state: AppState) {
     p.allowsMultipleSelection = true
     p.canChooseDirectories = true
     p.canChooseFiles = true
-    p.allowedContentTypes = [.jpeg, .heic, .heif, .png, .tiff]
-    p.message = "选择连拍照片所在的文件夹，或直接选中多张照片"
+    p.allowedContentTypes = FrameImporter.supportedExtensions.sorted().map {
+        UTType(filenameExtension: $0) ?? UTType(tag: $0, tagClass: .filenameExtension, conformingTo: .data) ?? .image
+    }
+    p.message = "选择照片或包含多个连拍子文件夹的上级文件夹"
     let grouping = NSButton(checkboxWithTitle: "归为一组，合成同一视频（不勾选则按拍摄间隔分组）", target: nil, action: nil)
     grouping.setButtonType(.switch)
-    p.accessoryView = grouping
+    let raw = NSPopUpButton()
+    raw.addItems(withTitles: ["RAW 优先使用机内预览", "RAW 高分辨率解码"])
+    raw.selectItem(at: state.rawMode == .camera ? 0 : 1)
+    let pairs = NSPopUpButton()
+    pairs.addItems(withTitles: ["RAW + JPEG：优先 JPEG", "RAW + JPEG：优先 RAW", "RAW + JPEG：两者都导入"])
+    pairs.selectItem(at: RawPairPolicy.allCases.firstIndex(of: state.rawPairPolicy) ?? 0)
+    let options = NSStackView(views: [grouping, raw, pairs])
+    options.orientation = .vertical; options.alignment = .leading
+    p.accessoryView = options
     p.isAccessoryViewDisclosed = true
-    if p.runModal() == .OK { state.importURLs(p.urls, merge: grouping.state == .on) }
+    if p.runModal() == .OK {
+        state.rawMode = raw.indexOfSelectedItem == 0 ? .camera : .raw
+        state.rawPairPolicy = RawPairPolicy.allCases[max(0, pairs.indexOfSelectedItem)]
+        state.importURLs(p.urls, merge: grouping.state == .on)
+    }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    @MainActor static var endEditGesture: (() -> Void)?
     @MainActor static var terminationCheck:(()->Bool)?
     func applicationShouldTerminate(_ sender:NSApplication) -> NSApplication.TerminateReply {
         MainActor.assumeIsolated { Self.terminationCheck?() == false ? .terminateCancel : .terminateNow }
@@ -144,9 +174,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Single-key shortcuts (space, E, X, Z, [ ]) must not steal keystrokes while typing in a text field:
         // hand plain key presses straight to the field being edited.
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            let mods = event.modifierFlags.intersection([.command, .control])
-            guard mods.isEmpty, let tv = NSApp.keyWindow?.firstResponder as? NSTextView, tv.isEditable else { return event }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseUp]) { event in
+            if event.type == .leftMouseUp {
+                DispatchQueue.main.async { Self.endEditGesture?() }
+                return event
+            }
+            let mods = event.modifierFlags.intersection([.command, .control, .option, .shift])
+            guard let tv = NSApp.keyWindow?.firstResponder as? NSTextView, tv.isEditable else { return event }
+            if event.charactersIgnoringModifiers?.lowercased() == "z", mods == .command {
+                tv.undoManager?.undo()
+                return nil
+            }
+            if event.charactersIgnoringModifiers?.lowercased() == "z", mods == [.command, .shift] {
+                tv.undoManager?.redo()
+                return nil
+            }
+            guard !mods.contains(.command), !mods.contains(.control) else { return event }
             tv.keyDown(with: event)
             return nil
         }

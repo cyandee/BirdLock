@@ -15,6 +15,8 @@ BirdLock 有两个原生桌面实现，共用根目录的 `VERSION`。macOS 使�
 2. 提交前检查 `git status`、暂存差异和 `git diff --cached --check`。按任务显式暂存文件，保持提交聚焦，写清测试环境和结果。同步用 `git fetch origin`，同分支可快进时用 `git pull --ff-only`。出现分歧先协调，禁止未协调的强推。
 3. 推送任务分支，向 `main` 提交 PR。说明影响平台、共享兼容性、已执行检查、实机缺口和交接入口。跨平台改动需要确认两端行为一致及相关实机验收，经过维护者审核后才可合并。Codex 不直接推送或自行合并 `main`。
 
+`main` 由 `Protect main branch` 规则保护。维护者合并前确认 GitHub Actions 的 `macOS checks` 和 `Windows checks` 都实际执行并成功。GitHub 的必需审批数为 0，维护者可以自行审核和合并。[生效规则](https://github.com/cyandee/BirdLock/rules/26824420)
+
 ## 验证和交接
 
 - 平时先运行受影响平台的现有单测及自检。PR 在托管 Mac 和 Windows 上做源码检查。`main` 完整构建覆盖两端成品、源码与校验值。改动打包、资源或原生辅助进程时也要验证成品。[构建与发布](docs/构建与发布.md)

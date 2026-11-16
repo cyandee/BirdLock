@@ -48,7 +48,7 @@ final class AudioTests: XCTestCase {
         XCTAssertEqual(restored.tracks, s.tracks)
         XCTAssertTrue(restored.isActive)
         XCTAssertNotNil(restored.tracks[0].sourceURL)
-        XCTAssertEqual(SoundLibrary.assets.count, 12)
+        XCTAssertEqual(SoundLibrary.assets.count, 17)
     }
 
     func testMixKeepsIndependentTimingMuteAndFullVideoDuration() async throws {

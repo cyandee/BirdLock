@@ -133,7 +133,7 @@ def verify(app: Path, version: str, universal: bool = False):
     verify_lens_profiles(resources / "LensProfiles")
     audio = resources / "Audio"
     entries = json.loads((audio / "library.json").read_text(encoding="utf-8"))
-    if len(entries) != 12 or len({e["id"] for e in entries}) != 12 or "single-canon-rebel" not in {e["id"] for e in entries}:
+    if len(entries) != 17 or len({e["id"] for e in entries}) != 17 or "single-canon-rebel" not in {e["id"] for e in entries}:
         raise ValueError("内置音效清单不完整")
     for entry in entries:
         if Path(entry["file"]).name != entry["file"] or hashlib.sha256((audio / entry["file"]).read_bytes()).hexdigest() != entry["sha256"]:
@@ -142,6 +142,8 @@ def verify(app: Path, version: str, universal: bool = False):
     manifest = json.loads((support / "manifest.json").read_text(encoding="utf-8"))
     if hashlib.sha256((support / "alipay-coffee.jpg").read_bytes()).hexdigest() != manifest["sha256"]:
         raise ValueError("赞赏图片校验失败")
+    if 'wechat' in manifest and hashlib.sha256((support / "wechat-coffee.png").read_bytes()).hexdigest() != manifest['wechat']['sha256']:
+        raise ValueError("微信赞赏图片校验失败")
     if not (audio / "silence.wav").is_file():
         raise ValueError("缺少混音静音资源")
     if (resources / "VERSION").read_text().strip() != version:

@@ -22,6 +22,10 @@ from .lens_profile import LensProfile
 from .paths import cache_dir, ffmpeg_path
 
 VIDEO_EXT = {'.mp4', '.mov', '.m4v', '.avi', '.mkv'}
+MAX_IMPORT_SECONDS = 600
+MAX_IMPORT_FRAMES = 18_000
+MAX_SAMPLE_FPS = 60
+DISK_RESERVE = 512 << 20
 
 
 class VideoImportCancelled(Exception):
@@ -63,15 +67,35 @@ def probe(path) -> VideoInfo:
 
 def selection(info, start, seconds, fps):
     """Shared validation for the import form and the real decoder."""
-    if not all(math.isfinite(v) for v in (start, seconds, fps)) or start < 0 or seconds <= 0 or not 1 <= fps <= 60 or start >= info.duration:
+    if not all(math.isfinite(v) for v in (start, seconds, fps)) or start < 0 or seconds <= 0 or not 1 <= fps <= MAX_SAMPLE_FPS or start >= info.duration:
         raise ValueError('视频片段或采样帧率无效（1–60 fps）')
     start = float(start)
     seconds = min(float(seconds), info.duration - start)
     fps = min(float(fps), info.fps)
     count = max(1, math.ceil(seconds * fps - 1e-7))
-    if seconds > 120 or count > 3600:
-        raise ValueError('实验导入每次最多 120 秒 / 3600 帧；请缩短片段或降低采样帧率')
+    if seconds > MAX_IMPORT_SECONDS or count > MAX_IMPORT_FRAMES:
+        raise ValueError(f'每次最多 {MAX_IMPORT_SECONDS} 秒 / {MAX_IMPORT_FRAMES:,} 帧；请缩短片段或降低采样帧率')
     return seconds, fps, count
+
+
+def estimated_cache_bytes(info, count, seconds):
+    # Planning estimate for high-quality JPEG, plus analysis proxy headroom and
+    # decoded stereo audio. Actual writes are checked against disk space below.
+    return (info.width * info.height + 64 * 1024) * count + math.ceil(seconds * 48_000 * 4)
+
+
+def cache_space(path):
+    location = Path(path)
+    while not location.exists() and location.parent != location:
+        location = location.parent
+    return shutil.disk_usage(location).free
+
+
+def check_cache_budget(info, seconds, count, root):
+    estimate = estimated_cache_bytes(info, count, seconds)
+    if cache_space(root) < estimate + DISK_RESERVE:
+        raise ValueError(f'视频缓存预计需要 {estimate/(1<<30):.2f} GiB；可用空间不足，请缩短片段、降低采样帧率或清理缓存')
+    return estimate
 
 
 def _write_recipe(directory,path,stat,info,start,seconds,fps,count,lens):
@@ -88,13 +112,14 @@ def extract(path, start=0., seconds=10., fps=30., profile=None, root=None, progr
     start = float(start)
     seconds, fps, count = selection(info, start, seconds, fps)
     lens = LensProfile.load(profile) if profile else None
-    maps = lens.maps(info.width, info.height) if lens else None
     stat = path.stat()
     identity = json.dumps([2, str(path), stat.st_size, stat.st_mtime_ns, start, seconds, fps,
                            hashlib.sha256(lens.raw).hexdigest() if lens else None], sort_keys=True).encode()
     base = Path(root) if root else cache_dir() / 'video-imports'
     base.mkdir(parents=True, exist_ok=True)
     final = base / hashlib.sha256(identity).hexdigest()[:32]
+    if final.is_symlink() or final.is_junction():
+        raise ValueError('视频缓存目录是链接；请选择本地缓存目录后重试')
     manifest = final / 'import.json'
     if manifest.is_file():
         d = json.loads(manifest.read_text(encoding='utf-8'))
@@ -104,9 +129,11 @@ def extract(path, start=0., seconds=10., fps=30., profile=None, root=None, progr
             prepare(path, final, start, seconds, fps, count, cancelled)
             progress(1.)
             return frames, fps
-    evicted=final.is_dir() and (final/'.evicted.json').is_file() and not final.is_symlink()
+    evicted=final.is_dir() and (final/'.evicted.json').is_file() and not final.is_symlink() and not final.is_junction()
     if final.exists() and not evicted:
         raise ValueError('视频缓存不完整，请清空缓存后重新导入')
+    check_cache_budget(info, seconds, count, base)
+    maps = lens.maps(info.width, info.height) if lens else None
     stage = Path(tempfile.mkdtemp(prefix='.extract-', dir=base))
     proc = None
     stop_watch = threading.Event()
@@ -127,7 +154,7 @@ def extract(path, start=0., seconds=10., fps=30., profile=None, root=None, progr
             size = info.width * info.height * 3
             for i in range(count):
                 if cancelled(): raise VideoImportCancelled()
-                if i % 16 == 0 and shutil.disk_usage(base).free < max(268_435_456, size * 2):
+                if i % 16 == 0 and shutil.disk_usage(base).free < max(DISK_RESERVE, size * 16):
                     raise ValueError('视频帧缓存磁盘空间不足；请缩短片段或清理缓存')
                 data = bytearray()
                 while len(data) < size:

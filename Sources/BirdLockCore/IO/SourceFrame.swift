@@ -2,6 +2,24 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+/// EXIF capture time is parsed for every photo, often from parallel import workers,
+/// so keep one formatter behind a lock instead of building one per file.
+private enum ExifDateParser {
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        return f
+    }()
+    private static let lock = NSLock()
+
+    static func date(from string: String) -> Date? {
+        lock.lock(); defer { lock.unlock() }
+        return formatter.date(from: string)
+    }
+}
+
 public struct ExifInfo: Codable, Hashable, Sendable {
     public var make: String?
     public var model: String?
@@ -46,6 +64,8 @@ public struct SourceFrame: Codable, Hashable, Identifiable, Sendable {
     public var fileSize: Int
     public var modified: Double
     public var exif: ExifInfo
+    public var orientation: Int? = nil
+    public var raw: RawFrame? = nil
 
     public var fileName: String { url.lastPathComponent }
     public var size: V2 { V2(Double(pixelWidth), Double(pixelHeight)) }
@@ -54,36 +74,73 @@ public struct SourceFrame: Codable, Hashable, Identifiable, Sendable {
 public struct BurstSegment: Hashable, Sendable {
     public var range: Range<Int>
     public var fps: Double
-    public init(range: Range<Int>, fps: Double) { self.range = range; self.fps = fps }
+    public var groupID: String
+    public var name: String
+    public init(range: Range<Int>, fps: Double, groupID: String = UUID().uuidString, name: String = "") {
+        self.range = range; self.fps = fps; self.groupID = groupID; self.name = name
+    }
 }
 
 public enum FrameImporter {
-    public static let supportedExtensions: Set<String> = ["jpg", "jpeg", "heic", "heif", "hif", "png", "tif", "tiff"]
+    public static let rawExtensions = RawPhoto.extensions
+    public static let supportedExtensions: Set<String> = Set(["jpg", "jpeg", "heic", "heif", "hif", "png", "tif", "tiff"]).union(RawPhoto.extensions)
 
-    /// Expand dropped URLs (files or folders, non-recursive into sub-folders) to image files.
-    public static func collectImageURLs(_ urls: [URL]) -> [URL] {
-        var out: [URL] = []
+    /// Collect photos in selected files and folders, including nested folders.
+    public static func collectImageURLs(_ urls: [URL], isCancelled: () -> Bool = { false }) -> [URL] {
         let fm = FileManager.default
-        for u in urls {
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: u.path, isDirectory: &isDir) else { continue }
-            if isDir.boolValue {
-                let items = (try? fm.contentsOfDirectory(at: u, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
-                out += items.filter { supportedExtensions.contains($0.pathExtension.lowercased()) }
-            } else if supportedExtensions.contains(u.pathExtension.lowercased()) {
-                out.append(u)
+        let keys: Set<URLResourceKey> = [.isRegularFileKey]
+        var seen = Set<URL>()
+        var images: [URL] = []
+
+        func appendIfImage(_ url: URL, inspectionURL: URL) {
+            guard supportedExtensions.contains(url.pathExtension.lowercased()),
+                  (try? inspectionURL.resourceValues(forKeys: keys).isRegularFile) == true else { return }
+            let file = url.standardizedFileURL
+            if seen.insert(file).inserted { images.append(file) }
+        }
+
+        for url in urls {
+            if isCancelled() { return [] }
+            var isDirectory: ObjCBool = false
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else { continue }
+            if isDirectory.boolValue {
+                // Directory enumeration does not follow symbolic links found inside a folder.
+                guard let entries = fm.enumerator(at: url, includingPropertiesForKeys: Array(keys),
+                                                  options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { continue }
+                for case let entry as URL in entries {
+                    if isCancelled() { return [] }
+                    appendIfImage(entry, inspectionURL: entry)
+                }
+            } else {
+                appendIfImage(url, inspectionURL: url.resolvingSymlinksInPath())
             }
         }
-        return out
+        return images
     }
 
-    public static func readFrame(url: URL, id: Int) -> SourceFrame? {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
-              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] else { return nil }
+    public static func readFrame(url: URL, id: Int, rawMode: RawMode = .camera,
+                                 isCancelled: () -> Bool = { false }) -> SourceFrame? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] ?? [:]
         var w = props[kCGImagePropertyPixelWidth] as? Int ?? 0
         var h = props[kCGImagePropertyPixelHeight] as? Int ?? 0
         let orientation = props[kCGImagePropertyOrientation] as? Int ?? 1
         if orientation >= 5 { swap(&w, &h) }
+        var raw: RawFrame?
+        let ext = url.pathExtension.lowercased()
+        if RawPhoto.extensions.contains(ext) {
+            let rotation = CGImagePropertyOrientation(rawValue: UInt32(clamping: orientation)) ?? .up
+            guard let result = RawPhoto.inspect(url, source: src, mode: rawMode, orientation: rotation,
+                                               isCancelled: isCancelled) else { return nil }
+            raw = result.raw; w = result.width; h = result.height
+        } else if ext == "jpg" || ext == "jpeg" {
+            // A damaged JPEG must not suppress a usable RAW in a pair.
+            let options = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                           kCGImageSourceThumbnailMaxPixelSize: 64,
+                           kCGImageSourceShouldCacheImmediately: true] as [CFString: Any]
+            guard CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) != nil,
+                  CGImageSourceGetStatusAtIndex(src, 0) == .statusComplete else { return nil }
+        }
         guard w > 0, h > 0 else { return nil }
 
         let exifD = props[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
@@ -101,12 +158,8 @@ public enum FrameImporter {
 
         var t: Double? = nil
         if let dto = exif.dateTimeOriginal ?? (tiffD[kCGImagePropertyTIFFDateTime] as? String) {
-            let f = DateFormatter()
-            f.locale = Locale(identifier: "en_US_POSIX")
-            f.timeZone = TimeZone(secondsFromGMT: 0)
-            f.dateFormat = "yyyy:MM:dd HH:mm:ss"
-            if let d = f.date(from: dto) {
-                t = d.timeIntervalSinceReferenceDate
+            if let d = ExifDateParser.date(from: dto) {
+                t = d.timeIntervalSince1970
                 if let sub = (exifD[kCGImagePropertyExifSubsecTimeOriginal] as? String) ?? (exifD[kCGImagePropertyExifSubsecTime] as? String) {
                     let digits = sub.trimmingCharacters(in: .whitespaces)
                     if let v = Double("0." + digits) { t! += v }
@@ -115,27 +168,73 @@ public enum FrameImporter {
         }
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
-        let mod = (attrs?[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate ?? 0
+        let mod = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
         return SourceFrame(id: id, url: url, pixelWidth: w, pixelHeight: h, captureTime: t,
-                           fileSize: size, modified: mod, exif: exif)
+                           fileSize: size, modified: mod, exif: exif, orientation: orientation, raw: raw)
     }
 
     /// Read metadata for all files (in parallel), sort by capture time then file name.
-    public static func importFrames(_ urls: [URL]) -> [SourceFrame] {
-        let files = collectImageURLs(urls)
+    public static func importFrames(_ urls: [URL], rawMode: RawMode = .camera, pairPolicy: RawPairPolicy = .jpeg) -> [SourceFrame] {
+        importFiles(collectImageURLs(urls), rawMode: rawMode, pairPolicy: pairPolicy)
+    }
+
+    public static func importFiles(_ urls: [URL], rawMode: RawMode, pairPolicy: RawPairPolicy,
+                                   isCancelled: @Sendable () -> Bool = { false },
+                                   progress: (@Sendable (Int, Int) -> Void)? = nil) -> [SourceFrame] {
+        var seen = Set<URL>()
+        let files = urls.map(\.standardizedFileURL).filter { seen.insert($0).inserted }
+        guard !isCancelled(), !files.isEmpty else { return [] }
+        progress?(0, files.count)
         var frames = [SourceFrame?](repeating: nil, count: files.count)
         let lock = NSLock()
+        var completed = 0
+        var lastReport = ProcessInfo.processInfo.systemUptime
         DispatchQueue.concurrentPerform(iterations: files.count) { i in
-            let f = readFrame(url: files[i], id: i)
-            lock.lock(); frames[i] = f; lock.unlock()
+            guard !isCancelled() else { return }
+            let frame = autoreleasepool { readFrame(url: files[i], id: i, rawMode: rawMode, isCancelled: isCancelled) }
+            lock.lock()
+            defer { lock.unlock() }
+            frames[i] = frame
+            if let progress, !isCancelled() {
+                completed += 1
+                let now = ProcessInfo.processInfo.systemUptime
+                if completed == 1 || completed == files.count || now - lastReport >= 0.25 {
+                    lastReport = now
+                    progress(completed, files.count)
+                }
+            }
         }
+        guard !isCancelled() else { return [] }
         var list = frames.compactMap { $0 }
-        list.sort { a, b in
-            if let ta = a.captureTime, let tb = b.captureTime, abs(ta - tb) > 1e-4 { return ta < tb }
-            return a.fileName.localizedStandardCompare(b.fileName) == .orderedAscending
+        if pairPolicy != .both {
+            let preferRaw = pairPolicy == .raw
+            func key(_ frame: SourceFrame) -> String {
+                frame.url.deletingLastPathComponent().appendingPathComponent(frame.url.deletingPathExtension().lastPathComponent.lowercased()).path
+            }
+            let preferred = Dictionary(grouping: list.filter { preferRaw ? $0.raw != nil : ["jpg", "jpeg"].contains($0.url.pathExtension.lowercased()) }, by: key)
+            list.removeAll { frame in
+                let isAlternative = preferRaw ? ["jpg", "jpeg"].contains(frame.url.pathExtension.lowercased()) : frame.raw != nil
+                return isAlternative && (preferred[key(frame)] ?? []).contains { other in
+                    guard let a = frame.captureTime, let b = other.captureTime else { return true }
+                    return abs(a - b) < 0.51
+                }
+            }
         }
+        list = sortedForImport(list)
         for i in list.indices { list[i].id = i }
         return list
+    }
+
+    /// Match the Windows importer: photos with a capture time come first in time order,
+    /// photos without one go last in natural file-name order. Mixing "time" and "name"
+    /// for near-equal times would make the comparison non-transitive and the result
+    /// dependent on the sort's internal order.
+    static func sortedForImport(_ frames: [SourceFrame]) -> [SourceFrame] {
+        frames.sorted { a, b in
+            if a.captureTime != b.captureTime { return (a.captureTime ?? .infinity) < (b.captureTime ?? .infinity) }
+            let order = a.fileName.localizedStandardCompare(b.fileName)
+            return order == .orderedSame ? a.url.path < b.url.path : order == .orderedAscending
+        }
     }
 
     /// Estimate the burst frame rate from capture timestamps (defaults to 30).

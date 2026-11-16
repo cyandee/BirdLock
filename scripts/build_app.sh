@@ -43,12 +43,12 @@ cp "$TELEMETRY_DIR/manifest.json" "$APP/Contents/Resources/Telemetry/manifest.js
 cp -R "$TELEMETRY_DIR/Licenses" "$APP/Contents/Resources/Telemetry/Licenses"
 cp -R Models/*.mlmodelc "$APP/Contents/Resources/Models/"
 cp Models/*.json "$APP/Contents/Resources/Models/" 2>/dev/null || true
-[ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 
 # Bundled documents: agreement, licenses, manual (HTML + PDF)
 DOCS="$APP/Contents/Resources/Docs"
 mkdir -p "$DOCS"
-cp docs/用户协议.md docs/第三方许可.md docs/使用说明.md docs/自动更新.md docs/视频导入与镜头配置.md docs/工程与缓存管理.md docs/更新说明-1.10.0.md docs/自定义目标与固定选眼.md LICENSE "$DOCS/"
+cp docs/用户协议.md docs/第三方许可.md docs/使用说明.md docs/自动更新.md docs/视频导入与镜头配置.md docs/工程与缓存管理.md "docs/更新说明-$VERSION.md" docs/自定义目标与固定选眼.md LICENSE "$DOCS/"
 python3 -I scripts/md2html.py docs/使用说明.md "$DOCS/使用说明.html"
 HTML2PDF="$ROOT/.build/html2pdf"
 [ "$HTML2PDF" -nt scripts/html2pdf.swift ] || swiftc -O scripts/html2pdf.swift -o "$HTML2PDF"
@@ -74,10 +74,26 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
   <key>UTExportedTypeDeclarations</key>
-  <array><dict><key>UTTypeIdentifier</key><string>app.birdlock.project</string><key>UTTypeDescription</key><string>BirdLock 工程</string><key>UTTypeConformsTo</key><array><string>public.json</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>birdlock</string></array></dict></dict></array>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>app.birdlock.project</string>
+      <key>UTTypeDescription</key><string>BirdLock 工程</string>
+      <key>UTTypeIconFile</key><string>AppIcon.icns</string>
+      <!-- Expose this as a project document so Finder does not show a JSON thumbnail. -->
+      <key>UTTypeConformsTo</key><array><string>public.data</string><string>public.content</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict><key>public.filename-extension</key><array><string>birdlock</string></array></dict>
+    </dict>
+  </array>
   <key>CFBundleDocumentTypes</key>
   <array>
-    <dict><key>CFBundleTypeName</key><string>BirdLock 工程</string><key>CFBundleTypeRole</key><string>Editor</string><key>LSHandlerRank</key><string>Owner</string><key>LSItemContentTypes</key><array><string>app.birdlock.project</string></array></dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>BirdLock 工程</string>
+      <key>CFBundleTypeIconFile</key><string>AppIcon.icns</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Owner</string>
+      <key>LSItemContentTypes</key><array><string>app.birdlock.project</string></array>
+    </dict>
     <dict>
       <key>CFBundleTypeName</key><string>连拍文件夹</string>
       <key>CFBundleTypeRole</key><string>Viewer</string>
@@ -88,7 +104,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
       <key>CFBundleTypeName</key><string>照片</string>
       <key>CFBundleTypeRole</key><string>Viewer</string>
       <key>LSHandlerRank</key><string>Alternate</string>
-      <key>LSItemContentTypes</key><array><string>public.jpeg</string><string>public.heic</string><string>public.heif</string><string>public.png</string><string>public.tiff</string></array>
+      <key>LSItemContentTypes</key><array><string>public.jpeg</string><string>public.heic</string><string>public.heif</string><string>public.png</string><string>public.tiff</string><string>public.camera-raw-image</string></array>
     </dict>
   </array>
 </dict>

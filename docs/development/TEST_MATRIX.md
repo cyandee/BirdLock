@@ -13,6 +13,135 @@
 
 [PR 工作流](../../.github/workflows/pr-checks.yml) · [构建与发布](../构建与发布.md)
 
+## 1.11.0 Windows UTM 验收
+
+2026-11-16，Apple 芯片 Mac（Mac17,9）的 UTM/QEMU，Windows 11 ARM64 24H2（26100.4349），8 vCPU、8 GiB，登录桌面会话，运行 Windows x64 便携包。被测运行时代码与 `46bbecb` 的候选包相同。用 `e202f1d` 修正了 GUI 与工程回归的过期资源断言，补入 `a68cc32` 的更新说明。
+
+| 检查 | 结果 |
+|---|---|
+| 成品自检与桌面启动 | 通过。实际加载 rawpy 0.28.0、LibRaw 0.22.2，完成模型与软件编码自检。Qt 原生窗口确认可见，DPR 1 |
+| GUI 与工程回归 | 通过。12 张合成 JPEG 从上级目录导入，80 项布局通过，生成 H.264 与 HEVC。工程保存、重开、分组编辑、短音轨及取消后重试通过，已有目标文件保留。合成素材未捕获鸟眼，不能据此验证识别精度 |
+| 应用内更新说明 | 通过。Windows 桌面窗口显示 Mac 与 Windows 的 RAW 实现区别及五条兼容性链接 |
+| Sony α1 II ARW | 公开样本 7827（未压缩）和 7828（无损）。Windows 可导入机内预览和高分辨率 RAW，并渲染对应图像。机内预览均为 8640×5760，高分辨率分别为 8672×5784、8704×6144 |
+| Nikon Z8 NEF | 高效率低样本 6616 在 Windows 的两种 RAW 策略均拒绝，并提示试用 JPEG 或转 DNG |
+| RAW 工程回读 | 既有 ARW、CR2、CR3、DNG、NEF、RAF 六张样本，在两种 RAW 策略下从 Mac 转到 UTM Windows，回存后再由 Mac 打开。两端均完成 H.264 导出，保留组名、RAW 来源和音轨开关。Windows 对工程的音轨记录采用自己的序列化，未保留 Mac 的内部音轨 UUID |
+| Sony α1 II 工程回读 | Windows 用两种 ARW、两种 RAW 策略各保存一份工程，Windows 均可重开。Mac 通过其中三份。无损压缩样本的高分辨率工程从 Windows 到 Mac 失败，Windows 的 8704×6144 与 Mac 的 8640×5760 画幅不同，Mac 拒绝恢复保存的 RAW 来源 |
+| 待验收 | 原生 Windows x64 实体、实体 GPU / DirectML、硬件编码、真实鸟眼连拍和正式更新。虚拟 GPU 的自检只证明本次虚拟环境能运行 |
+
+## 1.11.0 Mac RAW 导入速度与进度
+
+2026-11-16，Apple 芯片 Mac（Mac17,9），macOS 27.2.1，变更提交 `46b8f67`，基线 `ecce053`。
+
+| 检查 | 结果 |
+|---|---|
+| Sony α1 II 高分辨率 RAW 导入读取阶段 | 从 [raw.pixls.us](https://raw.pixls.us/) 获取未压缩和无损压缩全画幅原片（样本 7827、7828），各复制 8 份，SHA-256 与来源一致。相同优化编译参数，各运行 3 次，16 张读取耗时中位值 4.95 秒 → 3.04 秒。原尺寸 8640×5760，额外以全尺寸渲染 9 张通过。识别分析耗时不计入这组基准 |
+| 其他公开 RAW | ARW、CR2、CR3、DNG、NEF、RAF 共 7 张用高分辨率模式读取，并逐张按记录尺寸渲染通过 |
+| Mac 原生界面 | 验证相同行为的打包候选：150 张全画幅 ARW 批量读取可见从 0/150 到 21/150，显示约剩 51 秒。此时点「取消并重新选择…」，切换到两张 ARW 的目录，显示 1/2、约剩 1 秒，完成读取并进入识别结果。两张原片来自不同时间，默认只分析选中的一组 |
+| 最终构建 | 110 项 Swift 单测通过，CLI 自检通过。通用 DMG 的内容、架构、包内签名与模拟安装验证通过，使用临时签名 |
+| 待复测 | 维护者自己的 Sony α1 II 连拍目录、Intel Mac 实机 |
+
+## 1.11.0 本地候选复验
+
+2026-11-16，代码提交 `2246d67`。实测平台为 Apple 芯片 Mac，macOS 27.2.1。Windows Python 结果和 Windows EXE 实机结果分别列出。
+
+| 环境 | 检查 | 结果 |
+|---|---|---|
+| macOS 原生 | Swift 单测、CLI 自检、打包工具 | 107 项 Swift 单测与 35 项打包工具单测通过，CLI 自检通过 |
+| macOS 原生 | 1.11.0 通用 DMG | 打包、包内签名和模拟安装后签名检查通过；本机启动并打开 1.11.0 更新说明 |
+| Mac 上的 Windows Python 和 Qt 源码 | Windows 单测、CLI 自检、Qt 离屏启动 | 169 项单测、CLI 自检和离屏启动通过。LibRaw 0.22.2 |
+| Mac 原生与 Mac 上的 Windows Python 源码 | 双向工程与导出 | 六份公开 RAW 在机内预览和高分辨率两种策略下完成跨端读取与导出，Windows 格式路径重定位、Unicode 组名和音轨开关通过 |
+| Mac 上的 Windows Python 源码 | 防抖和视频缓存重建 | 从原视频在新缓存重建 12 帧，核对防抖记录采用工程镜头配置 `[50, 52, 32, 24]` |
+| Windows x64 实体机 | 1.11.0 EXE 启动、RAW 打开与跨系统工程回读、硬件编码 | 待维护者验收 |
+
+## 1.11.0 发版前 Issue 整改复验
+
+2026-11-16，代码提交 `2907ff8`。Apple 芯片 Mac，macOS 27.2.1。
+
+| 环境 | 检查 | 结果 |
+|---|---|---|
+| macOS 原生 | Swift 全套（含遥测辅助程序）及 CLI 自检 | 109 项通过。验证取消视频后保留原目标并可重试，缺帧时图片序列和 GIF 正确失败并保留旧输出 |
+| macOS 原生 | 带音轨 RAW 工程回读与视频输出 | 6 帧工程保留分组与轨道开关，实际成品包含 H.264 和 AAC |
+| macOS 原生 | Apple 芯片及 Intel 通用 DMG | 打包、应用包和模拟安装后的临时签名检查通过 |
+| Mac 上的 Windows Python 代码与离屏 Qt | 全套单测、源码 CLI 自检、GUI 离屏启动 | 173 项通过。两种头部自动旋转、初始化失败后重试、视频/GIF/图片遇坏帧保留旧输出均有回归 |
+| Windows x64 | 便携 EXE 启动、导出修复、GPU 编码及跨端回读 | 待实机验收；本地候选 ZIP 基于已校验的 Windows x64 构建产物组装 |
+| Windows 正式成品 | 第三方声明与分发清单 | 构建配置已加入 PyInstaller 许可文本。正式原生构建时需按实际成品复核许可证与运行 |
+
+## 1.11.0 macOS 上级文件夹导入
+
+2026-11-16，代码提交 `c0f7d39`。Apple 芯片 Mac，macOS 27.2.1。
+
+| 环境 | 检查 | 结果 |
+|---|---|---|
+| macOS 原生 | Swift 全套（含遥测辅助程序） | 110 通过，0 失败，0 跳过。新用例覆盖混合目录深度、同名照片、重复输入、包内容、隐藏目录、符号链接及扫描取消，核对 EXIF 连拍范围 |
+| macOS 原生 | CLI 上级文件夹导入及自检 | 读取顶层和多层子目录的 5 张带拍摄时间的合成 JPEG，得到 2 组并完成分析；CLI 自检通过 |
+| macOS 原生 | 通用 DMG、安装签名、应用的原生打开入口 | 应用包和模拟安装后签名检查通过；通过 macOS 打开带 .mov 后缀的上级文件夹，应用完成深层子目录 3 张照片的连拍组分析 |
+
+## 下一版 Windows 阶段
+
+2026-11-15，代码验收提交 `fcc576ea9c668d4d683b97e7179b9a83a8b21344`。实机 Windows 11 Pro x64 build 26300，i7-10700K（16 线程），64 GiB，RTX 3060 12 GB，Python 3.12.10 / Qt 6.12 / ONNX Runtime DirectML 1.24.4，原生桌面 DPR 1.75。以下是公开的结果摘要，不附原始日志或用户素材。
+
+| 执行命令或操作 | 结果 |
+|---|---|
+| `python -m unittest discover -s windows/tests`（离屏 Qt、有本地遥测工具） | 167 通过、0 失败、0 跳过。含 20×160 张图片、组标识/名称/旧默认、保存重开、音轨、拖动合并历史、长片参数和磁盘拒绝。主分支初跑 157 通过、1 失败（Windows 符号链接权限）、4 跳过（无遥测工具） |
+| `python -m birdlock.cli selftest` | 6 组通过、0 失败：资源哈希、RAW 动态库、相位、轨迹、模型实际推理、NVENC |
+| `python windows/acceptance.py --mode full`，中间代码，合成素材 | 首跑 14 通过、2 失败（新增上限测试的源帧率设置，及本机验收进程覆盖了 RAW 的临时依赖路径）。分别用最终代码的 167 项套件及源码/成品自检重跑通过；未把首跑结果记为全过 |
+| 同一首轮实机的 `--gui-regression`、`--project-regression`、`--subject-regression`、`--video-regression` | 通过。Issue #1 的构图/画面/输出反复切换和两种窗宽各 80 检查/轮；QT_SCALE_FACTOR=1、1.5（最终代码补跑 2，各 80 检查）。预览、工程保存重开、缓存、取消或关导出窗后重试、H.264/HEVC NVENC、GIF/图片均有结果。短视频飞机 12/12 跟踪、视频失败/取消保留旧工程 |
+| 实机 CPU/DirectML 推理证据（合成与模板） | 鸟体实际采样；鸟头模型单独运行；飞机部件 DirectML 189 个、CPU 4 个节点事件。未用此结果证明真实 RAW 鸟眼或用户飞机案例；回退覆盖来自 Windows 单测 |
+| Windows 原生窗口和定点音频/诊断检查 | 深浅主题标题栏像素匹配 Qt 面板，跟随系统的 Qt 色彩通知可即时刷新；真实 Windows 设置跨屏切换未测。两个独立 WAV 的实际预览和 AAC 导出：禁用时 880 Hz 消失、440 Hz 保持；重新启用后两者都存在。独占锁住 `app.log` 和 `app.log.1` 都成功回退，原日志内容保留。用工程状态验证改名、轨道撤销/重做及损坏水印拒绝 |
+| `python -X utf8 -m unittest discover -s scripts/tests`（安装工具依赖后） | 25 通过、1 失败（Mac 的 chmod 账户权限断言在 Windows 不适用，断言及权限检查均来自主分支）、6 跳过（Mac 签名工具不可用） |
+| `python windows/build_windows.py`；解压后 `BirdLock.exe --selftest`、`--smoketest`、`--desktop-smoketest` | 3 项通过。ZIP 432,970,040 B，SHA256 `57f25c0ad6b3973fafee52ce4108927e8fd34169b0b1f777830ce97c0783ed50`。比本机上轮存档 431,131,277 B 多 1,838,763 B（0.43%，非同基线构建比较）。脱机包中 RAW 原生文件共 2,346,624 B（LibRaw DLL、OpenMP DLL、Python 扩展）；两份许可证与两张赞赏码哈希校验通过 |
+| 尚未执行或未复现 | Win10、真实 100/150/200% OS 缩放切换、多显示器/Snap、Windows 实机镜像升级、Explorer 实际批量选中、报告里的水印选择器闪退和特定编码器崩溃、同工程 1440p/4K 的 30/60/120 fps 对照、真实连拍鸟眼、Mac 原生和双向工程验收 |
+
+RAW 下表为已验证哈希的 [CC0 样本集](https://github.com/tellodaniel/revelraw-sample-raw-files/releases/tag/v1) 与 [raw.pixls.us](https://raw.pixls.us/) 富士样本的结果。两组均以六种文件完成元数据/解码、CPU 分析、分析记录往返和软件 H.264 导出（114,826 B / 230,072 B）。测试图无鸟，未做真实鸟眼验收、相机配对 JPEG 的定量色差或其他未列出的机型/压缩模式。
+
+| 相机/格式 | 相机模式 | 高分辨率模式 |
+|---|---|---|
+| Sony A7 III ARW（14-bit 压缩） | 内嵌 1616×1080，提示分辨率限制 | 解码 6024×4024 |
+| Nikon Z6 NEF（压缩样本） | 内嵌 6048×4024 | 解码 6064×4040 |
+| Canon 5D Mark IV CR2 | 内嵌 6720×4480 | 解码 6744×4502 |
+| Canon EOS R CR3 | 内嵌 6720×4480 | 解码 6742×4498 |
+| Fujifilm X-T2 RAF（14-bit 无损压缩） | 内嵌 1920×1280，提示分辨率限制 | 解码 6032×4028 |
+| Ricoh GR III DNG | 内嵌 6000×4000 | 解码 6020×4024 |
+| Nikon Z8 NEF（高效率低，raw.pixls.us 样本 6616） | 哈希正确；当前 LibRaw 无法打开容器，因此未取得内嵌预览 | 拒绝并提示相机直出 JPEG 或转 DNG |
+| Fujifilm X-T4 RAF（下载不完整，哈希不符） | 拒绝坏文件，有可操作提示 | 同左；不能据此判为该模式或机型不支持 |
+
+1080p/4K 长视频实际抽帧（统一 3 fps 源，SDR H.264，低复杂度合成画面，无音轨）。表中大小是实际写出的 JPEG 合计；未测进程内存峰值。未执行 18,000 帧满载、真实 4K 高帧率素材、长视频音频同步或全链路分析/重开/导出。短视频另有源码套件和实机操作覆盖取消、音频、缓存、重试。
+
+| 尺寸 | 片段 · 采样率 | 结果：帧数 / 时间 / JPEG |
+|---|---|---|
+| 1080p | 3 分钟 · 1 fps | 180 / 2.1 秒 / 6.0 MB |
+| 1080p | 5 分钟 · 2 fps | 600 / 6.7 秒 / 20.0 MB |
+| 1080p | 10 分钟 · 3 fps | 1,800 / 18.9 秒 / 59.9 MB |
+| 4K | 3 分钟 · 1 fps | 180 / 9.3 秒 / 23.4 MB |
+| 4K | 5 分钟 · 1 fps | 300 / 15.0 秒 / 39.1 MB |
+| 4K | 10 分钟 · 1 fps | 600 / 31.5 秒 / 78.1 MB |
+
+## Mac 适配验证
+
+被测代码 `81eae24521efb087fd32304569fb2f380574e652`。本机 arm64，macOS 27.2.1，Xcode 27.2。Windows 交接原生结果在上节。
+
+| 检查 | 实际结果 |
+|---|---|
+| Apple SwiftPM 和 CLI | `swift test` 104 项通过、0 跳过，使用已核验的 Mac 遥测辅助程序。覆盖 125 秒抽帧、途中取消清理、重试、工程重建、空间预算边界和旧字段缺省。CLI 合成自检通过 |
+| 包与工具 | 打包/更新工具 32 项通过。按现有脚本生成通用 App，主程序、光流进程、遥测进程均含 arm64 / x86_64 切片，包资源校验和 `codesign --verify --deep --strict` 通过。支持图片均可解码并在窗口加载。实际启动平台为 arm64 |
+| 原生窗口 | Canon EOS R CR3 从文件选择器导入。重命名分组，⌘Z 回到默认名、⇧⌘Z 恢复，Finder 选中原片。关闭音轨后静音字段保留，保存工程可重开。操作三种外观选项并确认浅色界面。单独开/关同一音轨的导出由 ffprobe 复核，启用时有 AAC，禁用时仅有视频 |
+| 长视频（SDR 合成源，3 fps） | 1080p 600 秒以 1 fps 生成 600 张 JPEG，约 20.2 MB，带 PCM。清理后由工程及原视频重建画面和原声。4K 180 秒以 1 fps 生成 180 张 JPEG，约 23.6 MB。未负载测试 18,000 帧、真实长 RAW/视频混合工作流或物理磁盘写满 |
+| 双向工程（Mac + Mac 上 Python/Qt 代码） | ARW、NEF、CR2、CR3、RAF、DNG 共六种，各测两种策略。Swift 保存 → Python 读取、还原并导出。Python 保存并换成 Windows 盘符及相对路径 → Swift 重定位、保留分组名、RAW 策略、禁用音轨，重存并导出。待实体 Windows 对同一工程复测 |
+| Python/Qt 补测（Mac） | 167 项通过、0 跳过，使用实际目录作为 `TMPDIR`。Mac 默认目录经过 `/var` 符号链接时，Windows 套件有 1 项工程指纹断言失败。带短循环音源的 FFmpeg 导出在 Mac 的 Python 路径中出现等待，终止进程后非循环对照通过。Windows 行为待实机核对 |
+| 真实鸟眼识别 | 两张公开 CC0 鸟类 JPEG 均检出目标和可见鸟眼（2/2）。RAW 样本用于验证解码、EXIF、分析流水线和导出，真实 RAW 鸟眼连拍待复测。[样本 1](https://commons.wikimedia.org/wiki/File:A_Mallard.jpg) · [样本 2](https://commons.wikimedia.org/wiki/File:Mallard_duck.11.jpg) |
+
+七份 RAW 来自 [raw.pixls.us](https://raw.pixls.us/) 的公开 CC0 样本，下载逐文件核对目录 SHA256。实际读到 EXIF 机型和拍摄日期，两种渲染策略分别完成分析和 H.264 导出。另用同名 RAW/JPEG 校验 JPEG 优先、RAW 优先、两者保留和损坏 JPEG 的配对行为。内嵌预览缩到 300×200 后与 Mac 上 LibRaw 预览的平均 RGB 绝对差为 0.54–0.86 / 255，含测试 JPEG 再编码误差。此结果只覆盖这些样本。
+
+| 相机及压缩样本 | ImageIO 内嵌预览 | CIRAWFilter 解码 |
+|---|---:|---:|
+| Sony A7 III ARW，14-bit 压缩（2414） | 1616×1080 | 6000×4000 |
+| Nikon Z6 NEF，14-bit 压缩（3581） | 6048×4024 | 6048×4024 |
+| Canon 5D Mark IV CR2（983） | 6720×4480 | 6720×4480 |
+| Canon EOS R CR3（4515） | 6720×4480 | 6720×4480 |
+| Fujifilm X-T2 RAF，14-bit 无损压缩（865） | 1920×1280 | 6000×4000 |
+| Ricoh GR III DNG（3115） | 6000×4000 | 6000×4000 |
+| Nikon Z8 NEF，高效率低（6616） | 8256×5504 | 8256×5504 |
+
 ## 本轮验证
 
 | 日期与提交 | 环境 | 检查 | 结果与证据 |
@@ -33,7 +162,15 @@
 | 2026-11-15 · `a0c63d4` 源码 | Linux x64，Mono，公网 | 更新器下载链路（测试夹具驱动真实更新器） | 通过。清单取自镜像，增量包路由到镜像 `download/`，中断后从 1 MiB 处 Range 续传，SHA256 一致。未执行安装 |
 | 2026-11-15 · `a0c63d4` 源码 | Linux x64，Swift 6.2.1，公网 | Core 探测逻辑对真实源 | 通过。GitHub、镜像可用；无效主机和 `/birdlock/` 根地址判为不可用。未经过 Sparkle |
 
-PR 检查使用 GitHub 生成的合并引用。后续推送以 [PR #2 的当前检查](https://github.com/cyandee/BirdLock/pull/2/checks) 为准。
+| 2026-11-15 · `codex/audit-fixes`（代码提交 `4649f7c`） | 实体 Mac x86_64，macOS 15.7.3，Swift 6.2.4 | `swiftc -typecheck` 全部 `Sources/BirdLockCore`、`Sources/BirdLockCLI` | 通过，无新增错误，仅既有告警。本机离线，未解析 SwiftPM 依赖，**未执行 `swift test`** |
+| 2026-11-15 · 同上 | 同机，Python 3.12，`.venv` 内 `cryptography==48.0.1` | `python -m unittest discover -s scripts/tests` | 通过，35 项、0 跳过，含新增的 3 项 `md2html` 用例 |
+| 2026-11-15 · 同上 | 同机 | `scripts/verify_bundle.py --lens-resources SharedResources/LensProfiles` | 通过。镜头清单只改 `title`/`cameraBrand` 拼写，文件与 SHA256 未变 |
+| 2026-11-15 · 同上 | 同机 | Windows 风格工程夹具：把 `locations[].path` 写成 `C:\...`、帧记录写成 `file:///C:/...`，移动素材后调用 `WorkspaceDocument.read(_:relocation:)` | 通过，6 帧全部重定位到新目录 |
+| 2026-11-15 · 同上 | 同机 | 全部 34 个 Markdown 的相对链接与锚点检查 | 通过，0 个失效 |
+| 2026-11-15 · 同上 | 同机 | 照片导入排序夹具：混合有无 EXIF 拍摄时间与接近时间戳 | 通过，有时间的按时间在前、无时间的按文件名排最后，结果确定 |
+| — · 未执行 | Windows 10 / 11 实体 | `windows/tests`、`birdlock.cli selftest`、成品自检 | 未执行 · 本机无 Windows 环境，本分支未改 Windows 行为，仅两处注释 |
+
+PR 检查使用 GitHub 生成的合并引用，后续推送以当前任务 PR 的检查为准。多更新源任务对应 PR #5，运行记录见上表。
 
 ## 实体设备验收
 
@@ -51,3 +188,23 @@ PR 检查使用 GitHub 生成的合并引用。后续推送以 [PR #2 的当前�
 | 支持光流的实体 Mac | 实际 VideoToolbox 光流的长序列成品导出、输出颜色和异常回退，涉及光流/导出变更时执行 | 未执行 · Mac Codex。源码光流颜色单测见上表 |
 
 回填示例字段为「日期 · SHA · 设备及 OS/架构 · GPU/驱动（如相关） · 源码或包 · 命令/操作 · 素材类型及数量 · 结果和证据」。Windows ARM 模拟、托管 runner、离屏 Qt 或模拟推理需要单列。证据用 Actions 链接或脱敏摘要，私有素材和原始日志留在设备上。
+
+## 2026-11-09 · Windows 实体 x64 复测
+
+Windows 11 Pro x64 26H2，构建 26300.9818；i7-10700K（8 核 / 16 线程），可见内存 63.72 GiB。RTX 3060 12 GiB，NVIDIA 驱动 610.88 / WDDM 3.2；Intel UHD 630，驱动 31.0.101.2141。DirectX 12，RTX 功能级别 12_2。Python 3.12.10 x64、Qt 6.12.0、ONNX Runtime DirectML 1.24.4、OpenCV 5.0.0.93；FFmpeg n9.0.2-48 的发布 ZIP 已对照上游 SHA256 校验。
+
+| 被测提交及环境 | 检查 | 实际结果 |
+|---|---|---|
+| [`90ddbf9`](https://github.com/cyandee/BirdLock/commit/90ddbf930a4e09bc5743bdd75b2a1ab47c4882e2) · Windows 实体机源码 | `windows/acceptance.py --mode full` | **通过** 16/16 步骤，0 失败、0 跳过。Python 单测 159/159（含 4 项原生遥测）；CLI 自检 5/5；设备枚举、FFmpeg、原生和离屏窗口自检均通过。真实 Windows 窗口记录 DPR 1.75，另外用 Qt 缩放倍率 1.5 重跑布局。 |
+| 同一提交及实体机 · 合成照片和视频 | 四个 Qt 回归入口，H.264 / HEVC / ProRes 导出及解码 | **通过**。两轮 GUI 各 80 次布局检查；H.264 和 HEVC 实际使用 RTX 的 NVENC。工程保存重开恢复手动修正、裁切和音轨；两种取消入口均保留原目标文件并可重试。飞机回归覆盖 8 张照片和 12 帧视频的机头轨迹；合成鸟图与鸟视频均无识别命中，保留未跟踪帧验证导出，未验收真实鸟眼。 |
+| 同一提交及实体机 · 同批 12 张合成鸟图，单张合成飞机图 | 两次全新分析进程，CPU 与 RTX 3060 DirectML | **通过**。鸟体/姿态分别有 12/1 个 DirectML 执行事件，没有 CPU 节点或整模型回退；姿态为独立探测。飞机部位首轮有 189 个 DirectML、4 个 CPU 节点，混合执行且未整模型回退。Quick Sync 通过 H.264 编码探测；OpenCL 独立枚举。 |
+| [`7944e30`](https://github.com/cyandee/BirdLock/commit/7944e30a3263e81fc170dcc6ce2e41f5e162559c) · Windows 实体机本地构建 | `windows/build_windows.py`，全新目录解压 ZIP 并执行成品 | **通过**。MSVC 14.44、SDK 26100、Rust 1.99.1 x64 MSVC、PyInstaller 6.22.3。ZIP 431,129,184 字节；核对清单 884 个文件（105 个 DLL、46 个 PYD），含模型、FFmpeg、遥测组件及 DirectML。成品 `--selftest`、`--smoketest`、`--desktop-smoketest` 均退出 0；离屏和真实窗口截图均可读取。C# 更新器 41 项断言和 7 个隔离进程集成场景通过。 |
+| [`a724f8c`](https://github.com/cyandee/BirdLock/commit/a724f8cfdf2649e6caea5b57ffa9ae88aea72fd9) · Windows 实体机 | 路径别名修复后的快速验收、工程回归、重建成品 | **通过**。Python 159/159，0 失败、0 跳过；包含真实 NTFS 联接的工程重开和既有素材重定位用例。合成工程回归通过。最新 ZIP 431,131,277 字节，解压后三个成品自检均退出 0。 |
+| Windows 实体桌面 · 12 张合成照片 | 自定义目标额外探测 | **通过**。从界面进入框选，设置锁定点，12 帧全部跟踪；保存和重开后恢复参考框。 |
+| [PR #4 首轮检查](https://github.com/cyandee/BirdLock/actions/runs/42576325108) · GitHub 托管 Mac / Windows | 源码检查 | macOS **通过**；Windows **失败**，工程重开解析了原路径的别名，导致缓存键改变。实体机已用 NTFS 联接复现并修复，更新结果见 [PR #4 的当前检查](https://github.com/cyandee/BirdLock/pull/4/checks)。 |
+| GitHub Actions Windows 成品构建 | 同一提交的补充包验收 | **未执行**。本轮使用上述实体机本地构建；托管 PR 源码检查和既往 GitHub 构建记录分开看。 |
+| Windows / macOS 实机 · 真实素材 | 实拍鸟眼、飞机、动物/昆虫、真实 SDR / IMU、工程互开和重定位 | **未执行**。工作区没有符合条件的真实素材；等待授权测试目录，再由双端用相同素材复测。固定选眼和自定义目标的现有合成单测已通过。 |
+
+同批合成鸟图的模型初始化 / 完整分析分别为 CPU **0.41 / 10.14 秒**、DirectML **1.02 / 0.72 秒**。本机首次 DirectML 初始化另测得约 65 秒；不能用之后的重复启动时间代表冷启动。飞机部位的模型初始化 / 单张固定 ROI 四次推理总耗时为 CPU **2.11 / 21.17 秒**、DirectML **3.39 / 5.22 秒**。耗时仅反映这些输入和该设备，节点数不是利用率。
+
+复现与修复：基线缓存测试在普通用户下遇到 WinError 1314；改用真实目录联接后复现清理会删除外部夹具，修复后不遍历联接。工程保存重开曾因 Windows 路径分隔符改变而产生不同缓存键，现有工程回归已验证修复。旧 Qt 回归会停在保存对话框，取消导出曾与编码完成竞态。首次成品 GUI 加载到打包器从 PATH 选入的 ICU，QtCore 导入失败；排除同名 ICU 后，全新 ZIP 解压成品的两种窗口自检通过。原始日志、诊断包、素材、工程和产物只存于本机。

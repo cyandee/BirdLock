@@ -4,6 +4,11 @@ import CoreGraphics
 import UniformTypeIdentifiers
 
 public enum ImageLoader {
+    public static func load(_ frame: SourceFrame, maxPixel: Int? = nil) -> CGImage? {
+        if frame.raw != nil { return RawPhoto.load(frame, maxPixel: maxPixel) }
+        return load(frame.url, maxPixel: maxPixel)
+    }
+
     /// Decode an image with EXIF orientation applied. If maxPixel is given, ImageIO decodes at reduced
     /// size (fast DCT-domain downscale for JPEG).
     public static func load(_ url: URL, maxPixel: Int? = nil) -> CGImage? {
@@ -126,14 +131,5 @@ public struct GrayPatch {
             }
         }
         return GrayPatch(width: n, height: n, data: out)
-    }
-
-    public func toCGImage() -> CGImage? {
-        let bytes = data.map { UInt8(clamp($0, 0, 1) * 255) }
-        let cs = CGColorSpaceCreateDeviceGray()
-        guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
-        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: width,
-                       space: cs, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
-                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 }

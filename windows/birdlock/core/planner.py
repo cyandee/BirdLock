@@ -94,10 +94,11 @@ def plan(track, frames, c: Composition, out_w: float, out_h: float, used: list[i
     off = c.rotationOffsetDeg * math.pi / 180
     if c.rotationMode == RotationMode.NONE:
         psi = np.full(n, off)
-    elif c.rotationMode == RotationMode.LOCK_HEAD:
-        psi = -(gaussian(ang, 2) - med_ang) + off
     else:
-        psi = -0.7 * (gaussian(ang, 20) - med_ang) + off
+        locked = c.rotationMode == RotationMode.LOCK_HEAD
+        smoothed = gaussian(ang, 2 if locked else 20)
+        relative = np.where(np.isfinite(smoothed), smoothed - med_ang, 0.0)
+        psi = off - (1.0 if locked else 0.7) * relative
 
     facing_right = math.cos(med_ang + off) >= 0
     u = c.anchorX

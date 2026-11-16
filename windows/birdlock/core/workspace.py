@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy, json, os, tempfile
 from pathlib import Path
 from urllib.parse import urlparse, unquote
+from .. import __version__
 from .frames import SourceFrame,read_frame
 from .analysis import SequenceAnalysis, build_track, fingerprint
 from .subjects import SubjectProfile
@@ -28,6 +29,11 @@ def path_from_url(value):
 
 def uri(path):return Path(path).absolute().as_uri()
 
+def _local_path(value):
+    path=path_from_url(value)
+    # Match paths returned by the Windows importer; URI slashes change cache keys.
+    return str(Path(path)) if os.name=='nt' and path else path
+
 def native_analysis(a):
     d=copy.deepcopy(a.to_dict());d.pop('track',None)
     for f in d['frames']:f['url']=uri(f.pop('path'))
@@ -42,7 +48,7 @@ def native_analysis(a):
 
 def local_analysis(data):
     d=copy.deepcopy(data);d.pop('track',None)
-    for f in d['frames']:f['path']=path_from_url(f.pop('url'));f.setdefault('orientation',1)
+    for f in d['frames']:f['path']=_local_path(f.pop('url'));f.setdefault('orientation',1)
     for p in d['perFrame']:
         p['keypoints']=[(k['x'],k['y'],k['conf']) for k in p.get('keypoints',[])]
         p['head']['points']=[([v['x'],v['y']] if isinstance(v,dict) else v) if v is not None else None for v in p['head']['points']]
@@ -99,8 +105,8 @@ def create(*,frames,segments,analysis,remembered,subject,profile,profiles,audio,
             if not recipe.is_file():raise ValueError('请重新导入一次该视频，记录原片与镜头参数后再保存工程。')
             motion=root/'motion.json'
             videos.append(dict(cacheDirectory=directory,recipe=json.loads(recipe.read_text(encoding='utf-8')),motion=json.loads(motion.read_text(encoding='utf-8')) if motion.exists() else None))
-    return dict(format=FORMAT,schema=SCHEMA,creatorVersion='1.10.0',subject=subject,frames=[{**f.to_dict(),'url':uri(f.path)} for f in frames],
-        segments=[dict(start=s.start,count=s.count,fps=s.fps) for s in segments],segmentIndex=segment_index,mergeGroups=list(merge_groups),
+    return dict(format=FORMAT,schema=SCHEMA,creatorVersion=__version__,subject=subject,frames=[{**f.to_dict(),'url':uri(f.path)} for f in frames],
+        segments=[dict(start=s.start,count=s.count,fps=s.fps,groupID=s.groupID,name=s.name) for s in segments],segmentIndex=segment_index,mergeGroups=list(merge_groups),
         analyses=[native_analysis(a) for a in analyses],profile=native_profile(profile),profiles={k:native_profile(v) for k,v in profiles.items()},
         audio=native_audio(audio),watermark=native_watermark(watermark),videos=videos,currentFrame=current_frame,viewMode=view_mode,sourceZoom=source_zoom,previewAudio=preview_audio)
 
@@ -146,14 +152,24 @@ def read(path, relocation=None):
         candidates=[Path(original),path.parent/loc['relative'].replace('\\','/')]
         if relocation:candidates.extend([Path(relocation)/name,Path(relocation)/loc['relative']])
         candidate=next((p for p in candidates if p.is_file() and (loc.get('bytes') is None or p.stat().st_size==loc['bytes'])),None)
-        if candidate:mapping[original]=str(candidate.resolve())
+        if candidate:
+            # Keep the original Windows spelling when the original file is still
+            # valid; resolving a short path or junction changes the cache key.
+            if os.name!='nt' or candidate!=candidates[0]:
+                mapping[original]=str(candidate.resolve())
         elif loc.get('required',True):missing.append(original)
         else:warnings.append(name)
     if missing:raise MissingMedia(missing)
     d=replace_paths(d,mapping)
     n=len(d['frames'])
+    group_ids=set()
     for seg in d['segments']:
         if not 0<=seg['start']<seg['start']+seg['count']<=n or not 0<seg['fps']<=1000:raise ValueError('工程分组范围无效。')
+        group_id=seg.get('groupID') or f"legacy-{seg['start']}-{seg['count']}"
+        name=seg.get('name') or ''
+        if not isinstance(group_id,str) or len(group_id)>96 or group_id in group_ids or not isinstance(name,str) or len(name)>256:
+            raise ValueError('工程分组名称或标识无效。')
+        group_ids.add(group_id)
     master={f['url'] for f in d['frames']}
     for a in d['analyses']:
         from .custom_tracking import valid_seed
@@ -186,7 +202,7 @@ def wire_key(path):
 def replace_paths(value, mapping):
     normal={wire_key(k):v for k,v in mapping.items()}
     def walk(value):
-        if isinstance(value,dict):return {k:walk(v) for k,v in value.items()}
+        if isinstance(value,dict):return {k:v if k in ('name','groupID','raw') else walk(v) for k,v in value.items()}
         if isinstance(value,list):return [walk(v) for v in value]
         if isinstance(value,str):
             p=wire_key(path_from_url(value))
@@ -206,9 +222,13 @@ def restore_media(document, cache_root, cancelled=lambda:False):
             if r.get('lensJSON'):
                 profile=str(Path(temp)/'lens.json');Path(profile).write_text(r['lensJSON'],encoding='utf-8')
             frames,fps=extract(r['sourcePath'],r['start'],r['seconds'],r['fps'],profile=profile,root=Path(cache_root)/'video-imports',cancelled=cancelled)
-        if len(frames)!=r['count']:raise ValueError('原视频已变化，不能恢复同一组画面。')
-        if video.get('motion'):save_record(Path(frames[0].path).parent/'motion.json',video['motion'])
-        else:prepare(frames,r['sourcePath'],r['start'],fps,cancelled=cancelled)
+            if len(frames) != r['count']:
+                raise ValueError('原视频已变化，不能恢复同一组画面。')
+            if video.get('motion'):
+                save_record(Path(frames[0].path).parent / 'motion.json', video['motion'])
+            else:
+                prepare(frames, r['sourcePath'], r['start'], fps, profile=profile,
+                        force=profile is not None, cancelled=cancelled)
         old=video['cacheDirectory']
         for f in d['frames']:
             p=path_from_url(f['url'])
@@ -218,8 +238,8 @@ def restore_media(document, cache_root, cancelled=lambda:False):
                 replacements[p]=new.path;metadata[new.path]=new
     d=replace_paths(d,replacements)
     for f in d['frames']+[f for a in d['analyses'] for f in a['frames']]:
-        if path_from_url(f['url']) in metadata:
-            new=metadata[path_from_url(f['url'])];f['fileSize']=new.fileSize;f['modified']=new.modified
+        new=metadata.get(_local_path(f['url']))
+        if new is not None:f['fileSize']=new.fileSize;f['modified']=new.modified
     orientations={}
     for f in d['frames']+[f for a in d['analyses'] for f in a['frames']]:
         if 'orientation' not in f:
@@ -232,7 +252,7 @@ def restore_media(document, cache_root, cancelled=lambda:False):
             f['orientation']=orientations[path]
     frames=[]
     for f in d['frames']:
-        f=dict(f);f['path']=path_from_url(f.pop('url'));f.setdefault('orientation',1);frames.append(SourceFrame.from_dict(f))
+        f=dict(f);f['path']=_local_path(f.pop('url'));f.setdefault('orientation',1);frames.append(SourceFrame.from_dict(f))
     analyses=[local_analysis(a) for a in d['analyses']]
     for a in analyses:a.fingerprint=fingerprint(a.frames,a.subject,a.modelIdentity)
     d['_frames']=frames;d['_analyses']=analyses

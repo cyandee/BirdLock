@@ -50,13 +50,6 @@ public enum FocusMark {
         return draw(rect:layout.rect,in:ctx,line:line,style:style,color:color)
     }
 
-    /// - Parameters:
-    ///   - side: frame side in pixels
-    ///   - line: stroke width in pixels
-    public static func image(side: Int, line: Double, style: FocusMarkStyle, color: FocusMarkColor) -> CGImage? {
-        image(width: side, height: side, line: line, style: style, color: color)
-    }
-
     public static func image(width: Int, height: Int, line: Double, style: FocusMarkStyle, color: FocusMarkColor) -> CGImage? {
         let pad = Int(ceil(line * 2 + 2))
         let W = width + 2 * pad, H = height + 2 * pad

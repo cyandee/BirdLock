@@ -13,7 +13,9 @@ public struct SoundAsset: Codable, Identifiable, Sendable {
 }
 
 public enum SoundLibrary {
-    public static var directory: URL? {
+    /// Resolved once: bundled resources never change at runtime, and callers in SwiftUI
+    /// bodies would otherwise re-read library.json from disk on every update.
+    public static let directory: URL? = {
         var candidates: [URL] = []
         if let resource = Bundle.main.resourceURL { candidates.append(resource.appendingPathComponent("Audio")) }
         candidates.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("SharedResources/Audio"))
@@ -23,21 +25,21 @@ public enum SoundLibrary {
             root.deleteLastPathComponent()
         }
         return candidates.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("library.json").path) }
-    }
+    }()
 
-    public static var assets: [SoundAsset] {
+    public static let assets: [SoundAsset] = {
         guard let root = directory, let data = try? Data(contentsOf: root.appendingPathComponent("library.json")),
               let list = try? JSONDecoder().decode([SoundAsset].self, from: data) else { return [] }
         return list.filter { !$0.file.contains("/") && !$0.file.contains("..") && FileManager.default.fileExists(atPath: root.appendingPathComponent($0.file).path) }
-    }
+    }()
 
     public static func canonicalID(_ id: String) -> String {
         ["sony-10": "sony-a1m2-10", "sony-20": "sony-a1m2-30"][id] ?? id
     }
-    public static var burstAssets: [SoundAsset] { assets.filter { $0.kind == "burst" } }
-    public static var cameras: [String] {
+    public static let burstAssets: [SoundAsset] = assets.filter { $0.kind == "burst" }
+    public static let cameras: [String] = {
         var seen = Set<String>(); return burstAssets.compactMap { seen.insert($0.cameraID).inserted ? $0.cameraID : nil }
-    }
+    }()
     public static func asset(for id: String) -> SoundAsset? { assets.first { $0.id == canonicalID(id) } }
     public static func url(for id: String) -> URL? {
         guard let asset = asset(for: id), let root = directory else { return nil }
@@ -59,6 +61,7 @@ public struct AudioTrack: Codable, Hashable, Sendable, Identifiable {
     public var fadeOut = 0.0
     public var loop = true
     public var muted = false
+    public var enabled = true
     /// Derived, absolute timeline intervals; the source clock keeps running while silent.
     public var muteRanges: [[Double]] = []
     public var videoOriginal = false
@@ -71,12 +74,12 @@ public struct AudioTrack: Codable, Hashable, Sendable, Identifiable {
         startOffset = c.value(.startOffset, d.startOffset); timelineStart = c.value(.timelineStart, d.timelineStart)
         duration = c.value(.duration, d.duration); volume = c.value(.volume, d.volume)
         fadeIn = c.value(.fadeIn, d.fadeIn); fadeOut = c.value(.fadeOut, d.fadeOut)
-        loop = c.value(.loop, d.loop); muted = c.value(.muted, d.muted)
+        loop = c.value(.loop, d.loop); muted = c.value(.muted, d.muted); enabled = c.value(.enabled, d.enabled)
         muteRanges = c.value(.muteRanges, d.muteRanges)
         videoOriginal = c.value(.videoOriginal, d.videoOriginal)
         arrangementError = c.value(.arrangementError, d.arrangementError)
     }
     public var sourceURL: URL? { assetID.flatMap(SoundLibrary.url) ?? url }
-    public var isActive: Bool { !muted && volume > 0.001 && (url != nil || assetID != nil) }
+    public var isActive: Bool { enabled && !muted && volume > 0.001 && (url != nil || assetID != nil) }
     public var title: String { videoOriginal ? "视频原声" : assetID.flatMap(SoundLibrary.asset)?.title ?? url?.lastPathComponent ?? (assetID != nil ? "已移除档位，请重新选择音效" : "音频轨道") }
 }

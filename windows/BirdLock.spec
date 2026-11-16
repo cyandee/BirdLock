@@ -1,10 +1,13 @@
 # PyInstaller spec: portable one-folder build  →  dist/BirdLock/BirdLock.exe
 # Build with:  python build_windows.py   (downloads FFmpeg, then runs PyInstaller)
 import os
+from importlib.metadata import distribution
 from PyInstaller.utils.hooks import collect_dynamic_libs
 
 here = os.path.abspath(SPECPATH)
 repo = os.path.dirname(here)
+with open(os.path.join(repo, "VERSION"), encoding="utf-8") as version_file:
+    release_version = version_file.read().strip()
 
 datas = [
     (os.path.join(repo, "SharedResources", "Updates"), "updates"),
@@ -23,12 +26,20 @@ datas = [
     (os.path.join(repo, "docs", "自动更新.md"), "docs"),
     (os.path.join(repo, "docs", "视频导入与镜头配置.md"), "docs"),
     (os.path.join(repo, "docs", "工程与缓存管理.md"), "docs"),
-    (os.path.join(repo, "docs", "更新说明-1.10.0.md"), "docs"),
+    (os.path.join(repo, "docs", f"更新说明-{release_version}.md"), "docs"),
     (os.path.join(repo, "docs", "自定义目标与固定选眼.md"), "docs"),
     (os.path.join(repo, "docs", "第三方许可.md"), "docs"),
     (os.path.join(repo, "LICENSE"), "docs"),
 ]
 binaries = collect_dynamic_libs("onnxruntime")   # includes DirectML.dll
+binaries += collect_dynamic_libs("rawpy")       # LibRaw and its OpenMP runtime
+rawpy_dist = distribution("rawpy")
+datas += [(str(rawpy_dist.locate_file(file)), os.path.join("docs", "windows", "rawpy"))
+          for file in rawpy_dist.files if file.name in {"LICENSE", "LICENSE.LibRaw"}]
+
+pyinstaller_dist = distribution("pyinstaller")
+pyinstaller_license = next(file for file in pyinstaller_dist.files if file.name == "COPYING.txt")
+datas.append((str(pyinstaller_dist.locate_file(pyinstaller_license)), os.path.join("docs", "windows", "pyinstaller")))
 
 a = Analysis(
     [os.path.join(here, "BirdLock.pyw")],
@@ -40,6 +51,13 @@ a = Analysis(
               "PySide6.QtQuick", "PySide6.QtQml", "PySide6.QtPdf", "PySide6.QtCharts"],
     noarchive=False,
 )
+# Qt links to Windows' ICU exports. A generic DLL picked up from PATH (for
+# example Poppler's ICU) can have the same filename with incompatible symbols.
+# Keep Windows' system ICU out of the portable application directory.
+if os.name == "nt":
+    system_icu = {"icu.dll", "icuuc.dll", "icuin.dll", "icudt.dll"}
+    a.binaries = [entry for entry in a.binaries
+                  if os.path.basename(entry[0]).casefold() not in system_icu]
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="BirdLock", console=False,
           icon=os.path.join(here, "assets", "BirdLock.ico"), version=os.path.join(here, "version_info.txt"))

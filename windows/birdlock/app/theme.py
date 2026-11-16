@@ -1,5 +1,6 @@
-"""Colours and the dark style (mirrors the macOS app's Theme)."""
-from PySide6.QtCore import QPointF, Qt
+"""Runtime colour tokens, Qt styling and native Windows window colours."""
+import os
+from PySide6.QtCore import QEvent, QObject, QPointF, Qt
 from PySide6.QtGui import QColor, QPalette, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QApplication
 
@@ -24,10 +25,24 @@ def hexa(c: QColor, alpha: float | None = None) -> str:
     return f"rgba({c.red()},{c.green()},{c.blue()},{a:.3f})"
 
 
-STYLE = f"""
+_tokens = {key:value for key,value in globals().copy().items() if key.isupper() and isinstance(value,QColor)}
+_dark = {key:QColor(value) for key,value in _tokens.items()}
+_light = dict(CANVAS="#f6f5f3", PANEL="#eeece8", TEXT="#252323", SECONDARY="#504940",
+              TERTIARY="#6b6159", ACCENT="#b46704", OK="#176435", WARN="#855004",
+              BAD="#a12d29", MANUAL="#663d98", MUSIC="#2c58a1", EYE="#06627a")
+_is_dark = True
+
+
+def _style():
+    ink = "255,255,255" if _is_dark else "24,20,18"
+    float_bg = "#2a2b2f" if _is_dark else "#fffdf8"
+    edge = "#3a3b40" if _is_dark else "#bcb4a7"
+    return f"""
 QWidget {{ color: {hexa(TEXT)}; font-size: 13px; }}
-QMainWindow, QWidget#canvas {{ background: {hexa(CANVAS)}; }}
+QMainWindow, QDialog, QWidget#canvas {{ background: {hexa(CANVAS)}; }}
 QWidget#panel, QScrollArea#inspector, QScrollArea#inspector > QWidget > QWidget {{ background: {hexa(PANEL)}; }}
+QToolBar {{ background: {hexa(PANEL)}; border: none; padding: 6px 10px; spacing: 8px; }}
+QTextBrowser, QListWidget#importList, QFrame#statusCard {{ background: {hexa(PANEL)}; border: 1px solid {edge}; }}
 QFrame#card {{ background: rgba(255,255,255,0.045); border: 1px solid rgba(255,255,255,0.07); border-radius: 10px; }}
 QLabel#cardTitle {{ font-weight: 600; font-size: 13px; }}
 QLabel#caption {{ color: {hexa(SECONDARY)}; font-size: 12px; }}
@@ -76,7 +91,7 @@ QMenu {{ background: #2a2b2f; border: 1px solid #3a3b40; }}
 QMenu::item:selected {{ background: {hexa(ACCENT, 0.35)}; }}
 QToolTip {{ background: #2a2b2f; color: #eee; border: 1px solid #444; padding: 4px; }}
 QStatusBar {{ background: {hexa(PANEL)}; color: {hexa(SECONDARY)}; }}
-"""
+""".replace("255,255,255", ink).replace("#2a2b2f",float_bg).replace("#3a3b40",edge).replace("color: #eee",f"color: {hexa(TEXT)}")
 
 
 def _check_image() -> str | None:
@@ -104,19 +119,64 @@ def _check_image() -> str | None:
         return None
 
 
-def apply(app: QApplication):
+def _native_caption(widget):
+    if os.name!="nt" or app_platform()!="windows" or not widget.isWindow():
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        set_attr=ctypes.windll.dwmapi.DwmSetWindowAttribute
+        set_attr.argtypes=[wintypes.HWND,wintypes.DWORD,ctypes.c_void_p,wintypes.DWORD]
+        hwnd=int(widget.winId())
+        flag=ctypes.c_int(int(_is_dark))
+        def attr(key,value):
+            return set_attr(hwnd,key,ctypes.byref(value),ctypes.sizeof(value))
+        if attr(20,flag)!=0:
+            attr(19,flag)
+        for key,color in ((34,ACCENT),(35,PANEL),(36,TEXT)):
+            ref=ctypes.c_uint32(color.red()|(color.green()<<8)|(color.blue()<<16))
+            attr(key,ref)  # Windows 10 can reject these while supporting the dark flag.
+    except (OSError,AttributeError,RuntimeError):
+        pass
+
+
+def app_platform():
+    return QApplication.platformName()
+
+
+class _WindowColours(QObject):
+    def eventFilter(self, widget, event):
+        from PySide6.QtWidgets import QWidget
+        if event.type()==QEvent.Show and isinstance(widget,QWidget) and widget.isWindow():
+            _native_caption(widget)
+        return False
+
+
+def apply(app: QApplication, mode=None):
+    global _is_dark
+    if mode is not None:
+        app.setProperty("birdlockAppearance",mode)
+    mode=app.property("birdlockAppearance") or "dark"
+    if not hasattr(app,"_birdlock_theme"):
+        app._birdlock_theme=_WindowColours(app)
+        app.installEventFilter(app._birdlock_theme)
+        app.styleHints().colorSchemeChanged.connect(lambda _:apply(app) if app.property("birdlockAppearance")=="system" else None)
+    _is_dark=mode=="dark" or (mode=="system" and app.styleHints().colorScheme()!=Qt.ColorScheme.Light)
+    for key,target in _tokens.items():
+        color=QColor(_light.get(key,_dark[key])) if not _is_dark else _dark[key]
+        target.setRgba(color.rgba())
     app.setStyle("Fusion")
     p = QPalette()
     p.setColor(QPalette.Window, PANEL)
     p.setColor(QPalette.WindowText, TEXT)
-    p.setColor(QPalette.Base, QColor(36, 37, 41))
-    p.setColor(QPalette.AlternateBase, QColor(44, 45, 50))
+    p.setColor(QPalette.Base, QColor("#242529" if _is_dark else "#fffefa"))
+    p.setColor(QPalette.AlternateBase, QColor("#2c2d32" if _is_dark else "#f2ede5"))
     p.setColor(QPalette.Text, TEXT)
-    p.setColor(QPalette.Button, QColor(44, 45, 50))
+    p.setColor(QPalette.Button, QColor("#2c2d32" if _is_dark else "#eee9df"))
     p.setColor(QPalette.ButtonText, TEXT)
     p.setColor(QPalette.Highlight, ACCENT)
-    p.setColor(QPalette.HighlightedText, QColor(20, 20, 20))
-    p.setColor(QPalette.ToolTipBase, QColor(42, 43, 47))
+    p.setColor(QPalette.HighlightedText, QColor("#141414" if _is_dark else "#ffffff"))
+    p.setColor(QPalette.ToolTipBase, QColor("#2a2b2f" if _is_dark else "#fffdf8"))
     p.setColor(QPalette.ToolTipText, TEXT)
     p.setColor(QPalette.PlaceholderText, TERTIARY)
     app.setPalette(p)
@@ -125,4 +185,6 @@ def apply(app: QApplication):
     if tick:
         extra = (f"QCheckBox::indicator:checked {{ image: url({tick}); }}"
                  f"QRadioButton::indicator:checked {{ image: url({tick}); }}")
-    app.setStyleSheet(STYLE + extra)
+    app.setStyleSheet(_style() + extra)
+    for widget in app.topLevelWidgets():
+        if widget.isVisible():_native_caption(widget)

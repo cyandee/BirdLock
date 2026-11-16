@@ -6,7 +6,8 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QDoubleSpinBox, QFileDialog, 
                                QLabel, QPushButton, QVBoxLayout)
 
 from ..core.lens_profile import LensProfile
-from ..core.video_import import probe, selection
+from ..core.video_import import MAX_IMPORT_SECONDS, MAX_SAMPLE_FPS, check_cache_budget, probe, selection
+from ..core.paths import cache_dir
 from .lens_picker import SearchableLensCombo
 from ..core import lens_catalog
 
@@ -27,8 +28,8 @@ class VideoImportDialog(QDialog):
         self.start, self.seconds, self.fps = [QDoubleSpinBox() for _ in range(3)]
         for spin in (self.start, self.seconds, self.fps): spin.setDecimals(3); spin.setEnabled(False)
         self.start.setRange(0, 864000)
-        self.seconds.setRange(.001, 120); self.seconds.setValue(10)
-        self.fps.setRange(1, 60); self.fps.setValue(30)
+        self.seconds.setRange(.001, MAX_IMPORT_SECONDS); self.seconds.setValue(10)
+        self.fps.setRange(1, MAX_SAMPLE_FPS); self.fps.setValue(30)
         for text, spin in [('片段起点（秒）', self.start), ('片段时长（秒）', self.seconds), ('采样帧率', self.fps)]:
             form.addRow(text, spin)
         layout.addLayout(form)
@@ -80,6 +81,8 @@ class VideoImportDialog(QDialog):
             self.message.setText(error); self.summary.setText('无法导入此视频'); return
         for control in (self.start,self.seconds,self.fps,self.catalog,self.choose):control.setEnabled(True)
         self.summary.setText(f'{info.width} × {info.height} · {info.fps:.3f} fps · {info.duration:.2f} 秒')
+        self.start.setMaximum(info.duration)
+        self.seconds.setMaximum(min(MAX_IMPORT_SECONDS, info.duration))
         self.seconds.setValue(min(10, info.duration)); self.fps.setValue(min(30, info.fps))
         if error:self.message.setText(error)
         self.validate_selection()
@@ -132,12 +135,17 @@ class VideoImportDialog(QDialog):
         if self.info is None: self.go.setEnabled(False); return False
         try:
             seconds,fps,count = selection(self.info,self.start.value(),self.seconds.value(),self.fps.value())
-            text = f'片段 {self.start.value():.2f}–{self.start.value()+seconds:.2f} 秒 · {count} 帧 · {fps:.3f} fps'
+            cache = getattr(self.state,'cache',None)
+            estimate = check_cache_budget(self.info, seconds, count, cache.root if cache else cache_dir())
+            text = (f'片段 {self.start.value():.2f}–{self.start.value()+seconds:.2f} 秒 · {count:,} 帧 · '
+                    f'{fps:.3f} fps · 缓存预计 {estimate/(1<<30):.2f} GiB')
+            if count > 3600:
+                text += '；长片段的分析和保存可能较慢。'
             if self.catalog.searching: text = '请从匹配列表选择配置，或按 Esc 取消搜索。'
             self.clip_summary.setText(text)
             self.go.setEnabled(not self.catalog.searching)
             return not self.catalog.searching
-        except ValueError as error:
+        except (ValueError,OSError) as error:
             self.clip_summary.setText(str(error));self.go.setEnabled(False);return False
 
     def import_video(self):

@@ -75,7 +75,7 @@ enum UpdateSourcesWindow {
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 400), styleMask: [.titled, .closable, .resizable],
                          backing: .buffered, defer: false)
         w.title = "更新源"
-        w.contentView = NSHostingView(rootView: UpdateSourcesView(updater: updater).preferredColorScheme(.dark))
+        w.contentView = NSHostingView(rootView: UpdateSourcesView(updater: updater))
         w.isReleasedWhenClosed = false
         w.center()
         window = w

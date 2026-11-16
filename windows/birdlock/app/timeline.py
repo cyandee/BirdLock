@@ -252,6 +252,7 @@ class AudioLane(QWidget):
         w = self.width() - 2 * PAD
         t = (ev.position().x() - PAD) / w * D
         off = st.audio.startOffset
+        st.begin_edit_gesture()
         self._drag_off = off if off <= t <= off + vd else min(max(0.0, t - vd / 2), mx)
         self._drag_x = ev.position().x()
         st.audio.startOffset = self._drag_off
@@ -266,6 +267,8 @@ class AudioLane(QWidget):
         self.state.audio_settings_changed()
 
     def mouseReleaseEvent(self, _):
+        if self._drag_off is not None:
+            self.state.end_edit_gesture()
         self._drag_off = None
 
     def dragEnterEvent(self, ev):
@@ -377,18 +380,20 @@ class ExtraAudioLanes(QWidget):
         from ..core.sounds import assets
         for i, track in enumerate(self.state.audio.tracks):
             y = i * 32
-            p.fillRect(0, y, self.width(), 31, QColor(20, 21, 24))
+            p.fillRect(0, y, self.width(), 31, theme.PANEL)
             p.setPen(theme.TEXT)
             p.drawText(QRectF(0, y, 52, 31), Qt.AlignCenter, f"♫ {i + 1}")
             start = min(total, max(0, track.timelineStart))
             span = min(track.duration, total - start) if track.duration > 0 else total - start
             rect = QRectF(52 + PAD + start / total * width, y + 3, max(1, span / total * width), 26)
             color = QColor(theme.ACCENT)
-            color.setAlpha(35 if track.muted else 95)
+            color.setAlpha(35 if track.muted or not track.enabled else 95)
             p.setBrush(color)
             p.setPen(Qt.NoPen)
             p.drawRoundedRect(rect, 4, 4)
             name = "视频原声" if track.videoOriginal else next((e["title"] for e in assets() if e["id"] == track.assetID), os.path.basename(track.path))
+            if not track.enabled:
+                name = "已禁用 · " + name
             p.setPen(theme.TEXT)
             p.drawText(rect.adjusted(5, 0, -3, 0), Qt.AlignVCenter, p.fontMetrics().elidedText(name, Qt.ElideRight, max(1, int(rect.width()) - 8)))
         if self.state.job:
@@ -398,8 +403,9 @@ class ExtraAudioLanes(QWidget):
 
     def mousePressEvent(self, event):
         i = int(event.position().y() // 32)
-        if event.button() == Qt.LeftButton and event.position().x() >= 52 and i < len(self.state.audio.tracks):
+        if event.button() == Qt.LeftButton and event.position().x() >= 52 and 0 <= i < len(self.state.audio.tracks):
             track = self.state.audio.tracks[i]
+            self.state.begin_edit_gesture()
             self.drag = (track, event.position().x(), track.timelineStart)
 
     def mouseMoveEvent(self, event):
@@ -411,6 +417,8 @@ class ExtraAudioLanes(QWidget):
             self.state.audio_settings_changed()
 
     def mouseReleaseEvent(self, event):
+        if self.drag:
+            self.state.end_edit_gesture()
         self.drag = None
 
 

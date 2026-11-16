@@ -7,6 +7,7 @@ struct ExportSheet: View {
     @Environment(AppState.self) private var state
     @Environment(\.dismiss) private var dismiss
     @State private var kind: AppState.ExportKind = .video
+    @State private var choosingDestination = false
 
     var body: some View {
         @Bindable var state = state
@@ -16,7 +17,7 @@ struct ExportSheet: View {
                 ForEach(AppState.ExportKind.allCases) { Text($0.title).tag($0) }
             }
             .pickerStyle(.segmented)
-            .disabled(state.exportState.running)
+            .disabled(state.exportState.running || choosingDestination)
 
             if let job = state.job {
                 let (w, h) = job.outputSize
@@ -47,6 +48,20 @@ struct ExportSheet: View {
                 .font(.callout)
                 Toggle("以完整分辨率渲染（推荐，较慢）", isOn: $state.exportSettings.useFullResolution)
                     .disabled(state.exportState.running)
+                if let job = state.job, job.used.contains(where: { job.analysis.frames[$0].hasRawPreviewLimit }) {
+                    Text("所选画面含较小的 RAW 机内预览。关闭完整分辨率渲染可继续导出。")
+                        .font(.caption).foregroundStyle(Theme.warn)
+                }
+            }
+
+            if let directory = startDirectory {
+                HStack(alignment: .firstTextBaseline, spacing: 14) {
+                    Text("导出位置").foregroundStyle(.secondary)
+                    Text(directory.path)
+                        .lineLimit(2).truncationMode(.middle)
+                        .help(directory.path)
+                }
+                .font(.callout)
             }
 
             if state.exportState.running || state.exportState.progress > 0 || !state.exportState.message.isEmpty {
@@ -72,9 +87,10 @@ struct ExportSheet: View {
                     Button(state.exportState.cancelling ? "正在取消…" : "取消导出") { state.cancelExport() }.disabled(state.exportState.cancelling)
                 } else {
                     Button("关闭") { state.exportState = ExportState(); dismiss() }.keyboardShortcut(.cancelAction)
+                        .disabled(choosingDestination)
                     Button("选择位置并导出…") { choose() }
                         .buttonStyle(.borderedProminent).tint(Theme.accent).keyboardShortcut(.defaultAction)
-                        .disabled(state.job?.outputFrames.isEmpty != false)
+                        .disabled(choosingDestination || state.job?.outputFrames.isEmpty != false)
                 }
             }
         }
@@ -88,8 +104,10 @@ struct ExportSheet: View {
     }
 
     private var startDirectory: URL? {
-        if let directory = sourceURL?.deletingLastPathComponent(), FileManager.default.fileExists(atPath:directory.path) { return directory }
-        return FileManager.default.urls(for:.documentDirectory,in:.userDomainMask).first
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        return [state.lastExportDirectory, sourceURL?.deletingLastPathComponent(), documents]
+            .compactMap { $0 }
+            .first { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
     }
 
     private func defaultName() -> String {
@@ -98,21 +116,37 @@ struct ExportSheet: View {
     }
 
     private func choose() {
-        guard let job = state.job else { return }
+        guard !choosingDestination, !state.exportState.running, let job = state.job else { return }
+        let kind = kind, name = defaultName()
+        let panel: NSSavePanel
         switch kind {
         case .video, .gif:
-            let p = NSSavePanel()
+            let save = NSSavePanel()
             let ext = kind == .gif ? "gif" : job.export.codec.fileExtension
-            p.allowedContentTypes = [kind == .gif ? .gif : (ext == "mp4" ? .mpeg4Movie : .quickTimeMovie)]
-            p.nameFieldStringValue = defaultName() + "." + ext
-            p.directoryURL = startDirectory
-            if p.runModal() == .OK, let u = p.url { state.export(kind: kind, to: u) }
+            save.allowedContentTypes = [kind == .gif ? .gif : (ext == "mp4" ? .mpeg4Movie : .quickTimeMovie)]
+            save.nameFieldStringValue = name + "." + ext
+            panel = save
         case .images:
-            let p = NSOpenPanel()
-            p.canChooseDirectories = true; p.canChooseFiles = false; p.canCreateDirectories = true
-            p.prompt = "导出到此文件夹"
-            p.directoryURL = startDirectory
-            if p.runModal() == .OK, let u = p.url { state.export(kind: .images, to: u.appendingPathComponent(defaultName())) }
+            let open = NSOpenPanel()
+            open.canChooseDirectories = true
+            open.canChooseFiles = false
+            open.canCreateDirectories = true
+            open.prompt = "导出到此文件夹"
+            panel = open
+        }
+        panel.directoryURL = startDirectory
+        choosingDestination = true
+        let finish: (NSApplication.ModalResponse) -> Void = { response in
+            choosingDestination = false
+            guard response == .OK, let selected = panel.url else { return }
+            let output = kind == .images ? selected.appendingPathComponent(name, isDirectory: true) : selected
+            state.lastExportDirectory = output.deletingLastPathComponent()
+            state.export(kind: kind, to: output)
+        }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            panel.begin(completionHandler: finish)
         }
     }
 }

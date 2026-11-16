@@ -42,7 +42,7 @@ public final class ProxyCache: @unchecked Sendable {
         if let image=ImageLoader.load(url) { return image }
         recordsLock.lock();let remembered=records[fingerprint];recordsLock.unlock()
         guard let analysis=remembered ?? loadAnalysis(fingerprint:fingerprint),analysis.frames.indices.contains(index),
-              let image=ImageLoader.load(analysis.frames[index].url,maxPixel:analysis.proxyLongSide) else { return nil }
+              let image=ImageLoader.load(analysis.frames[index],maxPixel:analysis.proxyLongSide) else { return nil }
         let temporary=url.deletingLastPathComponent().appendingPathComponent(".proxy-"+UUID().uuidString+".jpg")
         if ImageLoader.writeJPEG(image,to:temporary,quality:0.95) {
             if let data=try? Data(contentsOf:temporary) { try? data.write(to:url,options:.atomic) }

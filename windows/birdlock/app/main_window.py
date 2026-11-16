@@ -8,8 +8,8 @@ import threading
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QUrl, Signal
-from PySide6.QtGui import QAction, QDesktopServices, QIcon, QImage, QKeySequence, QPixmap
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QIcon, QImage, QKeySequence, QPixmap
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QInputDialog,
                                QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
                                QProgressBar, QPushButton, QSizePolicy, QTextBrowser, QVBoxLayout, QWidget)
 
@@ -20,10 +20,11 @@ from .state import AppState, is_audio_file, to_qimage
 from .timeline import TimelinePanel, fmt_time
 from .. import APP_NAME, CONTACT_EMAIL, CONTACT_TEXT, __version__
 from ..core import frames as F
+from ..core.log import log
 from ..core.paths import IS_WINDOWS, data_dir, docs_dir
 
 AGREEMENT_VERSION = "1.0"
-PHOTO_FILTER = "照片 (*.jpg *.jpeg *.heic *.heif *.hif *.png *.tif *.tiff)"
+PHOTO_FILTER = "照片（含 RAW） (" + " ".join("*"+suffix for suffix in sorted(F.SUPPORTED_EXT)) + ")"
 AUDIO_FILTER = "音频 (*.mp3 *.m4a *.aac *.wav *.aif *.aiff *.flac *.ogg *.wma *.mp4 *.mov *.m4v)"
 
 
@@ -75,7 +76,7 @@ class DocDialog(QDialog):
         v.setContentsMargins(0, 0, 0, 0)
         tb = QTextBrowser()
         tb.setOpenExternalLinks(True)
-        tb.setStyleSheet("QTextBrowser { background: #1c1d20; border: none; padding: 18px; font-size: 13px; }")
+        tb.setStyleSheet("QTextBrowser { border: none; padding: 18px; font-size: 13px; }")
         tb.setMarkdown(markdown)
         v.addWidget(tb, 1)
         if buttons:
@@ -110,7 +111,7 @@ class AgreementDialog(QDialog):
         hl.addLayout(col, 1)
         v.addWidget(head)
         tb = QTextBrowser()
-        tb.setStyleSheet("QTextBrowser { background: #1c1d20; border: none; padding: 18px; font-size: 13px; }")
+        tb.setStyleSheet("QTextBrowser { border: none; padding: 18px; font-size: 13px; }")
         tb.setMarkdown(agreement_text())
         v.addWidget(tb, 1)
         foot = QFrame()
@@ -175,7 +176,7 @@ class ImportPreviewDialog(QDialog):
         self.list.setUniformItemSizes(True)
         self.list.setSpacing(6)
         self.list.setObjectName("importList")
-        self.list.setStyleSheet("QListWidget#importList { background: #1c1d20; border: 1px solid rgba(255,255,255,0.08);"
+        self.list.setStyleSheet("QListWidget#importList {"
                                 " border-radius: 8px; }")
         v.addWidget(self.list, 1)
         btns = QHBoxLayout()
@@ -341,6 +342,7 @@ class ExportDialog(QDialog):
         while self.grid.count():
             w = self.grid.takeAt(0).widget()
             if w:
+                w.hide()
                 w.deleteLater()
         rows = []
         if job:
@@ -362,6 +364,7 @@ class ExportDialog(QDialog):
         for r, (k, val) in enumerate(rows):
             a, b = QLabel(k), QLabel(val)
             a.setObjectName("caption")
+            b.setWordWrap(True)
             self.grid.addWidget(a, r, 0)
             self.grid.addWidget(b, r, 1)
         self.full.blockSignals(True)
@@ -426,6 +429,7 @@ class MainWindow(ProjectActions,QMainWindow):
     def __init__(self, state: AppState):
         super().__init__()
         self.state = state
+        theme.apply(QApplication.instance(),state.appearance)
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(1100, 720)
         self.resize(1360, 860)
@@ -458,7 +462,6 @@ class MainWindow(ProjectActions,QMainWindow):
     def _build_toolbar(self):
         tb = self.addToolBar("main")
         tb.setMovable(False)
-        tb.setStyleSheet(f"QToolBar {{ background: {theme.hexa(theme.PANEL)}; border: none; padding: 6px 10px; spacing: 8px; }}")
         imp = QPushButton("🖼 导入")
         imp.setToolTip("导入连拍照片（文件夹或多张 JPG / HEIF）  Ctrl+Alt+O")
         imp.clicked.connect(self.choose_photos)
@@ -504,7 +507,9 @@ class MainWindow(ProjectActions,QMainWindow):
         tb.addWidget(self.support_btn)
 
     def show_release_notes(self):
-        DocDialog("BirdLock 1.10.0 更新说明",doc_text("更新说明-1.10.0.md"),self).exec()
+        from .. import __version__
+
+        DocDialog(f"BirdLock {__version__} 更新说明", doc_text(f"更新说明-{__version__}.md"), self).exec()
         notice=getattr(self,"release_notice",None)
         if notice is not None:notice.acknowledge()
 
@@ -540,6 +545,9 @@ class MainWindow(ProjectActions,QMainWindow):
         m.addSeparator()
         act(m, "导入连拍文件夹…", self.choose_photos, "Ctrl+Alt+O")
         act(m, "导入照片文件…", self.choose_photo_files, "Ctrl+Shift+O")
+        act(m, "RAW 渲染策略…", self.choose_raw_mode)
+        act(m, "RAW + JPEG 搭配导入…", self.choose_raw_pair_policy)
+        self.a_reveal = act(m, "在文件资源管理器中显示当前原片", self.reveal_current_photo)
         act(m, "导入视频（实验）…", self.choose_video)
         self.a_export = act(m, "导出…", self.show_export, "Ctrl+E")
         m.addSeparator()
@@ -550,6 +558,16 @@ class MainWindow(ProjectActions,QMainWindow):
         act(m, "缓存管理…", self.cache_settings_dialog)
         m.addSeparator()
         act(m, "退出", self.close, "Ctrl+Q")
+        m = mb.addMenu("编辑")
+        self.a_undo = act(m,"撤销",lambda:st.step_edit(),"Ctrl+Z")
+        self.a_redo = act(m,"重做",lambda:st.step_edit(True),"Ctrl+Shift+Z")
+        self.a_redo.setShortcuts([QKeySequence("Ctrl+Shift+Z"),QKeySequence("Ctrl+Y")])
+        m = mb.addMenu("显示")
+        submenu = m.addMenu("外观")
+        appearance = QActionGroup(self);appearance.setExclusive(True)
+        for key,title in (("light","浅色"),("dark","深色"),("system","跟随系统")):
+            command=act(submenu,title,lambda _,mode=key:self.set_appearance(mode))
+            command.setCheckable(True);command.setChecked(key==st.appearance);appearance.addAction(command)
         m = mb.addMenu("播放")
         act(m, "播放 / 暂停", st.toggle_play, "Space")
         act(m, "上一帧", lambda: st.step(-1), "Left")
@@ -590,6 +608,9 @@ class MainWindow(ProjectActions,QMainWindow):
     def _changed(self, topic):
         self.project_ui_changed(topic)
         st = self.state
+        if topic in ('frames','analysis','phase','project'):
+            self.statusBar().showMessage(st.import_notice)
+            self.statusBar().setVisible(bool(st.import_notice))
         has = st.analysis is not None
         self.subject_combo.blockSignals(True)
         self.subject_combo.setCurrentIndex(self.subject_combo.findData(st.subject))
@@ -601,6 +622,10 @@ class MainWindow(ProjectActions,QMainWindow):
         self.timeline.setVisible(has)
         self.inspector.setVisible(has)
         self.a_export.setEnabled(st.job is not None)
+        self.a_reveal.setEnabled(has)
+        editable = st.phase=="ready" and not st.export_running
+        self.a_undo.setEnabled(editable and bool(st.edit_history.before))
+        self.a_redo.setEnabled(editable and bool(st.edit_history.after))
         for k, b in self.view_btns.items():
             b.setChecked(st.view_mode == k)
         if topic in ("frames", "phase"):
@@ -610,7 +635,9 @@ class MainWindow(ProjectActions,QMainWindow):
             self.seg_combo.clear()
             self.seg_combo.addItem("合并选中组 → 同一视频", -1)
             for k, s in enumerate(segs):
-                self.seg_combo.addItem(f"第 {k + 1} 组 · {s.count} 张", k)
+                label = self.seg_combo.fontMetrics().elidedText(s.label(k),Qt.ElideRight,160)
+                self.seg_combo.addItem(f"{label} · {s.count} 张", k)
+                self.seg_combo.setItemData(self.seg_combo.count()-1,s.label(k),Qt.ToolTipRole)
             self.seg_combo.setCurrentIndex(self.seg_combo.findData(st.segment_index))
             self.seg_combo.blockSignals(False)
 
@@ -620,6 +647,11 @@ class MainWindow(ProjectActions,QMainWindow):
         self.state.view_mode = k
         self.state.changed.emit("view")
         self.state.refresh_preview()
+
+    def set_appearance(self, mode):
+        self.state.appearance=mode
+        theme.apply(QApplication.instance(),mode)
+        self.state.save_settings()
 
     def _toggle_fix(self):
         st = self.state
@@ -664,12 +696,32 @@ class MainWindow(ProjectActions,QMainWindow):
             multi=choice.addButton("按间隔分多组",QMessageBox.AcceptRole)
             choice.addButton(QMessageBox.Cancel)
             choice.exec()
-            if choice.clickedButton() in (one,multi):self.state.import_paths(files,merge=choice.clickedButton() is one)
+            if choice.clickedButton() in (one,multi):self.state.import_paths(files,single_group=choice.clickedButton() is one)
 
     def choose_audio(self):
         p, _ = QFileDialog.getOpenFileName(self, "选择背景音乐", "", AUDIO_FILTER)
         if p:
             self.state.set_audio(p)
+
+    def choose_raw_mode(self):
+        labels = ['相机直出色彩（机内预览优先）','RAW 高分辨率解码']
+        keys = ['camera','raw']
+        picked, ok = QInputDialog.getItem(self,'RAW 渲染策略','用于下一次导入；已打开的工程保留原策略。',labels,keys.index(self.state.raw_mode),False)
+        if ok:
+            self.state.raw_mode=keys[labels.index(picked)];self.state.save_settings()
+
+    def choose_raw_pair_policy(self):
+        labels = ['每组匹配文件优先保留 JPEG','每组匹配文件优先保留 RAW','RAW 和 JPEG 都导入']
+        keys = ['jpeg','raw','both']
+        picked, ok = QInputDialog.getItem(self,'RAW + JPEG','同目录同名、拍摄时间相符时按所选方式导入。',labels,keys.index(self.state.raw_pair_policy),False)
+        if ok:
+            self.state.raw_pair_policy=keys[labels.index(picked)];self.state.save_settings()
+
+    def reveal_current_photo(self):
+        from .media_location import original_path, select_in_explorer
+        st = self.state
+        if st.analysis and not select_in_explorer([original_path(st.analysis.frames[st.current_frame])]):
+            QMessageBox.information(self, "原片不可用", "找不到当前原片，请先重新定位素材。")
 
     def choose_video(self, path=None):
         if not self.can_leave_project():return
@@ -681,9 +733,11 @@ class MainWindow(ProjectActions,QMainWindow):
             VideoImportDialog(path, self.state, self).exec()
 
     def choose_watermark(self):
+        log.info("watermark file dialog opened")
         p, _ = QFileDialog.getOpenFileName(self, "选择水印图片（推荐带透明背景的 PNG）", "", "图片 (*.png *.tif *.tiff *.jpg *.jpeg *.webp)")
-        if p:
-            self.state.set_watermark_file(p)
+        log.info("watermark file dialog returned selected=%s", bool(p))
+        if p and not self.state.set_watermark_file(p):
+            QMessageBox.warning(self, "无法添加水印", self.state.export_message)
 
     def show_export(self):
         if self.state.job is None:
@@ -722,15 +776,27 @@ class MainWindow(ProjectActions,QMainWindow):
         from ..core.paths import resource_dir
         dialog = QDialog(self); dialog.setWindowTitle("请作者喝杯咖啡")
         layout = QVBoxLayout(dialog)
-        text = QLabel("如果 BirdLock 帮到了你，欢迎自愿赞赏。\n5 元、10 元、20 元或任意金额，心意随意。\n所有功能均可免费使用，赞赏不影响使用。")
+        text = QLabel("如果 BirdLock 帮到了你，欢迎自愿赞赏。\n所有功能均可免费使用，是否赞赏不影响使用")
         text.setWordWrap(True); text.setAlignment(Qt.AlignCenter); layout.addWidget(text)
-        image = QLabel(); image.setAlignment(Qt.AlignCenter)
-        candidates = (resource_dir()/"support"/"alipay-coffee.jpg",Path(__file__).resolve().parents[3]/"SharedResources"/"Support"/"alipay-coffee.jpg")
-        path = next((p for p in candidates if p.is_file()),None)
-        pixmap = QPixmap(str(path)) if path else QPixmap()
-        if pixmap.isNull():image.setText("暂时找不到赞赏二维码，可通过邮箱联系作者。")
-        else:image.setPixmap(pixmap.scaled(QSize(340,510),Qt.KeepAspectRatio,Qt.SmoothTransformation))
-        layout.addWidget(image); layout.addWidget(QLabel("支付宝扫码 · 自愿支持"))
+        row=QHBoxLayout();layout.addLayout(row)
+        side = 258
+        for platform,filename in (("支付宝","alipay-coffee.jpg"),("微信","wechat-coffee.png")):
+            column=QVBoxLayout();row.addLayout(column)
+            image=QLabel();image.setAlignment(Qt.AlignCenter)
+            image.setFixedSize(side, side)
+            candidates=(resource_dir()/"support"/filename,Path(__file__).resolve().parents[3]/"SharedResources"/"Support"/filename)
+            path=next((p for p in candidates if p.is_file()),None)
+            pixmap=QPixmap(str(path)) if path else QPixmap()
+            if pixmap.isNull():
+                image.setText("暂时找不到二维码")
+            else:
+                scale = image.devicePixelRatioF()
+                pixels = round(side * scale)
+                pixmap = pixmap.scaled(pixels, pixels, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                pixmap.setDevicePixelRatio(scale)
+                image.setPixmap(pixmap)
+            column.addWidget(image, alignment=Qt.AlignHCenter)
+            label=QLabel(platform+"扫码 · 自愿支持");label.setAlignment(Qt.AlignCenter);column.addWidget(label)
         close = QPushButton("关闭"); close.clicked.connect(dialog.accept); layout.addWidget(close)
         dialog.exec()
 

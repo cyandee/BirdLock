@@ -147,7 +147,7 @@ public final class RenderJob: @unchecked Sendable {
         }
         let longSide = max(f.pixelWidth, f.pixelHeight)
         let maxPixel: Int? = scale < 0.999 ? Int((Double(longSide) * scale).rounded(.up)) : nil
-        guard let cg = ImageLoader.load(f.url, maxPixel: maxPixel) else { return nil }
+        guard let cg = ImageLoader.load(f, maxPixel: maxPixel) else { return nil }
         return (CIImage(cgImage: cg), Double(cg.width) / Double(f.pixelWidth))
     }
 
@@ -187,7 +187,7 @@ public final class RenderJob: @unchecked Sendable {
         let w = max(2, Int((Double(sz.w) * scale).rounded())), h = max(2, Int((Double(sz.h) * scale).rounded()))
         let xf = plan.xforms[i].scaled(Double(w) / Double(sz.w))
         let fill = composition.edgeFill
-        return renderer.compose(source: source, sourceScale: sourceScale, originalHeight: Double(analysis.frames[i].pixelHeight),
+        return renderer.compose(source: source, sourceScale: sourceScale,
                                 xform: xf, outW: w, outH: h, gains: gains[i], edgeFill: fill,
                                 overlays: withOverlays ? overlays(for: i, outW: w, outH: h) : [])
     }

@@ -44,6 +44,8 @@ public enum AudioMixer {
         let tracks = try awaitSync { try await asset.loadTracks(withMediaType: .audio) }
         guard let track = tracks.first else { throw AudioError.noAudio(url.lastPathComponent) }
         let duration = try awaitSync { try await asset.load(.duration) }.seconds
+        // Streamed or damaged assets can report a non-finite duration; guard before Int conversion.
+        let safeDuration = duration.isFinite && duration > 0 ? duration : 0
         let reader = try AVAssetReader(asset: asset)
         let rate = 8000.0
         let out = AVAssetReaderTrackOutput(track: track, outputSettings: [
@@ -55,7 +57,7 @@ public enum AudioMixer {
         guard reader.startReading() else { throw reader.error ?? AudioError.noAudio(url.lastPathComponent) }
         let bin = max(1, Int(rate / binsPerSecond))
         var peaks: [Float] = []
-        peaks.reserveCapacity(Int(duration * binsPerSecond) + 1)
+        if safeDuration > 0 { peaks.reserveCapacity(Int(safeDuration * binsPerSecond) + 1) }
         var cur: Float = 0, cnt = 0
         var data = [Float]()
         while let sb = out.copyNextSampleBuffer() {
@@ -70,7 +72,7 @@ public enum AudioMixer {
             }
         }
         if cnt > 0 { peaks.append(min(1, cur)) }
-        return Overview(duration: duration.isFinite ? duration : Double(peaks.count) / binsPerSecond, peaks: peaks, binsPerSecond: binsPerSecond)
+        return Overview(duration: safeDuration > 0 ? safeDuration : Double(peaks.count) / binsPerSecond, peaks: peaks, binsPerSecond: binsPerSecond)
     }
 
     /// The music laid out on a 0-based timeline of `duration` seconds (starting at `startOffset` in the file,

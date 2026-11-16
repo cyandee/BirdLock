@@ -50,7 +50,7 @@ class AudioTests(unittest.TestCase):
         restored = AudioSettings.from_dict(json.loads(json.dumps(old.to_dict())))
         self.assertEqual(restored.tracks[0], old.tracks[0])
         self.assertEqual(restored.volume, 0.7)
-        self.assertEqual(len(assets()), 12)
+        self.assertEqual(len(assets()), 17)
         self.assertTrue(Path(asset_path("sony-10")).is_file())
 
     @unittest.skipUnless(ffmpeg_path(), "FFmpeg required")
@@ -109,12 +109,20 @@ class AudioTests(unittest.TestCase):
     def test_library_uses_original_recordings_and_valid_camera_variants(self):
         import hashlib
         from birdlock.core.sounds import cameras, burst_assets
-        self.assertEqual(len(cameras()),5)
-        self.assertEqual(len(burst_assets()),11)
+        self.assertEqual(len(cameras()), 7)
+        self.assertEqual(len(burst_assets()), 16)
         for entry in assets():
             data=Path(asset_path(entry["id"])).read_bytes()
             self.assertEqual(hashlib.sha256(data).hexdigest(),entry["sha256"])
             self.assertGreater(entry["duration"],0)
         self.assertEqual([e["fps"] for e in burst_assets() if e["cameraID"]=="sony-a7m5"],[30,15])
         self.assertEqual(next(e["fps"] for e in assets() if e["id"]=="nikon-z8"),20)
+        self.assertEqual(
+            [entry["variant"] for entry in burst_assets() if entry["cameraID"] == "canon-1d-mark-ii"],
+            ["高速连拍"],
+        )
+        self.assertEqual(
+            [entry["variant"] for entry in burst_assets() if entry["cameraID"] == "canon-r5-mark-ii"],
+            ["5 张连拍", "10 张连拍", "20 张连拍", "30 张连拍"],
+        )
         self.assertEqual(asset_path("sony-20"),asset_path("sony-a1m2-30"))

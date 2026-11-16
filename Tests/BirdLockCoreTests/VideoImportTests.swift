@@ -10,7 +10,19 @@ final class VideoImportTests: XCTestCase {
         let clip = try VideoImporter.selection(info:info,options:options)
         XCTAssertEqual(clip.seconds,1);XCTAssertEqual(clip.fps,24);XCTAssertEqual(clip.count,24)
         options.start=200;XCTAssertThrowsError(try VideoImporter.selection(info:info,options:options))
-        options.start=0;options.seconds=121;XCTAssertThrowsError(try VideoImporter.selection(info:info,options:options))
+        options.start=0;options.seconds=121
+        XCTAssertEqual(try VideoImporter.selection(info:info,options:options).count, 2904)
+        let long = VideoInfo(width:3840,height:2160,fps:60,duration:700)
+        options.seconds=600;options.fps=30
+        let maximum = try VideoImporter.selection(info:long,options:options)
+        XCTAssertEqual(maximum.count, 18_000)
+        options.fps=60;XCTAssertThrowsError(try VideoImporter.selection(info:long,options:options))
+        options.fps=1;options.seconds=600.1
+        XCTAssertThrowsError(try VideoImporter.selection(info:long,options:options))
+        let estimate = VideoImporter.estimatedCacheBytes(info: long, count: maximum.count, seconds: maximum.seconds)
+        let needed = estimate + VideoImporter.diskReserve
+        XCTAssertThrowsError(try VideoImporter.checkCacheBudget(info: long, count: maximum.count, seconds: maximum.seconds, available: needed - 1))
+        XCTAssertNoThrow(try VideoImporter.checkCacheBudget(info: long, count: maximum.count, seconds: maximum.seconds, available: needed))
         options.seconds=1;options.fps = .nan;XCTAssertThrowsError(try VideoImporter.selection(info:info,options:options))
     }
     func testSilentVideoPresentationUsesOriginalURL() throws {
@@ -66,25 +78,25 @@ final class VideoImportTests: XCTestCase {
         XCTAssertThrowsError(try lens.validate(width:100,height:100))
         XCTAssertThrowsError(try LensProfile.load(profile(root,model:"gopro")))
     }
-    private func video(_ root: URL, rotated: Bool = false) throws -> URL {
+    private func video(_ root: URL, rotated: Bool = false, frames: Int = 30, fps: Int32 = 30) throws -> URL {
         let url = root.appendingPathComponent(rotated ? "旋转.mov" : "飞鸟 片段.mov")
         let writer = try AVAssetWriter(outputURL:url,fileType:.mov)
         let input = AVAssetWriterInput(mediaType:.video,outputSettings:[AVVideoCodecKey:AVVideoCodecType.h264,AVVideoWidthKey:64,AVVideoHeightKey:48])
         if rotated { input.transform = CGAffineTransform(a:0,b:1,c:-1,d:0,tx:48,ty:0) }
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput:input,sourcePixelBufferAttributes:[kCVPixelBufferPixelFormatTypeKey as String:kCVPixelFormatType_32BGRA,kCVPixelBufferWidthKey as String:64,kCVPixelBufferHeightKey as String:48])
         writer.add(input);XCTAssertTrue(writer.startWriting());writer.startSession(atSourceTime:.zero)
-        for i in 0..<30 {
+        for i in 0..<frames {
             while !input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval:0.001) }
             var buffer: CVPixelBuffer?
             XCTAssertEqual(CVPixelBufferPoolCreatePixelBuffer(nil,try XCTUnwrap(adaptor.pixelBufferPool),&buffer),kCVReturnSuccess)
             let pb = try XCTUnwrap(buffer)
             CVPixelBufferLockBaseAddress(pb,[])
             let bytes = CVPixelBufferGetBaseAddress(pb)!.assumingMemoryBound(to:UInt8.self), row = CVPixelBufferGetBytesPerRow(pb)
-            for y in 0..<48 { for x in 0..<64 { for c in 0..<4 { bytes[y*row+x*4+c] = c == 3 ? 255 : UInt8(i*3) } } }
+            for y in 0..<48 { for x in 0..<64 { for c in 0..<4 { bytes[y*row+x*4+c] = c == 3 ? 255 : UInt8(i % 80 * 3) } } }
             CVPixelBufferUnlockBaseAddress(pb,[])
-            XCTAssertTrue(adaptor.append(pb,withPresentationTime:CMTime(value:Int64(i),timescale:30)))
+            XCTAssertTrue(adaptor.append(pb,withPresentationTime:CMTime(value:Int64(i),timescale:fps)))
         }
-        input.markAsFinished();writer.endSession(atSourceTime:CMTime(value:1,timescale:1))
+        input.markAsFinished();writer.endSession(atSourceTime:CMTime(value:Int64(frames),timescale:fps))
         let sem = DispatchSemaphore(value:0);writer.finishWriting { sem.signal() };sem.wait()
         XCTAssertEqual(writer.status,.completed,String(describing:writer.error))
         return url
@@ -113,4 +125,42 @@ final class VideoImportTests: XCTestCase {
         XCTAssertEqual(ImageLoader.load(rotatedFrames[0].url)?.width,48)
         XCTAssertEqual(ImageLoader.load(rotatedFrames[0].url)?.height,64)
     }
+    func testLongClipCancelRetryAndRebuildFromProject() throws {
+        let root = try temporary(), source = try video(root, frames: 125, fps: 1)
+        let cache = ProxyCache(root: root.appendingPathComponent("cache"))
+        let imports = cache.root.appendingPathComponent("video-imports")
+        var options = VideoImportOptions(); options.seconds = 125; options.fps = 1
+        let stop = Flag()
+        XCTAssertThrowsError(try VideoImporter.extract(source, options: options, root: imports,
+            progress: { if $0 > 0.2 { stop.cancel() } }, isCancelled: { stop.cancelled })) { error in
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: imports.path).isEmpty)
+        let original = try VideoImporter.extract(source, options: options, root: imports)
+        XCTAssertEqual(original.frames.count, 125)
+        let frames = original.frames
+        var analysis = SequenceAnalysis(fingerprint: Analyzer.fingerprint(frames), frames: frames, fps: 1, proxyLongSide: 64,
+            perFrame: frames.indices.map { FrameAnalysis(index: $0) }, poseSchema: .cub15)
+        analysis.excluded = [1]
+        let profile = SubjectProfile(composition: Composition(), look: LookSettings(), export: ExportSettings(),
+                                     selection: FrameSelection(), presetID: nil)
+        let segments = [BurstSegment(range: frames.indices, fps: 1, name: "长片段")]
+        let project = try WorkspaceDocument(frames: frames, segments: segments, analysis: analysis, remembered: [], subject: .bird,
+            profile: profile, profiles: [:], audio: AudioSettings(), watermark: WatermarkSettings(),
+            segmentIndex: 0, mergeGroups: [0], currentFrame: 0, viewMode: "source", sourceZoom: 1, previewAudio: true)
+        let file = root.appendingPathComponent("long.birdlock")
+        try project.save(to: file, cacheRoot: cache.root)
+        XCTAssertGreaterThan(CachePolicy.clean(root: cache.root).removed, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: frames[0].url.path))
+        let restored = try WorkspaceDocument.read(from: file).restoreMedia(cache: cache)
+        XCTAssertEqual(restored.frames.count, 125)
+        XCTAssertNotNil(ImageLoader.load(restored.frames[124]))
+        XCTAssertEqual(restored.segments.first?.name, "长片段")
+        XCTAssertEqual(restored.analyses.first?.excluded, [1])
+        XCTAssertNotNil(restored.analyses.first?.track)
+        let resaved = root.appendingPathComponent("long-resaved.birdlock")
+        try restored.save(to: resaved, cacheRoot: cache.root)
+        XCTAssertNil(try WorkspaceDocument.read(from: resaved).analyses.first?.track)
+    }
+
 }

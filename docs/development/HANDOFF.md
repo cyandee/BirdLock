@@ -2,19 +2,38 @@
 
 这里记录当前任务和下一步。版本历史、已上线状态和历史验收沿用原文档。当前开发验证集中在 [测试矩阵](TEST_MATRIX.md)。[版本记录](../迭代记录.md) · [项目近况](../工作进度.md) · [历史验收](../整批功能验收清单.md)
 
-## 当前任务
+## 当前任务：1.11.0 本地验收
 
 | 字段 | 内容 |
 |---|---|
-| 任务 | 多更新源：内置 GitHub 与 BirdLock 镜像（Cloudflare），用户可排序、添加、删除 |
-| 分支与基线 | `codex/update-sources`，基于 `origin/main` 的 `411f6c4`。代码交接 SHA `a0c63d4`，本条记录随后续文档提交更新 |
-| 评审与检出 | 向 `cyandee/BirdLock` 的 `main` 提交 PR，从 PR 获取当前 HEAD。复现验证时按测试矩阵检出对应 SHA |
-| 分支写入负责人 | 本轮由同一 Codex 会话写入两端代码（与「一个分支只有一端写入」的常规分工不同，已在 PR 说明）。现交出写入权，后续修改先在 PR 确认接手 |
-| 已完成 | 共享配置 `SharedResources/Updates/config.json` 增加 `sources` 和 `release_download_prefix`。Mac：`UpdateSources.swift`、`UpdateSourceProbe.swift`、`AppUpdater` 选源与包地址改写、「更新源…」窗口。Windows：C# 更新器 `--source` 逐源回退和包地址路由，Python「更新源…」对话框与偏好。工具：`stage_updater.py` 写入 Info.plist，`verify_bundle.py` 校验，`check_update_source.py` 检查镜像是否符合[合法更新源标准](../自动更新.md#合法更新源标准)。镜像 `https://3rd.0x01.page/birdlock/update-api/` 已上线并通过实测 |
-| 技术决策 | 清单和更新包仍由现有 Ed25519 / RSA 签名及 SHA256 保证，更新源只决定从哪里取字节。GitHub 是内置特殊项，清单取仓库 `updates/`，包用清单里的原地址。其他源按 `B/<清单名>` 和 `B/download/<tag>/<文件名>` 映射。Mac 并行探测、按列表顺序取第一个可用源，再交给 Sparkle。Windows 按顺序取第一个验签通过的清单，下载时先用该源再回退其他源，换源时丢弃半截文件 |
-| 已知限制 | Mac 的发行说明链接仍指向清单原地址，Sparkle 没有改写入口。Mac 每次检查前要等一次探测，最多多几秒。恶意源只能拒绝提供更新，不能投递未签名内容。1.10.0 及更早客户端仍只用 GitHub |
-| 剩余验证 | 实体 Mac 经镜像从旧版升级到测试版本（Sparkle 下载、校验、安装、重启）。实体 Windows x64 经镜像完成增量或完整更新并通过健康检查。两端「更新源…」界面的排序、添加、删除、恢复默认在实机上操作一次。详见测试矩阵「实体设备验收」 |
-| 下一步 | 维护者审核 PR。Mac Codex 和 Windows Codex 分别在实体设备做上述验收并回填矩阵。镜像侧需保证清单与 `updates/` 同步（缓存不超过 5 分钟），新 Release 附件上线后用 `scripts/check_update_source.py` 复检 |
+| 本地分支 | `codex/birdlock-1.11.0-review` 整合 [PR #6](https://github.com/cyandee/BirdLock/pull/6) 与 [PR #7](https://github.com/cyandee/BirdLock/pull/7)。测试版本为 1.11.0，代码基线 `2246d67` |
+| 交接状态 | 当前为本地测试，等待维护者测试审阅。获授权后再推送集成分支，执行整合提交的双端 CI，并准备正式发布 |
+| Windows 已实现 | RAW、配对去重、长视频磁盘预算、音轨开关、分组、编辑历史、外观与 DWM。吸收 [PR #4](https://github.com/cyandee/BirdLock/pull/4) 的缓存、工程路径、本地验收及 ICU 修复 |
+| Mac 已实现 | Apple ImageIO 和 Core Image RAW、音轨启用和混音、分组命名与 Finder 定位、⌘Z / ⇧⌘Z、三种 AppKit 外观、支持窗口资源、600 秒 / 18,000 帧选择和缓存预算。schema 1 工程可恢复已选 RAW 来源，按原记录分组和保存。Mac 可以重新定位 Windows 盘符路径并重存 |
+| Mac 上级文件夹导入 | `c0f7d39`。支持选取、拖入和从 Finder 打开带多级子文件夹的照片目录。拍摄时间排序、连拍分组和 RAW + JPEG 配对沿用已有路径。Windows 目前搜到第一层有照片的位置就停止，最多向下两层。实测见测试矩阵 |
+| Mac RAW 导入速度与进度 | `46b8f67`。以缩小的解码结果检查文件，保留原尺寸和机内预览回退。照片读取有计数、剩余时间估算、取消与重选。取消会停止排队中的解码，已进入系统解码器的调用自行结束。工程格式未变。Sony α1 II 公共样本已测，维护者可用自己的连拍目录复测 |
+| 发版前 Issue 整改 | `2907ff8`。Windows 无可用头部角度时保留手动旋转，导出初始化异常后释放导出状态，发现不可渲染帧后明确失败。Mac 的视频、GIF 与图片序列先写临时位置，渲染失败或取消保留旧输出。Windows 便携包许可页补录 PyInstaller 启动器，实际随包的组件以成品清单为准 |
+| 工程恢复 | Windows 可打开原始尺寸未知的机内 RAW 预览记录，并保留分辨率限制。视频工程缺少防抖记录时，重算会采用已保存的镜头配置。六种 RAW 双向读取、保存与导出在 Mac 原生及 Mac 上的 Windows Python 代码完成复测，详见 [测试矩阵](TEST_MATRIX.md) |
+| Windows 接手 | 在实际 Windows x64 上验证修复版便携程序启动、取消后重试、坏帧报错和旧成品保留。再打开 Mac 保存的工程并回存给 Mac，覆盖两种 RAW、关闭的背景音乐/独立轨、Unicode 分组和视频缓存重建。Nikon Z8 高效率低样本在此次 Mac 上可解码，仍以 Windows 已记录的失败为准。Mac 上运行 Windows Python 代码时，带循环音轨的 FFmpeg 导出曾停滞，非循环对照通过，请在实体 Windows 对照 |
+| Windows UTM 验证 | `e202f1d` 更新了过期的测试断言。Windows 11 ARM64 的 x64 兼容层已通过成品自检、桌面窗口、GUI、工程及软件编码回归。[测试矩阵](TEST_MATRIX.md) 记录了实测样本和限制。Sony α1 II 无损 RAW 的高分辨率工程从 Windows 到 Mac 时有画幅差异，Mac 拒绝恢复。需保持同一工程跨端使用时可优先用机内预览，或在原系统继续编辑与导出。实体 Windows x64、GPU、硬件编码和真实鸟眼连拍仍待验收 |
+| 其他复测 | 两端真实 RAW 鸟眼连拍、Windows 10 和高 DPI/Snap、不同 RAW 压缩、18,000 帧负载、真实长视频全链路和镜像实机升级。Windows 端仍需原报告的水印选择器闪退、特定硬件编码和异常连拍时间戳。Mac 飞机预览卡顿与成片短时横跳需用获授权原片分别定位 |
+
+验收完毕由维护者在 PR 审核合并。正式版本说明只覆盖对外功能变更，发布另行授权。
+
+## 上一轮：仓库审计整改
+
+| 字段 | 内容 |
+|---|---|
+| 任务 | 全仓审计整改：修复 Mac 端缺陷与冗余代码、过期文档和构建脚本问题；Windows 端问题只记录待办，不改代码 |
+| 分支与基线 | `codex/audit-fixes`，基于 `main` 的 `96e047d`。以 [PR #7](https://github.com/cyandee/BirdLock/pull/7) 提交评审，代码已整合到 1.11.0 本地分支 |
+| 评审与检出 | 检出该分支即可复核。文件级改动见提交记录，逐项审查清单由提交信息与 PR 说明给出 |
+| 分支写入负责人 | 本轮同一会话在 Mac 端（`Sources/`、`Tests/`、`docs/`、`scripts/`、`README.md`）写入。`windows/` 只改了两处注释，未改行为 |
+| 已完成 | Mac：单独拖入音频的误报、跟踪参考 patch 重复重采样、EXIF 时间解析共享格式化器、音效库重复读盘、工程重定位对 Windows 路径不匹配、若干未使用符号与未使用参数、音频时长非有限时的崩溃路径、视频轨道缺失的强制解包。工具：`md2html` 转换 Markdown 链接（含单测）。文档：README 更新段、交接、测试矩阵、Windows 使用说明的机头设备表述、版本标注、Windows 许可页音频章节。资源：镜头清单 Fujifilm 品牌拼写 |
+| 已知限制 | Windows 代码（`windows/birdlock/`、`windows/updater/`、CI）只做只读审计，未在本机执行 Windows 单测或实机验证；`swift test` 未运行（本机离线无法解析 Sparkle 与 onnxruntime 依赖） |
+| 剩余验证 | 在 Mac 与 Windows 上分别跑完整 `swift test`、`windows/tests` 与成品自检；跨平台工程互开（Windows 保存、Mac 重新定位）需实机确认；打包后文档链接可用性需检查 |
+| 下一步 | 分支已推送，PR #7 待维护者审核。本分支未改的问题已逐条登记为上游 issue #8–#66（带 [高]/[中]/[低] 重要性前缀），由对应端的负责人按 issue 处理 |
+
+此前任务：多更新源（`codex/update-sources`）已随 PR #5 于 `96e047d` 合入 `main`，其剩余实机验收仍见[测试矩阵](TEST_MATRIX.md)。
 
 ## 接力方式
 

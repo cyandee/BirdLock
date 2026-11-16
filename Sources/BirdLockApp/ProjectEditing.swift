@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import BirdLockCore
 
@@ -38,6 +39,52 @@ extension AppState {
 }
 
 extension AppState {
+    func groupName(_ index: Int) -> String {
+        let name = segments.indices.contains(index) ? segments[index].name : ""
+        return name.isEmpty ? "第 \(index + 1) 组" : name
+    }
+
+    func renameGroup(_ index: Int) {
+        guard phase == .ready, segments.indices.contains(index) else { return }
+        let group = segments[index].groupID
+        let entry = NSTextField(string: segments[index].name)
+        entry.frame.size.width = 260
+        let prompt = NSAlert()
+        prompt.messageText = "重命名连拍组"
+        prompt.informativeText = "留空时显示默认组名。"
+        prompt.accessoryView = entry
+        prompt.window.initialFirstResponder = entry
+        prompt.addButton(withTitle: "确定")
+        prompt.addButton(withTitle: "取消")
+        guard prompt.runModal() == .alertFirstButtonReturn, phase == .ready,
+              let index = segments.firstIndex(where: { $0.groupID == group }) else { return }
+        let name = String(entry.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars.prefix(256))
+        guard segments[index].name != name else { return }
+        segments[index].name = name
+        projectDirty = true; projectCloseApproved = false
+        recordEdit()
+    }
+
+    func revealOriginals(group: Int? = nil) {
+        let list: [SourceFrame]
+        if let group, segments.indices.contains(group) {
+            list = Array(frames[segments[group].range])
+        } else if let analysis, analysis.frames.indices.contains(currentFrame) {
+            list = [analysis.frames[currentFrame]]
+        } else { return }
+        var seen = Set<URL>()
+        let urls = list.compactMap { frame -> URL? in
+            let isExtracted = FileManager.default.fileExists(atPath: frame.url.deletingLastPathComponent()
+                .appendingPathComponent("video-source.json").path)
+            guard let original = isExtracted ? VideoSource.originalURL(frames: [frame]) : frame.url else { return nil }
+            guard seen.insert(original).inserted,
+                  (try? original.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { return nil }
+            return original
+        }
+        guard !urls.isEmpty else { timelineMessage = "未找到可用的原片。"; return }
+        NSWorkspace.shared.activateFileViewerSelecting(urls)
+    }
+
     func moveGroup(_ group: Int, by delta: Int) {
         guard phase == .ready, let index = mergeGroupIndices.firstIndex(of: group),
               mergeGroupIndices.indices.contains(index + delta) else { return }
@@ -56,11 +103,12 @@ extension AppState {
                 }
             }
             ProxyCache.shared.saveAnalysis(old)
-            let oldPhoto = old.frames[currentFrame].url
-            mergeGroupIndices = order; rememberGroupOrder(); analysis = result.analysis
+            let oldPhoto = old.frames.indices.contains(currentFrame) ? old.frames[currentFrame].url : nil
+            mergeGroupIndices = order; analysis = result.analysis
             currentFrame = result.analysis.frames.firstIndex { $0.url == oldPhoto } ?? 0
             let trimmed = selection.trimStart > 0 || selection.trimEnd != nil
-            selection.trimStart = 0; selection.trimEnd = nil
+            resetTrimForGroupReorder()
+            rememberGroupOrder()
             timelineMessage = trimmed ? "顺序已调整，裁剪范围恢复为全部；照片修正、排除和特写已跟随原照片。" : nil
             ProxyCache.shared.saveAnalysis(result.analysis)
             rebuildJob(immediate: true)

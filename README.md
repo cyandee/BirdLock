@@ -4,21 +4,17 @@ BirdLock 是一个把飞鸟连拍照片做成视频的小工具。导入照片�
 
 我希望做这类视频能简单一点：不用逐张挪照片，也能调整构图、加上对焦框和快门声，再配一段音乐。现在有 macOS 和 Windows 两个版本，免费使用，开源代码也在这里。
 
-当前版本为 **1.10.0**（Mac / Windows）：整组固定选眼、自定义目标框选跟踪，以及 Windows 飞机机头 DirectML 后端与诊断。操作与限制见[新功能指南](docs/自定义目标与固定选眼.md)及[1.10更新说明](docs/更新说明-1.10.0.md)。RTX 3080 实际提速和复杂动物/昆虫素材仍需实机复测。
-
-此前1.9.0新增视频导入、原声与增稳、陀螺仪同步、383份可搜索镜头配置、强力裁切、主体大小稳定、工程文件和缓存管理；详见[1.5→1.9累计更新说明](docs/更新说明-1.9.0.md)。升级后首次打开显示累计说明，也可在帮助菜单再次查看。
-
-视频入口保留 SDR、每次 120 秒 / 3600 帧的实验范围。陀螺仪路径需要真实运动采样，Sony XML 身份信息本身不是标定或陀螺仪；没有采样时使用图像防抖。Mac 原生及 Python 核心已做本地验证；本次 Windows 运行验证由用户在实体电脑完成，不承诺完整 Gyroflow、动态镜头、滚动快门或 HDR 工作流。
+**1.11.0** 支持相机 RAW、较长的 SDR 视频和撤销重做。[1.11.0 更新说明](docs/更新说明-1.11.0.md)
 
 ## 下载
 
-当前下载为 **1.10.0**，Mac 与 Windows 版本一致。安装包、对应源码、更新文件和校验文件都在同一个下载页，旧版本保留。
+Mac 与 Windows 版本一致。安装包、对应源码、更新文件和校验文件都在同一个下载页，旧版本保留。
 
-已安装1.5.0的用户可通过[软件内更新](docs/自动更新.md)直接升级；开启自动检查时会收到提示，未开启时请手动检查。更早版本需先手动安装带更新器的版本，也可以直接安装1.10.0完整包。
+已安装1.5.0的用户可通过[软件内更新](docs/自动更新.md)直接升级；开启自动检查时会收到提示，未开启时请手动检查。更早版本需先手动安装带更新器的版本，也可以直接安装新版完整包。
 
-- [macOS 通用版](https://github.com/cyandee/BirdLock/releases/download/v1.10.0/BirdLock-1.10.0.dmg)：macOS 14 及以上，支持 Apple 芯片和 Intel。
-- [Windows 便携版](https://github.com/cyandee/BirdLock/releases/download/v1.10.0/BirdLock-1.10.0-Windows-x64.zip)：Windows 10 / 11 x64，完整解压后运行。
-- [更新说明、源码和校验文件](https://github.com/cyandee/BirdLock/releases/tag/v1.10.0) · [历史版本](https://github.com/cyandee/BirdLock/releases)
+- [macOS 通用版](https://github.com/cyandee/BirdLock/releases/download/v1.11.0/BirdLock-1.11.0.dmg)：macOS 14 及以上，支持 Apple 芯片和 Intel。
+- [Windows 便携版](https://github.com/cyandee/BirdLock/releases/download/v1.11.0/BirdLock-1.11.0-Windows-x64.zip)：Windows 10 / 11 x64，完整解压后运行。
+- [更新说明、源码和校验文件](https://github.com/cyandee/BirdLock/releases/tag/v1.11.0) · [历史版本](https://github.com/cyandee/BirdLock/releases)
 
 Mac 版还没有做 Apple 公证，首次打开可能被系统拦截，安装方法见[使用说明](docs/使用说明.md)。如果遇到打不开的情况，请把报错提示、系统版本和芯片型号发给我。
 
@@ -29,26 +25,17 @@ Mac 版还没有做 Apple 公证，首次打开可能被系统拦截，安装方
 3. 按空格预览，需要的话修正个别照片的鸟眼位置。
 4. 加上对焦框、快门声或背景音乐，导出视频。
 
-支持 JPG、HEIF / HEIC、PNG 和 TIFF。RAW 请先转成 JPG 或 HEIF。照片处理都在自己的电脑上完成，不上传照片。
+1.11.0 支持 JPG、HEIF / HEIC、PNG、TIFF 和受支持的 RAW。RAW 是否可解码取决于机型、压缩方式和平台。照片处理都在自己的电脑上完成，不上传照片。
 
 详细操作：[macOS 使用说明](docs/使用说明.md) · [Windows 使用说明](docs/windows/使用说明.md)
 
 ## 这次更新了什么
 
-1.5.0 新增：
-
-- **软件内更新**：Mac 使用 Sparkle，Windows 使用独立更新器，更新文件都做签名校验。可选择自动检查和接收测试版，分析或导出时暂缓更新。
-- **Mac 光流明暗闪烁修复**：补帧结果与输入使用一致的显式色彩空间，解决原始帧与补帧交替变亮的问题。
-
-也保留此前的导出修复：
-
-- **Windows 导出恢复**：修复切换编码或画质后不能导出、取消后无法再次导出的问题；改善编码进程退出和临时文件清理。
-- **Mac 光流保护**：光流补帧改由独立辅助进程处理，异常或长时间无响应时提示并回退到帧混合。长序列按处理量回收进程和渲染缓存，降低内存累积，可能增加导出时间。
-- **高分辨率处理**：调整色彩转换，减少大块临时数组，针对部分用户遇到的索引越界报错做了修复。
-- **诊断日志**：两端都可以在「帮助 → 导出诊断日志」保存 ZIP，闪退后重新打开也可以导出。日志不包含原照片或设置，默认隐藏用户目录。
-- **分析排查**：优化飞机跟踪和大组缓存检查，补充鸟头、鸟眼分析各阶段的耗时和实际运行设备记录。鸟类首次分析暂时没有明确的整体提速结论。
-
-本地回归和长序列压力测试已完成，原 M1 Max/macOS 15.5 及 Windows 显卡设备仍需要用原片复测。具体范围见[更新记录](docs/迭代记录.md)和[测试记录](docs/整批功能验收清单.md)。
+- **RAW 和较长视频**。可选机内预览或高分辨率解码，并设置 RAW + JPEG 配对的保留策略。SDR 视频单次最多 600 秒、18,000 帧，导入前会检查缓存盘剩余空间。
+- **工程和编辑**。可重命名连拍组、定位原片、撤销和重做，并单独启停音轨。新增五段佳能连拍快门声。工程仍引用原素材，换电脑时请一并保留文件，需要时重新定位。
+- **Mac**。选择或拖入上级文件夹，就能导入其中各层子文件夹的照片。读取照片时显示进度和预计剩余时间，可以取消后重新选择文件夹。首页可直接打开工程，Finder 中的工程文件使用 BirdLock 图标，导出页会记住上次选的目录。
+- **Windows**。改善便携包启动、缓存清理和原素材定位。两端都提供浅色、深色和跟随系统外观。
+- **导出**。视频和 GIF 成功后才替换已有文件。图片序列遇到不可读画面会报错，渲染中止时保留原成品。
 
 ## 连拍、特写和音效
 
@@ -65,6 +52,8 @@ Mac 版还没有做 Apple 公证，首次打开可能被系统拦截，安装方
 | 索尼 A7 V（A7M5） | Hi+ 30 fps / Mid 15 fps |
 | 索尼 A7R VI（A7R6） | 原录音，帧率暂未确认 |
 | 尼康 Z8 | 20 fps |
+| 佳能 EOS-1D Mark II | 高速连拍 |
+| 佳能 EOS R5 Mark II | 5 / 10 / 20 / 30 张连拍 |
 
 这些档位播放各自的录音，不靠变速凑帧率。特写用的单张快门另选了一个 CC0 素材，来源见[音效说明](SharedResources/Audio/README.md)。
 
@@ -85,15 +74,15 @@ Mac 版还没有做 Apple 公证，首次打开可能被系统拦截，安装方
 
 有问题或想法，欢迎给我发邮件：[cyanodee@gmail.com](mailto:cyanodee@gmail.com)，也可以提 [Issue](https://github.com/cyandee/BirdLock/issues)。遇到问题时，带上软件版本、系统信息和操作步骤，会更容易定位。
 
-如果 BirdLock 帮你省了点时间，也欢迎[请我喝杯咖啡](docs/赞赏.md)。5 块、10 块、20 块都行，多少随意。软件所有功能都免费，是否赞赏不影响使用。
+如果 BirdLock 帮你省了点时间，也欢迎[请我喝杯咖啡](docs/赞赏.md)。软件所有功能都免费，是否赞赏不影响使用。
 
 ## 源码和文档
 
 macOS 使用 SwiftUI / Core ML，Windows 使用 Python / Qt / ONNX Runtime。版本号统一放在 [VERSION](VERSION)。
 
 ```zsh
-zsh scripts/build_app.sh
-zsh scripts/make_dmg.sh
+zsh scripts/build_app.sh   # 只构建 dist/BirdLock.app
+zsh scripts/make_dmg.sh    # 构建通用版 app 并打成 dist/BirdLock-<版本>.dmg
 ```
 
 Windows 构建方法见 [windows/README.md](windows/README.md)。飞机模型约 204 MB，构建脚本会按固定版本和 SHA256 下载；安装包已经包含模型，使用时不用另外下载。

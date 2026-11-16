@@ -16,14 +16,6 @@ public extension SIMD2 where Scalar == Double {
 
 @inline(__always) public func clamp<T: Comparable>(_ v: T, _ lo: T, _ hi: T) -> T { min(max(v, lo), hi) }
 
-/// Wrap an angle to (-pi, pi]
-@inline(__always) public func wrapAngle(_ a: Double) -> Double {
-    var r = a.truncatingRemainder(dividingBy: 2 * .pi)
-    if r > .pi { r -= 2 * .pi }
-    if r <= -.pi { r += 2 * .pi }
-    return r
-}
-
 public enum Stats {
     public static func median(_ xs: [Double]) -> Double? {
         let v = xs.filter { $0.isFinite }.sorted()
@@ -39,11 +31,6 @@ public enum Stats {
         let lo = Int(pos.rounded(.down)), hi = min(lo + 1, v.count - 1)
         let t = pos - Double(lo)
         return v[lo] * (1 - t) + v[hi] * t
-    }
-
-    public static func mad(_ xs: [Double]) -> Double? {
-        guard let m = median(xs) else { return nil }
-        return median(xs.map { abs($0 - m) }).map { $0 * 1.4826 }
     }
 }
 

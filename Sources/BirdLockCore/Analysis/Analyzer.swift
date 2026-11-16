@@ -44,7 +44,7 @@ public final class Analyzer: @unchecked Sendable {
     /// Aircraft observations are isolated by the actual model and algorithm identity; bird keys stay unchanged.
     public static func fingerprint(_ frames: [SourceFrame], aircraftModelIdentity: String?, custom: Bool = false) -> String {
         var h = SHA256()
-        for f in frames { h.update(data: Data("\(f.url.path)|\(f.fileSize)|\(f.modified)\n".utf8)) }
+        for f in frames { h.update(data: Data("\(f.url.path)|\(f.fileSize)|\(f.modified)\(f.rawCacheIdentity)\n".utf8)) }
         if let identity = aircraftModelIdentity { h.update(data: Data("subject=aircraft|model=\(identity)\n".utf8)) }
         if custom { h.update(data:Data("subject=custom|tracker=1\n".utf8)) }
         return h.finalize().prefix(12).map { String(format: "%02x", $0) }.joined()
@@ -94,7 +94,7 @@ public final class Analyzer: @unchecked Sendable {
             let proxyURL = cacheDir.appendingPathComponent(String(format: "p%05d.jpg", i))
             var proxy: CGImage? = FileManager.default.fileExists(atPath: proxyURL.path) ? ImageLoader.load(proxyURL) : nil
             if proxy == nil {
-                proxy = ImageLoader.load(f.url, maxPixel: opt.proxyLongSide)
+                proxy = ImageLoader.load(f, maxPixel: opt.proxyLongSide)
                 if let p = proxy { _ = ImageLoader.writeJPEG(p, to: proxyURL, quality: 0.9) }
             }
             guard let proxy else { return }
@@ -129,7 +129,7 @@ public final class Analyzer: @unchecked Sendable {
                 var img: CGImage = proxy, kk = k
                 if needLong > Double(max(proxy.width, proxy.height)) * 1.05 {
                     let target = Int(min(Double(max(f.pixelWidth, f.pixelHeight)), needLong))
-                    if let hi = ImageLoader.load(f.url, maxPixel: target) {
+                    if let hi = ImageLoader.load(f, maxPixel: target) {
                         img = hi; kk = Double(f.pixelWidth) / Double(hi.width)
                     }
                 }
@@ -174,7 +174,7 @@ public final class Analyzer: @unchecked Sendable {
             guard tf.hasData else { return }
             let f = frames[i]
             let longSide = max(f.pixelWidth, f.pixelHeight)
-            guard let img = ImageLoader.load(f.url, maxPixel: g < 1 ? Int((Double(longSide) * g).rounded()) : nil) else { return }
+            guard let img = ImageLoader.load(f, maxPixel: g < 1 ? Int((Double(longSide) * g).rounded()) : nil) else { return }
             let kk = Double(f.pixelWidth) / Double(img.width)
             let side = N * D
             let x0 = Int((tf.headCenter.x / kk - Double(side) / 2).rounded())

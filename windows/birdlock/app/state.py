@@ -234,6 +234,9 @@ class AppState(ProjectWorkspace,QObject):
         self.engine = PreviewEngine()
         self.cache = ProxyCache()
         self.init_workspace()
+        from ..core.edit_history import EditHistory
+        self.edit_history = EditHistory()
+        self._restoring_edit = False
         self._models: BirdModels | None = None
         self._models_device = None
         self._cancel = CancelFlag()
@@ -302,7 +305,7 @@ class AppState(ProjectWorkspace,QObject):
 
     # ------------------------------------------------------------------ import & analysis
 
-    def import_paths(self, paths: list[str], merge: bool = False):
+    def import_paths(self, paths: list[str], merge: bool = False, single_group: bool = False):
         paths = [p for p in paths if p]
         if not paths:
             return
@@ -310,29 +313,59 @@ class AppState(ProjectWorkspace,QObject):
         self.stop()
         self._cancel.cancel()
         self._import_gen += 1
-        gen = self._import_gen
+        gen, flag = self._import_gen, CancelFlag()
+        self._cancel = flag
+        raw_mode, pair_policy = self.raw_mode, self.raw_pair_policy
         self.phase = "importing"
         self.message = "正在读取照片…"
-        self.analysis = None
-        self.job = None
-        self.preview_image = self.source_image = None
-        self.source_detail = None
         self.changed.emit("phase")
 
         def work():
             with cache_policy.operation(self.cache.root):
                 log.info("import %s", paths)
+                failures = []
+                last_percent = -1
+                def progress(done, total):
+                    nonlocal last_percent
+                    percent = done*100//max(1,total)
+                    if percent == last_percent: return
+                    last_percent = percent
+                    def update():
+                        if gen == self._import_gen and not flag.cancelled:
+                            self.message = f"正在读取照片… {done:,}/{total:,}"
+                            self.changed.emit("phase")
+                    self.on_main(update)
                 try:
-                    fr = F.import_frames(paths)
+                    fr = F.import_frames(paths, raw_mode=raw_mode, pair_policy=pair_policy, progress=progress,
+                                         cancelled=lambda:flag.cancelled,
+                                         rejected=lambda path,error:failures.append((Path(path).name,error)))
                     segs = F.segments(fr)
-                except Exception:
+                    if single_group and fr:
+                        segs = [F.BurstSegment(0,len(fr),F.estimate_fps(fr))]
+                except F.PhotoImportCancelled:
+                    return
+                except Exception as error:
                     log.exception("import failed")
+                    failures.append(('',str(error)))
                     fr, segs = [], []
                 log.info("import found %d photos in %d bursts", len(fr), len(segs))
 
                 def done():
-                    if gen != self._import_gen:
+                    if gen != self._import_gen or flag.cancelled:
                         return
+                    if not fr:
+                        self.phase = "ready" if self.analysis is not None else "failed"
+                        self.message = (failures[0][1] if failures else "没有找到可读的照片。")
+                        self.timeline_message = self.message
+                        self.changed.emit("phase");self.changed.emit("analysis")
+                        return
+                    from ..core.raw_photo import quality_notices
+                    notices = quality_notices(fr)
+                    if failures:
+                        notices.append(f'{len(failures)} 张未导入：{failures[0][0]}（{failures[0][1]}）')
+                    self.import_notice = '；'.join(notices)
+                    self.analysis = self.job = None
+                    self.preview_image = self.source_image = self.source_detail = None
                     self.project_path="";self.project_dirty=True
                     self.frames, self.segments = fr, segs
                     self.cache.retain_records(fr)
@@ -341,11 +374,6 @@ class AppState(ProjectWorkspace,QObject):
                     self.merge_group_indices=list(saved) if isinstance(saved,list) and saved and all(type(i) is int and 0<=i<len(segs) for i in saved) and len(set(saved))==len(saved) else list(range(len(segs)))
                     self.segment_index = 0
                     self.current_frame = 0
-                    if not fr:
-                        self.phase = "failed"
-                        self.message = "没有找到 JPG / HEIF 图片（也查找了子文件夹）"
-                        self.changed.emit("phase")
-                        return
                     self.segment_index = -1 if merge and len(segs)>1 else max(range(len(segs)), key=lambda k: segs[k].count)
                     self.audio.tracks = [t for t in self.audio.tracks if not t.videoOriginal]
                     self.changed.emit("frames")
@@ -481,11 +509,22 @@ class AppState(ProjectWorkspace,QObject):
         self._group_orders=dict(list(self._group_orders.items())[-20:])
         self.save_settings()
 
+    def rename_group(self, index, name):
+        if self.phase != "ready" or self.export_running or not 0 <= index < len(self.segments):
+            return
+        name = str(name)[:256].strip()
+        if name == self.segments[index].name:
+            return
+        self.segments[index].name = name
+        self.project_changed()
+        self.changed.emit("frames")
+
     def include_group(self, i, enabled):
         if enabled and i not in self.merge_group_indices:self.merge_group_indices=self.merge_group_indices+[i]
         elif not enabled and len(self.merge_group_indices)>1:self.merge_group_indices.remove(i)
         self.remember_group_order()
         if self.segment_index == -1:self.start_analysis()
+        else:self._record_edit()
 
     def move_group(self, group, delta):
         if self.phase != "ready" or group not in self.merge_group_indices:return
@@ -493,7 +532,7 @@ class AppState(ProjectWorkspace,QObject):
         if not 0<=target<len(self.merge_group_indices):return
         order=list(self.merge_group_indices);order[index],order[target]=order[target],order[index]
         if self.segment_index != -1 or self.analysis is None:
-            self.merge_group_indices=order;self.remember_group_order();self.changed.emit("frames");return
+            self.merge_group_indices=order;self.remember_group_order();self._record_edit();self.changed.emit("frames");return
         from ..core.clip_order import reorder
         import shutil
         old=self.analysis
@@ -511,6 +550,7 @@ class AppState(ProjectWorkspace,QObject):
             self.selection.trimStart,self.selection.trimEnd=0,-1
             self.timeline_message="顺序已调整，裁剪范围恢复为全部；照片修正、排除和特写已跟随原照片。" if trimmed else ""
             self.cache.save_analysis(a)
+            self._record_edit()
             self.changed.emit("frames");self.changed.emit("analysis");self.rebuild_job(immediate=True)
         except Exception as error:
             self.timeline_message=str(error);self.changed.emit("analysis")
@@ -580,6 +620,8 @@ class AppState(ProjectWorkspace,QObject):
         self.rebuild_job(immediate=True)
 
     def start_analysis(self, hint=None, fresh: bool = False):
+        self.edit_history.reset()
+        self.changed.emit("history")
         self.pending_custom_box=None;self.source_tool='none'
         self._cancel.cancel()
         self.stop()
@@ -718,6 +760,7 @@ class AppState(ProjectWorkspace,QObject):
         if a.subject=='custom' and not a.customSeeds:
             self.view_mode='source';self.source_zoom=1.;self.source_tool='customBox'
         self.selection.trimStart, self.selection.trimEnd = 0, -1
+        self.reset_edit_history()
         self.changed.emit("phase")
         self.changed.emit("analysis")
         self.rebuild_job(immediate=True)
@@ -740,10 +783,67 @@ class AppState(ProjectWorkspace,QObject):
     # ------------------------------------------------------------------ settings → job
 
     def settings_changed(self, topic: str = "settings"):
+        self._record_edit()
         if self.analysis is not None and not self._project_loading:self.project_dirty=True
         self._save_timer.start()
         self.rebuild_job()
         self.changed.emit(topic)
+
+    def _edit_snapshot(self):
+        from ..core.edit_history import EditState
+        a=self.analysis
+        if a is None:return None
+        profile=self._profile().copy()
+        audio,mark=self.audio.copy(),self.watermark.copy()
+        groups=tuple((s.groupID,s.name) for s in self.segments)
+        order=tuple(self.merge_group_indices)
+        a=a.copy_edits()
+        key=(profile.to_dict(),audio.to_dict(),mark.to_dict(),groups,order,a.fingerprint,
+             a.manualEye,a.excluded,a.eyeSelections,a.customSeeds,[c.to_dict() for c in a.closeups])
+        return EditState(key,(profile,audio,mark,groups,order,a))
+
+    def reset_edit_history(self):
+        self.edit_history.reset(self._edit_snapshot() if self.phase=="ready" else None)
+        self.changed.emit("history")
+
+    def _record_edit(self):
+        if self._restoring_edit or self._project_loading or self.phase!="ready" or self.export_running:
+            return
+        new=self._edit_snapshot()
+        if new is not None:
+            self.edit_history.update(new)
+            self.changed.emit("history")
+
+    def begin_edit_gesture(self):
+        self.edit_history.begin()
+
+    def end_edit_gesture(self):
+        self.edit_history.end()
+        self.changed.emit("history")
+
+    def step_edit(self, redo=False):
+        if self.phase!="ready" or self.export_running:return
+        previous=self.edit_history.step(redo)
+        if previous is None:return
+        profile,audio,mark,groups,order,a=previous
+        self.stop()
+        self._restoring_edit=True
+        try:
+            source_path=self.analysis.frames[self.current_frame].path if self.analysis and 0<=self.current_frame<self.analysis.count else None
+            self.analysis=a.copy_edits()
+            self.current_frame=next((i for i,f in enumerate(a.frames) if f.path==source_path),0)
+            self._apply_profile(profile.copy(),reset_trim=False)
+            audio_changed=self.audio.path!=audio.path
+            self.audio=audio.copy();self.watermark=mark.copy()
+            names=dict(groups)
+            for seg in self.segments:seg.name=names.get(seg.groupID,seg.name)
+            self.merge_group_indices=list(order);self.remember_group_order()
+            self._load_watermark_image()
+            self._audio_changed(path_changed=audio_changed)
+            self._edited()
+            for topic in ("frames","settings","audio","watermark","history"):self.changed.emit(topic)
+        finally:
+            self._restoring_edit=False
 
     def apply_preset(self, p):
         self.preset_id = p.id
@@ -885,6 +985,7 @@ class AppState(ProjectWorkspace,QObject):
     def _edited(self):
         a = self.analysis
         a.track = build_track(a)
+        self._record_edit()
         if not self._project_loading:self.project_dirty=True
         self._analysis_save_timer.start()
         self.changed.emit("analysis")
@@ -907,6 +1008,7 @@ class AppState(ProjectWorkspace,QObject):
         self.project_changed()
 
     def project_changed(self):
+        self._record_edit()
         if not self._project_loading:self.project_dirty=True
         self._analysis_save_timer.start()
         self.changed.emit("analysis")
@@ -935,6 +1037,7 @@ class AppState(ProjectWorkspace,QObject):
         if a is None or not 0 <= self.current_frame < a.count:
             return
         a.excluded ^= {self.current_frame}
+        self._record_edit()
         if not self._project_loading:self.project_dirty=True
         self._analysis_save_timer.start()
         self.changed.emit("analysis")
@@ -943,6 +1046,7 @@ class AppState(ProjectWorkspace,QObject):
     def restore_all_excluded(self):
         if self.analysis is not None:
             self.analysis.excluded.clear()
+            self._record_edit()
             if not self._project_loading:self.project_dirty=True
             self._analysis_save_timer.start()
             self.changed.emit("analysis")
@@ -1015,6 +1119,7 @@ class AppState(ProjectWorkspace,QObject):
             if math.isfinite(shown) and shown < start_framing * 0.98:
                 start_framing = shown
         self._crop_edit = (self.composition.copy(), start_framing, xf, job.plan.mirrored, float(W), float(H))
+        self.begin_edit_gesture()
 
     def move_crop(self, d):
         if not self._crop_edit:
@@ -1034,6 +1139,7 @@ class AppState(ProjectWorkspace,QObject):
 
     def end_crop_edit(self):
         self._crop_edit = None
+        self.end_edit_gesture()
 
     # ------------------------------------------------------------------ preview & playback
 
@@ -1228,6 +1334,7 @@ class AppState(ProjectWorkspace,QObject):
     def set_audio(self, path: str):
         self.audio.path = path
         self.audio.startOffset = 0.0
+        self.audio.enabled = True
         self._audio_changed(path_changed=True)
 
     def remove_audio(self):
@@ -1239,6 +1346,7 @@ class AppState(ProjectWorkspace,QObject):
         self._audio_changed(path_changed=False)
 
     def _audio_changed(self, path_changed: bool):
+        self._record_edit()
         self._save_timer.start()
         self._audio_wav_cache.clear()
         self.audio_message = ""
@@ -1344,25 +1452,25 @@ class AppState(ProjectWorkspace,QObject):
 
     def set_watermark_file(self, src: str) -> bool:
         d = data_dir() / "watermarks"
-        d.mkdir(parents=True, exist_ok=True)
         dest = d / f"watermark-{uuid.uuid4().hex[:8]}{Path(src).suffix.lower()}"
         try:
+            if render.load_watermark(src) is None:
+                raise ValueError("文件无法解码，请选择有效的 PNG、TIFF 或 JPEG。")
+            d.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, dest)
-        except OSError as e:
-            self.export_message = f"无法读取水印图片：{e}"
+        except (OSError, ValueError, cv2.error):
+            log.warning("watermark image rejected")
+            self.export_message = "无法读取水印图片；请确认图片完整且存储位置可读写。"
             return False
-        old = self.watermark.imagePath
+        # Past undo states and other saved projects may still refer to the old copy.
         self.watermark.imagePath = str(dest)
         self.watermark.enabled = True
-        if old and Path(old).parent == d:
-            try:
-                os.remove(old)
-            except OSError:
-                pass
+        log.info("watermark image decoded and added")
         self.watermark_changed(path_changed=True)
         return True
 
     def watermark_changed(self, path_changed: bool = False):
+        self._record_edit()
         if self.analysis is not None and not self._project_loading:self.project_dirty=True
         if path_changed:
             self._load_watermark_image()
@@ -1401,6 +1509,13 @@ class AppState(ProjectWorkspace,QObject):
         a = self.analysis
         if a is None:
             return
+        from ..core.raw_photo import has_preview_limit
+        if self.export.useFullResolution and self.job is not None and any(
+                has_preview_limit(a.frames[i]) for i in {i for of in self.job.output_frames for i in (of.a,of.b)}):
+            self.export_message = '部分照片只有低分辨率机内预览。请关闭全分辨率选项，或选择「RAW 高分辨率解码」后重新导入。'
+            self.export_progress = 0.
+            self.changed.emit("export")
+            return
         self.stop()
         try:
             job = RenderJob(a.copy_edits(), self.composition.copy(), self.look.copy(), self.export.copy(), self.selection.copy(),
@@ -1424,10 +1539,10 @@ class AppState(ProjectWorkspace,QObject):
             self.on_main(update)
 
         def work():
-            with cache_policy.operation(self.cache.root) as lease:
-                ex = VideoExporter()
-                t0 = time.time()
-                try:
+            t0 = time.monotonic()
+            try:
+                with cache_policy.operation(self.cache.root):
+                    ex = VideoExporter()
                     log.info("export start kind=%s size=%s fps=%s codec=%r quality=%r encoder=%r interpolation=%r frames=%d workers=%d",
                              kind,job.output_size,job.export.outputFPS,job.export.codec,job.export.quality,
                              job.export.encoder,job.export.interpolation,len(job.output_frames),ex.workers)
@@ -1437,23 +1552,22 @@ class AppState(ProjectWorkspace,QObject):
                         ex.export_images(job, path, progress, lambda: flag.cancelled)
                     else:
                         ex.export_gif(job, path, progress=progress, cancelled=lambda: flag.cancelled)
-                    enc = f"，编码器 {ex.encoder_used}" if kind == "video" and ex.encoder_used else ""
-                    msg, prog = f"导出完成（{time.time() - t0:.0f} 秒{enc}）", 1.0
-                    log.info("export %s done: %s", kind, msg)
-                except ExportCancelled:
-                    msg, prog = "已取消", 0.0
-                except Exception as e:
-                    log.exception("export %s failed", kind)
-                    msg, prog = str(e)+"。可在帮助中导出诊断日志。", 0.0
+                enc = f"，编码器 {ex.encoder_used}" if kind == "video" and ex.encoder_used else ""
+                msg, prog = f"导出完成（{time.monotonic() - t0:.0f} 秒{enc}）", 1.0
+                log.info("export %s done: %s", kind, msg)
+            except ExportCancelled:
+                msg, prog = "已取消", 0.0
+            except Exception as error:
+                log.exception("export %s failed", kind)
+                msg, prog = str(error)+"。可在帮助中导出诊断日志。", 0.0
 
-                def done():
-                    if flag is not self._export_cancel:
-                        return
-                    self.export_running, self.export_message, self.export_progress = False, msg, prog
-                    self._export_thread = None
-                    self.changed.emit("export")
-                cache_policy.end(lease)
-                self.on_main_wait(done)
+            def done():
+                if flag is not self._export_cancel:
+                    return
+                self.export_running, self.export_message, self.export_progress = False, msg, prog
+                self._export_thread = None
+                self.changed.emit("export")
+            self.on_main_wait(done)
         self._export_thread = threading.Thread(target=work, daemon=True, name="BirdLock-export")
         self._export_thread.start()
 
@@ -1480,7 +1594,8 @@ class AppState(ProjectWorkspace,QObject):
              "watermark": self.watermark.to_dict(), "audio": self.audio.to_dict(),
              "cacheLimitGB":self.cache_limit_gb,"askCleanupAfterExport":self.ask_cleanup_after_export,
              "device": self.device, "gpuImage": self.gpu_image, "agreementAccepted": self.agreement_accepted,
-             "inspectorTab": getattr(self, "inspector_tab", 0), "groupOrders": self._group_orders}
+             "inspectorTab": getattr(self, "inspector_tab", 0), "groupOrders": self._group_orders,
+             "rawMode":self.raw_mode,"rawPairPolicy":self.raw_pair_policy,"appearance":self.appearance}
         try:
             tmp = self.settings_path.with_suffix(".tmp")
             tmp.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -1495,6 +1610,9 @@ class AppState(ProjectWorkspace,QObject):
             self.composition = PRESETS[1].composition.copy()
             return
         self.cache_limit_gb=max(0,min(4096,int(d.get("cacheLimitGB",20))))
+        self.raw_mode=d.get("rawMode","camera") if d.get("rawMode") in ("camera","raw") else "camera"
+        self.raw_pair_policy=d.get("rawPairPolicy","jpeg") if d.get("rawPairPolicy") in ("jpeg","raw","both") else "jpeg"
+        self.appearance=d.get("appearance") if d.get("appearance") in ("light","dark","system") else "dark"
         self.ask_cleanup_after_export=bool(d.get("askCleanupAfterExport",True))
         self._group_orders = d.get("groupOrders",{}) if isinstance(d.get("groupOrders"),dict) else {}
         self.composition = Composition.from_dict(d.get("composition"))

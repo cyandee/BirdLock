@@ -360,6 +360,7 @@ class AudioTrack(Settings):
     timelineStart: float = 0.0
     duration: float = 0.0
     muted: bool = False
+    enabled: bool = True
     startOffset: float = 0.0
     volume: float = 1.0
     fadeIn: float = 0.3
@@ -371,7 +372,7 @@ class AudioTrack(Settings):
 
     @property
     def active(self) -> bool:
-        return not self.muted and bool(self.path or self.assetID) and self.volume > 0.001
+        return self.enabled and not self.muted and bool(self.path or self.assetID) and self.volume > 0.001
 
     @property
     def source_path(self):

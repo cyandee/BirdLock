@@ -124,16 +124,15 @@ public struct HeadTemplate: Codable, Sendable {
         tmpl.normalise()
         for _ in 0..<iterations {
             var acc = Array(repeating: [V2](), count: HeadPoint.count)
-            var accW = Array(repeating: [Double](), count: HeadPoint.count)
             for o in obs {
                 guard let (sim, err) = tmpl.fit(o), err < 0.5 else { continue }
                 for k in 0..<HeadPoint.count {
-                    if let p = o.points[k] { acc[k].append(sim.inverse(p)); accW[k].append(o.conf[k]) }
+                    if let p = o.points[k] { acc[k].append(sim.inverse(p)) }
                 }
             }
             var newPts = [V2?](repeating: nil, count: HeadPoint.count)
             for k in 0..<HeadPoint.count where acc[k].count >= 2 {
-                // weighted coordinate-wise median (robust)
+                // coordinate-wise median (robust)
                 let xs = acc[k].map { $0.x }, ys = acc[k].map { $0.y }
                 newPts[k] = V2(Stats.median(xs) ?? 0, Stats.median(ys) ?? 0)
             }

@@ -57,7 +57,8 @@ struct VideoImportSheet: View {
             if let info {
                 if let error = selectionError { Text(error).font(.caption).foregroundStyle(.orange) }
                 else if let clip = try? VideoImporter.selection(info:info, options:options) {
-                    Text(String(format:"片段 %.2f–%.2f 秒 · %d 帧 · %.3f fps",options.start,options.start+clip.seconds,clip.count,clip.fps)).font(.caption).foregroundStyle(.secondary)
+                    let bytes = VideoImporter.estimatedCacheBytes(info: info, count: clip.count, seconds: clip.seconds)
+                    Text(String(format:"片段 %.2f–%.2f 秒 · %d 帧 · %.3f fps · 缓存预计 %.2f GiB",options.start,options.start+clip.seconds,clip.count,clip.fps,Double(bytes)/Double(1 << 30))).font(.caption).foregroundStyle(.secondary)
                 }
             }
             if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.orange) }

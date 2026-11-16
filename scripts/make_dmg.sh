@@ -1,6 +1,6 @@
 #!/bin/zsh
 # 打包可分发的安装镜像：dist/BirdLock-<版本>.dmg（Apple 芯片 + Intel 通用版，拖到「应用程序」即可安装）
-# 用法：VERSION=1.1 zsh scripts/make_dmg.sh
+# 用法：zsh scripts/make_dmg.sh（版本取自根目录 VERSION；显式传 VERSION 时必须与之一致）
 # 注意：没有 Apple 开发者证书时只能做临时签名（ad-hoc），别人第一次打开需要在
 #      「系统设置 → 隐私与安全性」确认可信来源。SIGN_ID只负责签名，公证和staple需另行完成。
 set -e

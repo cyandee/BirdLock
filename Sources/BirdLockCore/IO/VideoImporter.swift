@@ -19,6 +19,9 @@ public struct VideoImportOptions: Sendable {
 }
 
 public enum VideoImporter {
+    public static let maxSeconds = 600.0
+    public static let maxFrames = 18_000
+    static let diskReserve: Int64 = 512 << 20
     public static let extensions: Set<String> = ["mp4", "mov", "m4v", "avi", "mkv"]
 
     public static func probe(_ url: URL) throws -> VideoInfo {
@@ -48,10 +51,30 @@ public enum VideoImporter {
               options.start >= 0, options.start < info.duration, options.seconds > 0, (1...60).contains(options.fps)
         else { throw VideoImportError.invalid("视频片段或采样帧率无效（1–60 fps）") }
         let seconds = min(options.seconds, info.duration - options.start), fps = min(options.fps, info.fps)
-        guard seconds <= 120 else { throw VideoImportError.invalid("实验导入每次最多 120 秒 / 3600 帧；请缩短片段或降低采样帧率") }
+        let limit = VideoImportError.invalid("每次最多 600 秒 / 18,000 帧；请缩短片段或降低采样帧率")
+        guard seconds.isFinite, fps.isFinite, fps > 0, seconds <= maxSeconds else { throw limit }
         let count = max(1, Int(ceil(seconds * fps - 1e-7)))
-        guard seconds <= 120, count <= 3600 else { throw VideoImportError.invalid("实验导入每次最多 120 秒 / 3600 帧；请缩短片段或降低采样帧率") }
+        guard count <= maxFrames else { throw limit }
         return (seconds,fps,count)
+    }
+
+    public static func estimatedCacheBytes(info: VideoInfo, count: Int, seconds: Double) -> Int64 {
+        (Int64(info.width) * Int64(info.height) + 64 * 1024) * Int64(count) + Int64(ceil(seconds * 48_000 * 4))
+    }
+
+    static func checkCacheBudget(info: VideoInfo, count: Int, seconds: Double, available: Int64) throws {
+        let estimate = estimatedCacheBytes(info: info, count: count, seconds: seconds)
+        guard available >= estimate + diskReserve else {
+            throw VideoImportError.invalid(String(format: "视频缓存预计需要 %.2f GiB；可用空间不足，请缩短片段、降低采样帧率或清理缓存", Double(estimate) / Double(1 << 30)))
+        }
+    }
+
+    private static func availableSpace(_ directory: URL) throws -> Int64 {
+        let attributes = try FileManager.default.attributesOfFileSystem(forPath: directory.path)
+        guard let free = attributes[.systemFreeSize] as? NSNumber else {
+            throw VideoImportError.invalid("无法读取视频缓存所在磁盘的可用空间")
+        }
+        return free.int64Value
     }
 
     private static func writeRecipe(directory:URL,source:URL,info:VideoInfo,options:VideoImportOptions,seconds:Double,fps:Double,count:Int,profile:LensProfile?) throws {
@@ -77,6 +100,9 @@ public enum VideoImporter {
         let base = root ?? ProxyCache.shared.root.appendingPathComponent("video-imports", isDirectory: true)
         try fm.createDirectory(at: base, withIntermediateDirectories: true)
         let final = base.appendingPathComponent(String(digest.prefix(32)), isDirectory: true)
+        guard (try? final.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else {
+            throw VideoImportError.invalid("视频缓存目录是链接；请选择本地缓存目录后重试")
+        }
         if let data = try? Data(contentsOf: final.appendingPathComponent("import.json")),
            let frames = try? JSONDecoder().decode([SourceFrame].self, from: data), frames.count == count,
            frames.allSatisfy({ fm.fileExists(atPath: $0.url.path) && ((try? $0.url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) > 0 }) {
@@ -87,11 +113,14 @@ public enum VideoImporter {
         }
         let evicted=fm.fileExists(atPath:final.appendingPathComponent(".evicted.json").path) && (try? final.resourceValues(forKeys:[.isSymbolicLinkKey]).isSymbolicLink) != true
         guard !fm.fileExists(atPath: final.path) || evicted else { throw VideoImportError.invalid("视频缓存不完整，请清空缓存后重新导入") }
+        try checkCacheBudget(info: info, count: count, seconds: seconds, available: availableSpace(base))
         let stage = base.appendingPathComponent(".extract-" + UUID().uuidString, isDirectory: true)
         try fm.createDirectory(at: stage, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: stage) }
         let asset = AVURLAsset(url: url)
-        let track = try awaitSync { try await asset.loadTracks(withMediaType: .video).first! }
+        guard let track = try awaitSync({ try await asset.loadTracks(withMediaType: .video).first }) else {
+            throw VideoImportError.invalid("视频里没有可用的画面轨道")
+        }
         let transform = try awaitSync { try await track.load(.preferredTransform) }
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
@@ -104,8 +133,7 @@ public enum VideoImporter {
         func save(_ image: CIImage) throws {
             if isCancelled() { throw CancellationError() }
             let i = frames.count
-            if i % 16 == 0, let free = try? base.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage,
-               free < max(268_435_456, Int64(info.width * info.height * 6)) { throw VideoImportError.invalid("视频帧缓存磁盘空间不足；请缩短片段或清理缓存") }
+            if i % 16 == 0, try availableSpace(base) < max(diskReserve, Int64(info.width) * Int64(info.height) * 16) { throw VideoImportError.invalid("视频帧缓存磁盘空间不足；请缩短片段或清理缓存") }
             let image = try profile?.correct(image) ?? image
             guard let cg = context.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: color) else { throw VideoImportError.invalid("视频帧转换失败") }
             let name = String(format:"video-%06d.jpg",i), file = stage.appendingPathComponent(name)
@@ -134,10 +162,14 @@ public enum VideoImporter {
             try autoreleasepool { try save(last) }
         }
         if isCancelled() { throw CancellationError() }
+        guard try availableSpace(base) >= diskReserve + Int64(ceil(seconds * 48_000 * 4)) else {
+            throw VideoImportError.invalid("视频原声缓存磁盘空间不足")
+        }
         _ = try VideoSource.prepare(videoURL: url, stageDirectory: stage, sourceStart: options.start,
                                     seconds: seconds, sampleFPS: fps, frameCount: count, isCancelled: isCancelled)
         try JSONEncoder().encode(frames).write(to: stage.appendingPathComponent("import.json"), options: .atomic)
         try writeRecipe(directory:stage,source:url,info:info,options:options,seconds:seconds,fps:fps,count:count,profile:profile)
+        if isCancelled() { throw CancellationError() }
         if evicted {
             let motion=final.appendingPathComponent("motion.json")
             if fm.fileExists(atPath:motion.path) { try fm.copyItem(at:motion,to:stage.appendingPathComponent("motion.json")) }
