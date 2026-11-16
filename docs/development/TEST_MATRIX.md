@@ -13,6 +13,21 @@
 
 [PR 工作流](../../.github/workflows/pr-checks.yml) · [构建与发布](../构建与发布.md)
 
+## 1.11.0 Windows UTM 验收
+
+2026-11-16，Apple 芯片 Mac（Mac17,9）的 UTM/QEMU，Windows 11 ARM64 24H2（26100.4349），8 vCPU、8 GiB，登录桌面会话，运行 Windows x64 便携包。被测运行时代码与 `46bbecb` 的候选包相同。用 `e202f1d` 修正了 GUI 与工程回归的过期资源断言，补入 `a68cc32` 的更新说明。
+
+| 检查 | 结果 |
+|---|---|
+| 成品自检与桌面启动 | 通过。实际加载 rawpy 0.28.0、LibRaw 0.22.2，完成模型与软件编码自检。Qt 原生窗口确认可见，DPR 1 |
+| GUI 与工程回归 | 通过。12 张合成 JPEG 从上级目录导入，80 项布局通过，生成 H.264 与 HEVC。工程保存、重开、分组编辑、短音轨及取消后重试通过，已有目标文件保留。合成素材未捕获鸟眼，不能据此验证识别精度 |
+| 应用内更新说明 | 通过。Windows 桌面窗口显示 Mac 与 Windows 的 RAW 实现区别及五条兼容性链接 |
+| Sony α1 II ARW | 公开样本 7827（未压缩）和 7828（无损）。Windows 可导入机内预览和高分辨率 RAW，并渲染对应图像。机内预览均为 8640×5760，高分辨率分别为 8672×5784、8704×6144 |
+| Nikon Z8 NEF | 高效率低样本 6616 在 Windows 的两种 RAW 策略均拒绝，并提示试用 JPEG 或转 DNG |
+| RAW 工程回读 | 既有 ARW、CR2、CR3、DNG、NEF、RAF 六张样本，在两种 RAW 策略下从 Mac 转到 UTM Windows，回存后再由 Mac 打开。两端均完成 H.264 导出，保留组名、RAW 来源和音轨开关。Windows 对工程的音轨记录采用自己的序列化，未保留 Mac 的内部音轨 UUID |
+| Sony α1 II 工程回读 | Windows 用两种 ARW、两种 RAW 策略各保存一份工程，Windows 均可重开。Mac 通过其中三份。无损压缩样本的高分辨率工程从 Windows 到 Mac 失败，Windows 的 8704×6144 与 Mac 的 8640×5760 画幅不同，Mac 拒绝恢复保存的 RAW 来源 |
+| 待验收 | 原生 Windows x64 实体、实体 GPU / DirectML、硬件编码、真实鸟眼连拍和正式更新。虚拟 GPU 的自检只证明本次虚拟环境能运行 |
+
 ## 1.11.0 Mac RAW 导入速度与进度
 
 2026-11-16，Apple 芯片 Mac（Mac17,9），macOS 27.2.1，变更提交 `46b8f67`，基线 `ecce053`。
